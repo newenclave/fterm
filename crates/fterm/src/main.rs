@@ -3,6 +3,7 @@
 
 mod app;
 mod gpu;
+mod input;
 
 use tracing_subscriber::EnvFilter;
 use winit::event_loop::{ControlFlow, EventLoop};
@@ -13,9 +14,10 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| EnvFilter::new("info,wgpu_core=warn,wgpu_hal=warn"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let event_loop = EventLoop::new()?;
+    let event_loop = EventLoop::<app::UserEvent>::with_user_event().build()?;
     // Sleep until the next event. We draw only when something changes.
     event_loop.set_control_flow(ControlFlow::Wait);
-    event_loop.run_app(&mut app::App::default())?;
+    let mut app = app::App::new(event_loop.create_proxy());
+    event_loop.run_app(&mut app)?;
     Ok(())
 }

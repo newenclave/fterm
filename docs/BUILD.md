@@ -10,7 +10,11 @@
 ```sh
 cargo run
 ```
-A dark window opens. Close it to stop the app.
+A terminal window opens with your shell:
+- Windows: `pwsh.exe` when it is installed, else `powershell.exe`.
+- Linux and macOS: the shell from `$SHELL`.
+
+Type `exit` or close the window to stop the app.
 
 ## Logs
 The `RUST_LOG` variable sets the log level. The default is `info`.

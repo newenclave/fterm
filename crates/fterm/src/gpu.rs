@@ -7,9 +7,6 @@ use winit::dpi::PhysicalSize;
 use winit::event_loop::OwnedDisplayHandle;
 use winit::window::Window;
 
-/// Background color of the window (Catppuccin Mocha "base").
-const BACKGROUND: [u8; 3] = [0x1e, 0x1e, 0x2e];
-
 pub struct Gpu {
     instance: wgpu::Instance,
     window: Arc<Window>,
@@ -17,7 +14,6 @@ pub struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    clear: wgpu::Color,
 }
 
 impl Gpu {
@@ -82,7 +78,6 @@ impl Gpu {
             device,
             queue,
             config,
-            clear: clear_color(BACKGROUND, format.is_srgb()),
         })
     }
 
@@ -95,8 +90,20 @@ impl Gpu {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Draws one frame. An error here means the GPU cannot work any more.
-    pub fn render(&mut self) -> Result<()> {
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+
+    /// Gets the next frame, lets `draw` fill it, and shows it.
+    /// An error here means the GPU cannot work any more.
+    pub fn frame(
+        &mut self,
+        draw: impl FnOnce(&wgpu::Device, &wgpu::Queue, &wgpu::TextureView, (u32, u32)),
+    ) -> Result<()> {
         let (frame, suboptimal) = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => (frame, false),
             // Draw this frame, then set up the surface again after `present`.
@@ -128,25 +135,12 @@ impl Gpu {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("frame"),
-            });
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(self.clear),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
-        self.queue.submit([encoder.finish()]);
+        draw(
+            &self.device,
+            &self.queue,
+            &view,
+            (self.config.width, self.config.height),
+        );
         self.window.pre_present_notify();
         self.queue.present(frame);
         if suboptimal {
@@ -159,33 +153,6 @@ impl Gpu {
 /// Returns the surface size, or `None` when the window has no area (for example, it is minimized).
 pub fn surface_size(size: PhysicalSize<u32>) -> Option<(u32, u32)> {
     (size.width > 0 && size.height > 0).then_some((size.width, size.height))
-}
-
-/// Converts one sRGB color channel (0..=255) to a linear value (0.0..=1.0).
-pub fn srgb_to_linear(channel: u8) -> f64 {
-    let c = f64::from(channel) / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-/// Makes the clear color. An sRGB surface needs linear values, other surfaces take sRGB values as is.
-pub fn clear_color(rgb: [u8; 3], srgb_surface: bool) -> wgpu::Color {
-    let channel = |c: u8| {
-        if srgb_surface {
-            srgb_to_linear(c)
-        } else {
-            f64::from(c) / 255.0
-        }
-    };
-    wgpu::Color {
-        r: channel(rgb[0]),
-        g: channel(rgb[1]),
-        b: channel(rgb[2]),
-        a: 1.0,
-    }
 }
 
 #[cfg(test)]
@@ -202,33 +169,5 @@ mod tests {
     #[test]
     fn normal_size_is_kept() {
         assert_eq!(surface_size(PhysicalSize::new(800, 600)), Some((800, 600)));
-    }
-
-    #[test]
-    fn srgb_to_linear_known_values() {
-        assert_eq!(srgb_to_linear(0), 0.0);
-        assert!((srgb_to_linear(255) - 1.0).abs() < 1e-9);
-        // sRGB 128 is about 0.2159 in linear space.
-        assert!((srgb_to_linear(128) - 0.2159).abs() < 1e-3);
-        // Small values use the linear part of the curve: 10 / 255 / 12.92.
-        assert!((srgb_to_linear(10) - 10.0 / 255.0 / 12.92).abs() < 1e-9);
-    }
-
-    #[test]
-    fn clear_color_for_srgb_surface_is_linear() {
-        let c = clear_color([128, 0, 255], true);
-        assert!((c.r - srgb_to_linear(128)).abs() < 1e-9);
-        assert_eq!(c.g, 0.0);
-        assert!((c.b - 1.0).abs() < 1e-9);
-        assert_eq!(c.a, 1.0);
-    }
-
-    #[test]
-    fn clear_color_for_plain_surface_is_not_changed() {
-        let c = clear_color([128, 0, 255], false);
-        assert!((c.r - 128.0 / 255.0).abs() < 1e-9);
-        assert_eq!(c.g, 0.0);
-        assert!((c.b - 1.0).abs() < 1e-9);
-        assert_eq!(c.a, 1.0);
     }
 }

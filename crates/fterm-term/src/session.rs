@@ -1,0 +1,209 @@
+//! A terminal session: a shell in a pty, the parser, and the grid.
+
+use std::collections::HashMap;
+use std::io;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use alacritty_terminal::event::{Event, EventListener, Notify, OnResize, WindowSize};
+use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg, Notifier};
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::tty;
+
+use crate::size::GridSize;
+
+/// Events from the session. They come from the pty thread.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TermEvent {
+    /// New output: draw the window again.
+    Redraw,
+    /// The app changed the window title.
+    Title(String),
+    /// The shell process ended.
+    Exit,
+}
+
+/// What to run in the session.
+#[derive(Clone, Debug, Default)]
+pub struct SessionOptions {
+    /// Program to run. `None` means the default shell.
+    pub program: Option<String>,
+    pub args: Vec<String>,
+}
+
+impl SessionOptions {
+    pub fn command<I, S>(program: &str, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            program: Some(program.to_owned()),
+            args: args.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Gets events from alacritty on the pty thread and passes them on.
+#[derive(Clone)]
+pub struct Listener {
+    on_event: Arc<dyn Fn(TermEvent) + Send + Sync>,
+    /// Set after the event loop starts. Used to answer the app (`PtyWrite`).
+    sender: Arc<OnceLock<EventLoopSender>>,
+}
+
+impl EventListener for Listener {
+    fn send_event(&self, event: Event) {
+        match event {
+            Event::Wakeup => (self.on_event)(TermEvent::Redraw),
+            Event::Title(title) => (self.on_event)(TermEvent::Title(title)),
+            Event::ResetTitle => (self.on_event)(TermEvent::Title(String::new())),
+            // `Exit` comes after the last output is read. `ChildExit` comes before it.
+            Event::Exit => (self.on_event)(TermEvent::Exit),
+            Event::PtyWrite(text) => {
+                if let Some(sender) = self.sender.get() {
+                    let _ = sender.send(Msg::Input(text.into_bytes().into()));
+                }
+            }
+            Event::ChildExit(status) => tracing::debug!(?status, "child process ended"),
+            Event::Bell => tracing::debug!("bell"),
+            other => tracing::trace!(?other, "terminal event not used yet"),
+        }
+    }
+}
+
+pub struct Session {
+    term: Arc<FairMutex<Term<Listener>>>,
+    notifier: Mutex<Notifier>,
+    size: Mutex<GridSize>,
+}
+
+impl Session {
+    /// Starts the program. `cell` is the cell size in pixels (some apps ask for it).
+    pub fn spawn(
+        options: SessionOptions,
+        size: GridSize,
+        cell: (u16, u16),
+        on_event: impl Fn(TermEvent) + Send + Sync + 'static,
+    ) -> io::Result<Self> {
+        let listener = Listener {
+            on_event: Arc::new(on_event),
+            sender: Arc::new(OnceLock::new()),
+        };
+        let term = Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &size,
+            listener.clone(),
+        )));
+
+        let (program, args) = match options.program {
+            Some(program) => (program, options.args),
+            None => (default_shell(), options.args),
+        };
+        tracing::info!(%program, ?args, "starting session");
+        let pty_options = tty::Options {
+            shell: Some(tty::Shell::new(program, args)),
+            working_directory: None,
+            drain_on_exit: true,
+            env: HashMap::from([
+                ("TERM".to_owned(), "xterm-256color".to_owned()),
+                ("COLORTERM".to_owned(), "truecolor".to_owned()),
+                ("TERM_PROGRAM".to_owned(), "fterm".to_owned()),
+            ]),
+            #[cfg(windows)]
+            escape_args: true,
+        };
+        let pty = tty::new(&pty_options, window_size(size, cell), 0)?;
+        let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, true, false)?;
+        let sender = event_loop.channel();
+        let _ = listener.sender.set(sender.clone());
+        event_loop.spawn();
+
+        Ok(Self {
+            term,
+            notifier: Mutex::new(Notifier(sender)),
+            size: Mutex::new(size),
+        })
+    }
+
+    /// Sends bytes to the program (keys, paste).
+    pub fn write(&self, bytes: Vec<u8>) {
+        self.notifier.lock().unwrap().notify(bytes);
+    }
+
+    pub fn resize(&self, size: GridSize, cell: (u16, u16)) {
+        *self.size.lock().unwrap() = size;
+        self.term.lock().resize(size);
+        self.notifier
+            .lock()
+            .unwrap()
+            .on_resize(window_size(size, cell));
+    }
+
+    pub fn grid_size(&self) -> GridSize {
+        *self.size.lock().unwrap()
+    }
+
+    /// Runs `f` with the terminal state locked, for example to draw it.
+    /// Keep `f` short: the pty thread waits for the lock.
+    pub fn with_term<R>(&self, f: impl FnOnce(&Term<Listener>) -> R) -> R {
+        f(&self.term.lock())
+    }
+
+    /// Text on the screen, one line per row, without spaces at the end of lines.
+    pub fn screen_text(&self) -> String {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let mut text = String::new();
+        for row in 0..grid.screen_lines() {
+            let line = &grid[Line(row as i32)];
+            let mut row_text = String::new();
+            for col in 0..grid.columns() {
+                let cell = &line[Column(col)];
+                if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    row_text.push(cell.c);
+                }
+            }
+            text.push_str(row_text.trim_end());
+            text.push('\n');
+        }
+        text
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        // Stop the pty thread. The shell ends when its pty closes.
+        let _ = self.notifier.lock().unwrap().0.send(Msg::Shutdown);
+    }
+}
+
+fn window_size(size: GridSize, (cell_width, cell_height): (u16, u16)) -> WindowSize {
+    WindowSize {
+        num_lines: size.rows as u16,
+        num_cols: size.columns as u16,
+        cell_width,
+        cell_height,
+    }
+}
+
+/// The default shell: pwsh or powershell on Windows, `$SHELL` on unix.
+fn default_shell() -> String {
+    if cfg!(windows) {
+        if find_in_path("pwsh.exe") {
+            "pwsh.exe".to_owned()
+        } else {
+            "powershell.exe".to_owned()
+        }
+    } else {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())
+    }
+}
+
+fn find_in_path(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+}

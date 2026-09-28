@@ -61,7 +61,7 @@ Before each phase we write a detailed plan for it.
 - Add GitHub Actions: build on Windows, Linux, macOS.
 - **Check:** `cargo run` opens a window. CI is green.
 
-### Phase 1 — One working terminal
+### Phase 1 — One working terminal ✅ (done)
 - Start a shell (PowerShell by default) with ConPTY.
 - Draw the text grid: letters, background, cursor.
 - Colors: 16, 256, and true color. Bold, italic, underline.
@@ -72,6 +72,8 @@ Before each phase we write a detailed plan for it.
 - Fallback fonts for emoji and Chinese/Japanese.
 - Wide letters, combined letters, color emoji.
 - Draw box lines ourselves, so there are no gaps.
+- Draw Braille chars (U+2800–U+28FF) ourselves too. Each cell is a 2×4 grid of dots.
+  The dots fill the whole cell, with no gaps between cells, so Braille graphs look like real pixels.
 - Maybe ligatures.
 - **Check:** test files with Unicode and emoji look right. Claude Code looks right.
 
@@ -131,5 +133,15 @@ Before each phase we write a detailed plan for it.
 - Installers: MSI (`cargo-wix`) and winget, dmg, AppImage and deb.
 - Code signing, auto update, many windows, save and restore sessions.
 
+### Phase 11 — Braille scene
+- Braille gives 2×4 "pixels" in every cell. So an 80×24 terminal is a 160×96 pixel screen.
+- A Braille canvas: `draw_dot`, `clear_dot`, lines, rects, circles, and text on top.
+  Idea and code from [tank_rs](https://github.com/newenclave/tank_rs/blob/master/src/braille_canvas.rs)
+  (dot bits: `0x01 0x02 0x04 0x40` for the left column, `0x08 0x10 0x20 0x80` for the right, char = `U+2800 + bits`).
+- A "scene" pane: agents and apps can draw charts, graphs, and simple games there,
+  through `fterm cli draw ...` and MCP tools (Phase 7).
+- Colors per cell, so one scene can have many colors.
+- **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
+
 ## Next step
-Write a detailed plan for Phase 1. Then build it.
+Write a detailed plan for Phase 2. Then build it.

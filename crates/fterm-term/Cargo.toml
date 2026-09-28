@@ -1,0 +1,14 @@
+[package]
+name = "fterm-term"
+description = "Terminal session for fterm: pty, parser, and grid (no GPU code)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+alacritty_terminal.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
