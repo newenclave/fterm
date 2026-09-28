@@ -85,10 +85,39 @@ Before each phase we write a detailed plan for it.
 
 ### Phase 3 — Easy to use, Claude works well
 - Scroll back with the mouse wheel.
-- Select text with the mouse. Copy and paste (bracketed paste).
-- Mouse support for apps, focus events, IME, click on links.
+- Paste (bracketed paste). Mouse support for apps, focus events, IME, click on links.
 - Shift+Enter and Alt keys. Maybe the kitty keyboard protocol.
+- Selection and copy: see the next section. This is a main goal, not a small thing.
 - **Check:** `claude` works fully: many lines of input, big paste, Esc, Ctrl+C, scroll.
+
+#### Selection and copy (done right)
+In many terminals, copying is painful, most of all when the text is longer than the screen.
+Ideas (we pick the order in the Phase 3 plan):
+- **Select and scroll together.**
+  - Drag the mouse above or below the window: the view scrolls, faster when the mouse is farther away.
+  - The mouse wheel works while you select, and the selection stays.
+  - Click at the start, scroll (wheel, PgUp/PgDn), then Shift+click at the end.
+  - New output does not move the view and does not remove the selection while you are scrolled up.
+- **Select without the mouse:** a copy mode with the keyboard (arrows or vi keys),
+  search (`/`) inside the scrollback, `v` to select, `y` to copy.
+- **Smart selection:**
+  - double click = word, but paths, URLs, git hashes, and numbers are one word;
+  - triple click = the whole line, also when it wraps;
+  - Alt + drag = a rectangle (block).
+- **Copy whole blocks with one key** (with shell integration, Phase 6):
+  - "copy the output of the last command" (OSC 133);
+  - click next to a command = select all its output.
+- **Clean copy:**
+  - no spaces at the end of lines;
+  - lines that were only wrapped by the screen are joined again;
+  - option: remove frame chars (`│ ╭ ╰`) and their indent, for example when you copy code from Claude Code;
+  - copy as plain text, with colors (ANSI), as HTML, or as a Markdown code block.
+- **Quick select (hints):** press a key, short labels show on URLs, paths, and hashes;
+  press a label to copy it (like kitty hints or WezTerm quick select).
+- **Big output:** open the scrollback (or the output of one command) in an editor or a pager, and search or copy there.
+- Small toast: "copied 42 lines". Optional: copy on select, right click = paste.
+- **Check:** copy 300 lines of Claude output that go past the screen, with no extra spaces,
+  no broken lines, and no frame chars.
 
 ### Phase 3b — Images in the terminal
 - First a test: which image protocols get through ConPTY (Kitty, Sixel, iTerm2)?
@@ -109,7 +138,19 @@ Before each phase we write a detailed plan for it.
 - **Check:** open 5+ tabs with different shells. Switch and close them. No processes stay alive.
 
 ### Phase 5 — Config and profiles
-- TOML config. It reloads when you save the file.
+- The config is a **script**, not only a list of values: it has functions and tables,
+  so you can use `if`, loops, and your own helpers (like WezTerm with Lua).
+  - Plan: **Luau** (a fast Lua with types and a sandbox, from Roblox) through the `mlua` crate.
+    It is built from source (`vendored`), so it works the same on Windows, Linux, and macOS.
+    Other choices to compare in the Phase 5 plan: LuaJIT (the fastest, also through `mlua`),
+    plain Lua 5.4, Rhai (pure Rust, but slower).
+  - `fterm.lua` returns a table: font, colors, keys, profiles.
+  - Functions for events: `on_key`, `on_output`, `on_title`, `on_agent_event` (Phase 6),
+    and your own commands for the command palette.
+  - A small API: `fterm.spawn(...)`, `fterm.send_text(...)`, `fterm.notify(...)`, `fterm.copy(...)`.
+  - The script runs only on load and on events, never for every frame, so it does not make drawing slow.
+  - Errors in the config: fterm starts with the last good config and shows the error.
+- It reloads when you save the file.
 - Font, color themes, key bindings.
 - Profiles: PowerShell, cmd, WSL, Git Bash, **claude, opencode, ollama run ..., openclaude**.
   Each profile has: command, arguments, folder, env vars, icon.
