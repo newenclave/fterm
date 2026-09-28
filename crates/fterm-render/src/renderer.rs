@@ -6,26 +6,66 @@ use fterm_term::alacritty_terminal::vte::ansi::NamedColor;
 use fterm_term::colors::Palette;
 use wgpu::util::DeviceExt;
 
-use crate::atlas::{AtlasFull, GlyphAtlas};
-use crate::color::linear;
-use crate::font::{CellMetrics, Fonts};
+use crate::atlas::{AtlasFull, AtlasGlyph, GlyphAtlas, GlyphKey};
+use crate::builtin::{BrailleStyle, builtin_glyph, is_builtin};
+use crate::color::{linear, text_alpha};
+use crate::font::{CellMetrics, Fonts, GlyphImage, ImageKind};
 use crate::frame::{FrameInput, Instance, build_frame};
 
 const ATLAS_START_SIZE: u32 = 1024;
+/// Color emoji are rare, so this atlas starts small.
+const COLOR_ATLAS_START_SIZE: u32 = 512;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     viewport: [f32; 2],
-    atlas_size: [f32; 2],
+    mask_atlas_size: [f32; 2],
+    color_atlas_size: [f32; 2],
+    _pad: [f32; 2],
+}
+
+/// A glyph atlas and its texture.
+struct AtlasTexture {
+    atlas: GlyphAtlas,
+    texture: wgpu::Texture,
+    format: wgpu::TextureFormat,
+}
+
+impl AtlasTexture {
+    fn new(device: &wgpu::Device, size: u32, format: wgpu::TextureFormat) -> Self {
+        Self {
+            atlas: GlyphAtlas::new(size),
+            texture: create_atlas_texture(device, size, format),
+            format,
+        }
+    }
+
+    /// Finds the glyph, or puts `image` into the atlas and the texture.
+    fn get(
+        &mut self,
+        queue: &wgpu::Queue,
+        key: &GlyphKey,
+        image: Option<GlyphImage>,
+    ) -> Result<Option<AtlasGlyph>, AtlasFull> {
+        let texture = &self.texture;
+        self.atlas.get(
+            key,
+            || image,
+            |place, image| upload_glyph(queue, texture, place, image),
+        )
+    }
 }
 
 pub struct Renderer {
     fonts: Fonts,
     palette: Palette,
     padding: f32,
-    atlas: GlyphAtlas,
-    atlas_texture: wgpu::Texture,
+    braille: BrailleStyle,
+    /// Font glyph alpha after `text_alpha`, for every alpha value.
+    gamma: [u8; 256],
+    mask: AtlasTexture,
+    color: AtlasTexture,
     max_atlas_size: u32,
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -74,6 +114,16 @@ impl Renderer {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
             ],
@@ -129,12 +179,18 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let atlas_texture = create_atlas_texture(device, ATLAS_START_SIZE);
+        let mask = AtlasTexture::new(device, ATLAS_START_SIZE, wgpu::TextureFormat::R8Unorm);
+        let color = AtlasTexture::new(
+            device,
+            COLOR_ATLAS_START_SIZE,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        );
         let bind_group = create_bind_group(
             device,
             &bind_group_layout,
             &uniforms,
-            &atlas_texture,
+            &mask,
+            &color,
             &sampler,
         );
         let instance_capacity = 1024;
@@ -144,8 +200,10 @@ impl Renderer {
             fonts,
             palette: Palette::default(),
             padding,
-            atlas: GlyphAtlas::new(ATLAS_START_SIZE),
-            atlas_texture,
+            braille: BrailleStyle::default(),
+            gamma: std::array::from_fn(|a| (text_alpha(a as f32 / 255.0) * 255.0).round() as u8),
+            mask,
+            color,
             max_atlas_size: device.limits().max_texture_dimension_2d,
             pipeline,
             bind_group_layout,
@@ -174,7 +232,9 @@ impl Renderer {
     ) -> anyhow::Result<()> {
         self.fonts = Fonts::new(font_px)?;
         self.padding = padding;
-        self.reset_atlas(device, ATLAS_START_SIZE);
+        self.mask = AtlasTexture::new(device, ATLAS_START_SIZE, self.mask.format);
+        self.color = AtlasTexture::new(device, COLOR_ATLAS_START_SIZE, self.color.format);
+        self.update_bind_group(device);
         Ok(())
     }
 
@@ -199,10 +259,13 @@ impl Renderer {
             self.instances = create_instance_buffer(device, self.instance_capacity);
         }
         queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&quads));
-        let atlas_size = self.atlas.size() as f32;
+        let mask_size = self.mask.atlas.size() as f32;
+        let color_size = self.color.atlas.size() as f32;
         let uniforms = Uniforms {
             viewport: [size.0 as f32, size.1 as f32],
-            atlas_size: [atlas_size, atlas_size],
+            mask_atlas_size: [mask_size, mask_size],
+            color_atlas_size: [color_size, color_size],
+            _pad: [0.0; 2],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
 
@@ -238,7 +301,7 @@ impl Renderer {
         queue.submit([encoder.finish()]);
     }
 
-    /// Builds the quads. When the atlas is full, it grows and we try again.
+    /// Builds the quads. When an atlas is full, it grows and we try again.
     fn build<T: EventListener>(
         &mut self,
         device: &wgpu::Device,
@@ -246,27 +309,46 @@ impl Renderer {
         term: &Term<T>,
         focused: bool,
     ) -> Vec<Instance> {
-        for _ in 0..3 {
+        for _ in 0..4 {
             let input = FrameInput {
                 cell: self.fonts.cell(),
                 padding: self.padding,
                 palette: &self.palette,
                 focused,
             };
-            let (atlas, fonts, texture) = (&mut self.atlas, &mut self.fonts, &self.atlas_texture);
+            let (mask, color, fonts) = (&mut self.mask, &mut self.color, &mut self.fonts);
+            let (braille, gamma) = (self.braille, &self.gamma);
+            // True when the color atlas was the full one.
+            let mut full_color = false;
             let result = build_frame(term, &input, &mut |key| {
-                atlas.get(
-                    key,
-                    || fonts.rasterize(key.c, key.bold, key.italic),
-                    |place, image| upload_glyph(queue, texture, place, image),
-                )
+                if let Some(glyph) = mask.atlas.cached(key).or_else(|| color.atlas.cached(key)) {
+                    return Ok(glyph);
+                }
+                match draw_glyph(fonts, key, braille, gamma) {
+                    Some(image) if image.kind == ImageKind::Color => {
+                        let glyph = color.get(queue, key, Some(image));
+                        full_color = glyph.is_err();
+                        glyph
+                    }
+                    image => mask.get(queue, key, image),
+                }
             });
             match result {
                 Ok(quads) => return quads,
                 Err(AtlasFull) => {
-                    let size = (self.atlas.size() * 2).min(self.max_atlas_size);
-                    tracing::debug!(size, "glyph atlas is full, making it bigger");
-                    self.reset_atlas(device, size);
+                    let atlas = if full_color {
+                        &mut self.color
+                    } else {
+                        &mut self.mask
+                    };
+                    let size = (atlas.atlas.size() * 2).min(self.max_atlas_size);
+                    tracing::debug!(
+                        size,
+                        color = full_color,
+                        "glyph atlas is full, making it bigger"
+                    );
+                    *atlas = AtlasTexture::new(device, size, atlas.format);
+                    self.update_bind_group(device);
                 }
             }
         }
@@ -274,24 +356,51 @@ impl Renderer {
         Vec::new()
     }
 
-    fn reset_atlas(&mut self, device: &wgpu::Device, size: u32) {
-        self.atlas = GlyphAtlas::new(size);
-        self.atlas_texture = create_atlas_texture(device, size);
+    fn update_bind_group(&mut self, device: &wgpu::Device) {
         self.bind_group = create_bind_group(
             device,
             &self.bind_group_layout,
             &self.uniforms,
-            &self.atlas_texture,
+            &self.mask,
+            &self.color,
             &self.sampler,
         );
     }
 }
 
+/// Draws one glyph: builtin chars in code, all other chars with the font.
+fn draw_glyph(
+    fonts: &mut Fonts,
+    key: &GlyphKey,
+    braille: BrailleStyle,
+    gamma: &[u8; 256],
+) -> Option<GlyphImage> {
+    if key.extra.is_none() && is_builtin(key.c) {
+        return builtin_glyph(key.c, fonts.cell(), braille);
+    }
+    let cells = if key.wide { 2 } else { 1 };
+    let mut image = fonts.rasterize(&key.text(), key.bold, key.italic, cells)?;
+    tracing::debug!(
+        text = %key.text().escape_unicode(),
+        cells,
+        width = image.width,
+        height = image.height,
+        kind = ?image.kind,
+        "new glyph"
+    );
+    if image.kind == ImageKind::Mask {
+        for a in &mut image.data {
+            *a = gamma[*a as usize];
+        }
+    }
+    Some(image)
+}
+
 fn upload_glyph(
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,
-    place: &crate::atlas::AtlasGlyph,
-    image: &crate::font::GlyphImage,
+    place: &AtlasGlyph,
+    image: &GlyphImage,
 ) {
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
@@ -304,10 +413,13 @@ fn upload_glyph(
             },
             aspect: wgpu::TextureAspect::All,
         },
-        &image.alpha,
+        &image.data,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(image.width),
+            bytes_per_row: Some(match image.kind {
+                ImageKind::Mask => image.width,
+                ImageKind::Color => image.width * 4,
+            }),
             rows_per_image: None,
         },
         wgpu::Extent3d {
@@ -318,7 +430,11 @@ fn upload_glyph(
     );
 }
 
-fn create_atlas_texture(device: &wgpu::Device, size: u32) -> wgpu::Texture {
+fn create_atlas_texture(
+    device: &wgpu::Device,
+    size: u32,
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("glyph atlas"),
         size: wgpu::Extent3d {
@@ -329,7 +445,7 @@ fn create_atlas_texture(device: &wgpu::Device, size: u32) -> wgpu::Texture {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::R8Unorm,
+        format,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     })
@@ -339,10 +455,16 @@ fn create_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     uniforms: &wgpu::Buffer,
-    atlas: &wgpu::Texture,
+    mask: &AtlasTexture,
+    color: &AtlasTexture,
     sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
-    let view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = mask
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let color_view = color
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("grid"),
         layout,
@@ -358,6 +480,10 @@ fn create_bind_group(
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&color_view),
             },
         ],
     })

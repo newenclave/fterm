@@ -16,6 +16,8 @@ use crate::font::CellMetrics;
 pub const KIND_SOLID: u32 = 0;
 /// A glyph: alpha from the atlas times `color`.
 pub const KIND_GLYPH: u32 = 1;
+/// A color glyph (emoji): RGBA from the color atlas.
+pub const KIND_COLOR_GLYPH: u32 = 2;
 
 /// One quad. The layout must match `Instance` in `shader.wgsl`.
 #[repr(C)]
@@ -42,7 +44,7 @@ pub struct FrameInput<'a> {
 pub fn build_frame<T: EventListener>(
     term: &Term<T>,
     input: &FrameInput,
-    glyph: &mut impl FnMut(GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
+    glyph: &mut impl FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
 ) -> Result<Vec<Instance>, AtlasFull> {
     let content = term.renderable_content();
     let cell = input.cell;
@@ -106,11 +108,18 @@ pub fn build_frame<T: EventListener>(
         if c != ' ' && c != '\t' {
             let key = GlyphKey {
                 c,
+                extra: indexed.cell.zerowidth().map(Box::from),
                 bold: flags.contains(Flags::BOLD),
                 italic: flags.contains(Flags::ITALIC),
+                wide: flags.contains(Flags::WIDE_CHAR),
             };
-            if let Some(g) = glyph(key)? {
+            if let Some(g) = glyph(&key)? {
                 let color = if under_block_cursor { bg } else { fg };
+                let kind = if g.color {
+                    KIND_COLOR_GLYPH
+                } else {
+                    KIND_GLYPH
+                };
                 glyphs.push(Instance {
                     rect: [
                         x + g.left as f32,
@@ -120,7 +129,7 @@ pub fn build_frame<T: EventListener>(
                     ],
                     uv: [g.x as f32, g.y as f32, g.width as f32, g.height as f32],
                     color: linear(color),
-                    kind: KIND_GLYPH,
+                    kind,
                     _pad: [0; 3],
                 });
             }
@@ -199,6 +208,7 @@ mod tests {
         height: 12,
         left: 1,
         top: 11,
+        color: false,
     };
 
     fn term_with(bytes: &[u8]) -> Term<VoidListener> {
@@ -219,7 +229,7 @@ mod tests {
         };
         let mut keys = Vec::new();
         let quads = build_frame(&term, &input, &mut |key| {
-            keys.push(key);
+            keys.push(key.clone());
             Ok(Some(GLYPH))
         })
         .unwrap();
@@ -298,10 +308,65 @@ mod tests {
             keys[0],
             GlyphKey {
                 c: 'X',
+                extra: None,
                 bold: true,
-                italic: true
+                italic: true,
+                wide: false,
             }
         );
+    }
+
+    #[test]
+    fn combining_mark_goes_into_the_key() {
+        let (quads, keys) = frame("e\u{0301}x".as_bytes(), true);
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].c, 'e');
+        assert_eq!(keys[0].extra.as_deref(), Some(&['\u{0301}'][..]));
+        assert_eq!(keys[1].extra, None);
+        assert_eq!(keys[0].text(), "e\u{0301}");
+        assert_eq!(glyphs(&quads).len(), 2);
+    }
+
+    #[test]
+    fn wide_char_key_is_wide() {
+        let (_, keys) = frame("a界".as_bytes(), true);
+        assert!(!keys[0].wide);
+        assert!(keys[1].wide);
+    }
+
+    #[test]
+    fn zwj_emoji_are_separate_cells_in_alacritty() {
+        // alacritty keeps ZWJ (width 0) in the previous cell, but the next emoji gets its own
+        // wide cell. So a ZWJ family is drawn as separate emoji. A grapheme mode can fix this later.
+        let (_, keys) = frame("👨\u{200d}👩".as_bytes(), true);
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].text(), "👨\u{200d}");
+        assert!(keys[0].wide && keys[1].wide);
+    }
+
+    #[test]
+    fn color_glyph_is_a_color_quad() {
+        let term = term_with("A😀".as_bytes());
+        let palette = Palette::default();
+        let input = FrameInput {
+            cell: CELL,
+            padding: PADDING,
+            palette: &palette,
+            focused: true,
+        };
+        let quads = build_frame(&term, &input, &mut |key| {
+            Ok(Some(AtlasGlyph {
+                color: key.c == '😀',
+                ..GLYPH
+            }))
+        })
+        .unwrap();
+        let kinds: Vec<u32> = quads
+            .iter()
+            .filter(|q| q.kind != KIND_SOLID)
+            .map(|q| q.kind)
+            .collect();
+        assert_eq!(kinds, [KIND_GLYPH, KIND_COLOR_GLYPH]);
     }
 
     #[test]

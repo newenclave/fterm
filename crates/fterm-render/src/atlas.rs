@@ -10,11 +10,25 @@ use crate::font::GlyphImage;
 /// Empty pixels between glyphs, so one glyph never touches the next.
 const GAP: u32 = 1;
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+/// One cell to draw: a char, its combining marks, and the style.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct GlyphKey {
     pub c: char,
+    /// Zero-width chars after `c` (combining marks, VS16, ZWJ). `None` for most cells, so no allocation.
+    pub extra: Option<Box<[char]>>,
     pub bold: bool,
     pub italic: bool,
+    /// The char takes 2 cells.
+    pub wide: bool,
+}
+
+impl GlyphKey {
+    /// The whole cluster as a string.
+    pub fn text(&self) -> String {
+        std::iter::once(self.c)
+            .chain(self.extra.iter().flat_map(|extra| extra.iter().copied()))
+            .collect()
+    }
 }
 
 /// A glyph in the atlas texture.
@@ -26,6 +40,8 @@ pub struct AtlasGlyph {
     pub height: u32,
     pub left: i32,
     pub top: i32,
+    /// RGBA (for example, color emoji) and not an alpha mask.
+    pub color: bool,
 }
 
 /// There is no free space. Call `grow` and draw the frame again.
@@ -57,15 +73,15 @@ impl GlyphAtlas {
     /// `Ok(None)` means the glyph has nothing to draw.
     pub fn get(
         &mut self,
-        key: GlyphKey,
+        key: &GlyphKey,
         rasterize: impl FnOnce() -> Option<GlyphImage>,
         upload: impl FnOnce(&AtlasGlyph, &GlyphImage),
     ) -> Result<Option<AtlasGlyph>, AtlasFull> {
-        if let Some(glyph) = self.glyphs.get(&key) {
+        if let Some(glyph) = self.glyphs.get(key) {
             return Ok(*glyph);
         }
         let Some(image) = rasterize() else {
-            self.glyphs.insert(key, None);
+            self.glyphs.insert(key.clone(), None);
             return Ok(None);
         };
         let allocation = self
@@ -83,10 +99,16 @@ impl GlyphAtlas {
             height: image.height,
             left: image.left,
             top: image.top,
+            color: image.kind == crate::font::ImageKind::Color,
         };
         upload(&glyph, &image);
-        self.glyphs.insert(key, Some(glyph));
+        self.glyphs.insert(key.clone(), Some(glyph));
         Ok(Some(glyph))
+    }
+
+    /// `Some(glyph)` when this key is already in the atlas (`Some(None)` = known, nothing to draw).
+    pub fn cached(&self, key: &GlyphKey) -> Option<Option<AtlasGlyph>> {
+        self.glyphs.get(key).copied()
     }
 
     /// Makes the atlas 2 times bigger and forgets all glyphs.
@@ -107,16 +129,61 @@ mod tests {
             height,
             left: 1,
             top: 2,
-            alpha: vec![255; (width * height) as usize],
+            kind: crate::font::ImageKind::Mask,
+            data: vec![255; (width * height) as usize],
         }
     }
 
     fn key(c: char) -> GlyphKey {
         GlyphKey {
             c,
+            extra: None,
             bold: false,
             italic: false,
+            wide: false,
         }
+    }
+
+    #[test]
+    fn key_text_has_the_whole_cluster() {
+        assert_eq!(key('a').text(), "a");
+        let k = GlyphKey {
+            extra: Some(vec!['\u{0301}', '\u{0302}'].into_boxed_slice()),
+            ..key('e')
+        };
+        assert_eq!(k.text(), "e\u{0301}\u{0302}");
+    }
+
+    #[test]
+    fn cached_tells_if_the_key_is_known() {
+        let mut atlas = GlyphAtlas::new(64);
+        assert_eq!(atlas.cached(&key('a')), None);
+        let placed = atlas
+            .get(&key('a'), || Some(image(4, 4)), |_, _| {})
+            .unwrap();
+        assert_eq!(atlas.cached(&key('a')), Some(placed));
+        atlas.get(&key(' '), || None, |_, _| {}).unwrap();
+        assert_eq!(atlas.cached(&key(' ')), Some(None));
+    }
+
+    #[test]
+    fn color_images_are_marked_as_color() {
+        let mut atlas = GlyphAtlas::new(64);
+        let color = GlyphImage {
+            kind: crate::font::ImageKind::Color,
+            data: vec![255; 4 * 4 * 4],
+            ..image(4, 4)
+        };
+        let g = atlas
+            .get(&key('x'), || Some(color), |_, _| {})
+            .unwrap()
+            .unwrap();
+        assert!(g.color);
+        let g = atlas
+            .get(&key('y'), || Some(image(4, 4)), |_, _| {})
+            .unwrap()
+            .unwrap();
+        assert!(!g.color);
     }
 
     fn overlap(a: &AtlasGlyph, b: &AtlasGlyph) -> bool {
@@ -131,7 +198,7 @@ mod tests {
         for _ in 0..3 {
             let glyph = atlas
                 .get(
-                    key('a'),
+                    &key('a'),
                     || {
                         calls.set(calls.get() + 1);
                         Some(image(8, 10))
@@ -155,7 +222,7 @@ mod tests {
         let calls = Cell::new(0);
         for _ in 0..2 {
             let got = atlas.get(
-                key(' '),
+                &key(' '),
                 || {
                     calls.set(calls.get() + 1);
                     None
@@ -173,7 +240,7 @@ mod tests {
         let mut placed = Vec::new();
         for c in 'a'..='z' {
             let glyph = atlas
-                .get(key(c), || Some(image(9, 17)), |_, _| {})
+                .get(&key(c), || Some(image(9, 17)), |_, _| {})
                 .unwrap()
                 .unwrap();
             assert!(glyph.x + glyph.width <= 128 && glyph.y + glyph.height <= 128);
@@ -191,12 +258,12 @@ mod tests {
         let mut atlas = GlyphAtlas::new(32);
         assert_eq!(
             atlas
-                .get(key('a'), || Some(image(20, 20)), |_, _| {})
+                .get(&key('a'), || Some(image(20, 20)), |_, _| {})
                 .map(|g| g.is_some()),
             Ok(true)
         );
         assert_eq!(
-            atlas.get(key('b'), || Some(image(20, 20)), |_, _| {}),
+            atlas.get(&key('b'), || Some(image(20, 20)), |_, _| {}),
             Err(AtlasFull)
         );
 
@@ -206,7 +273,7 @@ mod tests {
         let drawn = Cell::new(false);
         atlas
             .get(
-                key('a'),
+                &key('a'),
                 || {
                     drawn.set(true);
                     Some(image(20, 20))
@@ -217,7 +284,7 @@ mod tests {
         assert!(drawn.get());
         assert!(
             atlas
-                .get(key('b'), || Some(image(20, 20)), |_, _| {})
+                .get(&key('b'), || Some(image(20, 20)), |_, _| {})
                 .is_ok()
         );
     }

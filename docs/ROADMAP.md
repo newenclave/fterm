@@ -68,13 +68,19 @@ Before each phase we write a detailed plan for it.
 - Keys go to the shell. Window size changes the PTY size.
 - **Check:** `dir`, `git log`, `vim` work. Colors look right.
 
-### Phase 2 — Good Unicode and text
+### Phase 2 — Good Unicode and text ✅ (done)
 - Fallback fonts for emoji and Chinese/Japanese.
 - Wide letters, combined letters, color emoji.
 - Draw box lines ourselves, so there are no gaps.
 - Draw Braille chars (U+2800–U+28FF) ourselves too. Each cell is a 2×4 grid of dots.
   The dots fill the whole cell, with no gaps between cells, so Braille graphs look like real pixels.
+- Shape a char together with its combining marks (é, emoji with skin tone, ZWJ emoji).
+- Text gamma, so light text on a dark background does not look thin.
 - Maybe ligatures.
+- No bidi (right-to-left order) for now: Arabic and Hebrew get the right glyphs, in grid order.
+- Known limit (from the alacritty parser): it does not join graphemes. So ZWJ families (👨‍👩‍👧),
+  skin tones (👍🏽), and flags (🇫🇮) are drawn as separate chars, and `❤️` (with VS16) gets only 1 cell.
+  Fix later with grapheme support (for example, mode 2027) in our own parser layer.
 - **Check:** test files with Unicode and emoji look right. Claude Code looks right.
 
 ### Phase 3 — Easy to use, Claude works well
@@ -83,6 +89,17 @@ Before each phase we write a detailed plan for it.
 - Mouse support for apps, focus events, IME, click on links.
 - Shift+Enter and Alt keys. Maybe the kitty keyboard protocol.
 - **Check:** `claude` works fully: many lines of input, big paste, Esc, Ctrl+C, scroll.
+
+### Phase 3b — Images in the terminal
+- First a test: which image protocols get through ConPTY (Kitty, Sixel, iTerm2)?
+  A new `conpty.dll` + `OpenConsole.exe` from Windows Terminal may be needed.
+- Our own pty read loop, so we can catch image sequences before the parser.
+  It also reads the pty until the end of the stream after the process ends.
+  Now (alacritty loop) a command that ends at once can lose its output on Windows.
+- iTerm2 (OSC 1337) and Sixel first, then the Kitty graphics protocol.
+- Images are quads that stay on their cells and scroll with the text.
+- `fterm cli image file.png` and an MCP tool: they send images over the local API (Phase 7), not over ConPTY.
+- **Check:** `yazi` shows image previews, `chafa`/`imgcat` work, an agent shows a picture.
 
 ### Phase 4 — Tabs (and split panes)
 - Model: window → tabs → panes.
@@ -97,6 +114,7 @@ Before each phase we write a detailed plan for it.
 - Profiles: PowerShell, cmd, WSL, Git Bash, **claude, opencode, ollama run ..., openclaude**.
   Each profile has: command, arguments, folder, env vars, icon.
 - Command palette (Ctrl+Shift+P): "new tab with profile".
+- Braille style: `braille_style = "pixels"` (default, no gaps) or `"dots"` (round dots).
 - **Check:** change the config and see the change at once. Start an AI tool from the palette.
 
 ### Phase 6 — Events and shell integration
@@ -144,4 +162,4 @@ Before each phase we write a detailed plan for it.
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
 ## Next step
-Write a detailed plan for Phase 2. Then build it.
+Write a detailed plan for Phase 3. Then build it.

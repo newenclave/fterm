@@ -79,6 +79,15 @@ impl App {
         )?;
         tracing::info!(columns = size.columns, rows = size.rows, "terminal started");
 
+        // Dev only: FTERM_RUN="command" types this command into the shell after start.
+        // Test scripts use it, so they do not need to send keys to the window.
+        if cfg!(debug_assertions)
+            && let Ok(command) = std::env::var("FTERM_RUN")
+        {
+            tracing::info!(%command, "FTERM_RUN");
+            session.write(format!("{command}\r").into_bytes());
+        }
+
         Ok(Running {
             window,
             gpu,

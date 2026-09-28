@@ -3,13 +3,16 @@
 struct Uniforms {
     // Window size in pixels.
     viewport: vec2<f32>,
-    // Atlas texture size in pixels.
-    atlas_size: vec2<f32>,
+    // Atlas texture sizes in pixels.
+    mask_atlas_size: vec2<f32>,
+    color_atlas_size: vec2<f32>,
+    _pad: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
 @group(0) @binding(2) var atlas_sampler: sampler;
+@group(0) @binding(3) var color_atlas: texture_2d<f32>;
 
 // Must match `Instance` in frame.rs.
 struct Instance {
@@ -38,7 +41,11 @@ fn vs_main(@builtin(vertex_index) vertex: u32, inst: Instance) -> VertexOut {
         0.0,
         1.0,
     );
-    out.uv = (inst.uv.xy + corner * inst.uv.zw) / u.atlas_size;
+    var atlas_size = u.mask_atlas_size;
+    if inst.kind == 2u {
+        atlas_size = u.color_atlas_size;
+    }
+    out.uv = (inst.uv.xy + corner * inst.uv.zw) / atlas_size;
     out.color = inst.color;
     out.kind = inst.kind;
     return out;
@@ -50,6 +57,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         // `textureSampleLevel` is allowed in non-uniform control flow.
         let alpha = textureSampleLevel(atlas, atlas_sampler, in.uv, 0.0).r;
         return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    }
+    if in.kind == 2u {
+        // Color glyph (emoji): it has its own colors.
+        return textureSampleLevel(color_atlas, atlas_sampler, in.uv, 0.0);
     }
     return in.color;
 }

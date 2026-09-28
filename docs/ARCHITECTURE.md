@@ -33,10 +33,17 @@ processes and real escape codes, and later use it from the CLI and MCP (Phase 7)
 
 1. `frame::build_frame` goes over the cells and makes a list of quads (`Instance`):
    backgrounds, cursor, glyphs, underlines. It has no GPU code, so the tests check it.
-2. A glyph that is not in the atlas yet is drawn with cosmic-text and copied to the atlas texture.
-   When the atlas is full, it grows 2 times and the frame is built again.
-3. `renderer.rs` sends the quads to the GPU and draws all of them with one draw call.
-4. `shader.wgsl` has two kinds of quads: solid (`kind = 0`) and glyph (`kind = 1`).
+2. Each cell becomes a `GlyphKey`: the char, its zero-width chars (combining marks, VS16, ZWJ),
+   bold/italic, and "wide" (2 cells).
+3. A glyph that is not in an atlas yet is drawn:
+   - box lines, blocks, and Braille (U+2500–259F, U+2800–28FF) by our own code (`builtin.rs`).
+     They fill the whole cell, so cells meet with no gaps;
+   - all other chars by the font (`font.rs`): the whole cluster is shaped at once, and it is
+     made smaller (or, for emoji, bigger) to fit into its 1 or 2 cells.
+4. There are two atlases: **mask** (R8, normal text and builtin chars) and **color** (RGBA, emoji).
+   When an atlas is full, it grows 2 times and the frame is built again.
+5. `renderer.rs` sends the quads to the GPU and draws all of them with one draw call.
+6. `shader.wgsl` has three kinds of quads: solid (`0`), glyph (`1`, mask × text color), color glyph (`2`).
 
 ## Colors
 
@@ -44,9 +51,22 @@ processes and real escape codes, and later use it from the CLI and MCP (Phase 7)
   and the default fg, bg, and cursor.
 - Apps can change colors (OSC 4, 10, 11). These changes win over the palette.
 - The surface is sRGB, so we send linear colors to the GPU (`fterm-render/src/color.rs`).
+- Text gamma: font glyph alpha goes through `text_alpha` (alpha^(1/1.45)), so light text on a dark
+  background does not look thin. Builtin chars do not use it (their edges are exact).
 
-## Font
+## Fonts
 
 - JetBrains Mono is inside the app (`assets/fonts`, license: `assets/fonts/OFL.txt`).
+- System fonts are loaded too (about 90 ms). cosmic-text picks a fallback font by script:
+  on Windows, for example, Segoe UI Emoji, Yu Gothic, Microsoft YaHei, Malgun Gothic, Segoe UI.
+- A char that no font has is drawn as a hollow box.
 - The cell size is whole pixels, so the cell backgrounds have no gaps between them.
-- Fallback fonts (emoji, CJK) come in Phase 2.
+- Tests use `Fonts::embedded_only`, so they give the same result on every machine.
+  Tests that need system fonts (emoji, CJK) do nothing when the font is not there.
+
+## Known limits
+
+- The alacritty parser does not join graphemes: ZWJ families, skin tones, and flags are drawn as
+  separate chars, and `❤️` gets 1 cell. See the roadmap.
+- No bidi: right-to-left text is shown in grid order.
+- On Windows, a command that ends at once can lose its output (ConPTY + alacritty loop). Phase 3b fixes it.

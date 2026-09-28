@@ -22,9 +22,39 @@ pub fn linear(rgb: Rgb) -> [f32; 4] {
     ]
 }
 
+/// Makes glyph edges a bit stronger. Blending in linear space makes light text on a dark
+/// background look thin, and this fixes it. `shader.wgsl` uses the same formula.
+pub fn text_alpha(alpha: f32) -> f32 {
+    alpha.clamp(0.0, 1.0).powf(1.0 / TEXT_GAMMA)
+}
+
+/// The gamma for `text_alpha`. Keep it the same as in `shader.wgsl`.
+pub const TEXT_GAMMA: f32 = 1.45;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_alpha_keeps_the_ends() {
+        assert_eq!(text_alpha(0.0), 0.0);
+        assert!((text_alpha(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn text_alpha_makes_edges_stronger() {
+        for a in [0.1, 0.25, 0.5, 0.75, 0.9] {
+            assert!(text_alpha(a) > a, "{a}");
+        }
+        // alpha^(1/1.45): 0.5 -> about 0.62.
+        assert!((text_alpha(0.5) - 0.62).abs() < 0.01);
+    }
+
+    #[test]
+    fn text_alpha_keeps_the_order() {
+        let values: Vec<f32> = (0..=10).map(|i| text_alpha(i as f32 / 10.0)).collect();
+        assert!(values.windows(2).all(|w| w[0] < w[1]));
+    }
 
     #[test]
     fn srgb_to_linear_known_values() {

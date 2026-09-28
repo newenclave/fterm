@@ -34,6 +34,17 @@ WGPU_BACKEND=vulkan cargo run
 WGPU_BACKEND=gl cargo run
 ```
 
+## Test scripts (debug builds only)
+`FTERM_RUN` types a command into the shell when fterm starts:
+
+```powershell
+$env:FTERM_RUN = "Get-Content -Encoding utf8 docs\samples\unicode-test.txt"; cargo run
+```
+
+Samples for a manual check are in `docs/samples/`:
+- `unicode-test.txt`: many scripts, emoji, box lines, blocks, Braille;
+- `braille-wave.ps1`: a sine wave made of Braille chars.
+
 ## Checks
 Run these before you commit. CI runs them too, on Windows, Linux, and macOS.
 

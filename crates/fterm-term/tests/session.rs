@@ -18,21 +18,32 @@ fn spawn(options: SessionOptions) -> (Session, mpsc::Receiver<TermEvent>) {
     (session, rx)
 }
 
-fn wait_for_exit(rx: &mpsc::Receiver<TermEvent>) {
+fn wait_for_exit(session: &Session, rx: &mpsc::Receiver<TermEvent>) {
     let deadline = std::time::Instant::now() + TIMEOUT;
     loop {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         match rx.recv_timeout(left) {
             Ok(TermEvent::Exit) => return,
             Ok(_) => {}
-            Err(err) => panic!("no Exit event: {err}"),
+            Err(err) => panic!(
+                "no Exit event: {err}
+screen:
+{}",
+                session.screen_text()
+            ),
         }
     }
 }
 
 fn echo_command() -> SessionOptions {
     if cfg!(windows) {
-        SessionOptions::command("cmd.exe", ["/c", "echo fterm-ok"])
+        // The short wait (ping) is needed: when a process ends at once, alacritty reads the pty
+        // only one more time, and ConPTY can send the output later. Then the output is lost.
+        // Our own pty loop (roadmap, Phase 3b) will read until the end of the stream.
+        SessionOptions::command(
+            "cmd.exe",
+            ["/c", "echo fterm-ok & ping -n 2 127.0.0.1 >nul"],
+        )
     } else {
         SessionOptions::command("sh", ["-c", "echo fterm-ok"])
     }
@@ -41,7 +52,7 @@ fn echo_command() -> SessionOptions {
 #[test]
 fn output_of_a_command_is_in_the_grid() {
     let (session, rx) = spawn(echo_command());
-    wait_for_exit(&rx);
+    wait_for_exit(&session, &rx);
     let text = session.screen_text();
     assert!(text.contains("fterm-ok"), "screen text was:\n{text}");
 }
@@ -50,7 +61,7 @@ fn output_of_a_command_is_in_the_grid() {
 fn shell_ends_after_exit_command() {
     let (session, rx) = spawn(SessionOptions::default());
     session.write(b"exit\r".to_vec());
-    wait_for_exit(&rx);
+    wait_for_exit(&session, &rx);
 }
 
 #[test]
