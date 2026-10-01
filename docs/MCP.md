@@ -53,6 +53,12 @@ Other MCP clients: the command is `ftermctl` with the argument `mcp`, transport 
 | `focus_pane` | Shows a pane to you. |
 | `close_pane` | Closes a pane (`force` when a program runs in it). |
 | `set_title` | Sets the title of the tab. |
+| `open_scene` | Opens a Braille scene (a pane to draw into) on the right or below. Gives its id, its size in dots, and the aspect of the dots. |
+| `draw_scene` | Draws commands into a scene: dots, lines, rects, circles, text, colors, charts (see [SCENE.md](SCENE.md)). |
+| `plot` | A chart of numbers in a scene, as a line or bars, with a title and a color. Call it again with new values for a live chart. |
+
+Ask Claude for example: "open a scene and plot the time of each test run", or "draw the module graph of this
+project in a scene".
 
 ## Safety
 The first time an agent wants to read or type into a pane that is **not its own** (or opens a new pane),

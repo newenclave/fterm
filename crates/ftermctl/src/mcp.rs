@@ -127,6 +127,36 @@ pub fn tools() -> Value {
                 "title": { "type": "string" },
                 "pane": pane
             }, "required": ["title"] }
+        },
+        {
+            "name": "open_scene",
+            "description": "Open a Braille scene: a pane that you draw into (charts, diagrams, simple pictures). Each cell is 2x4 dots. Returns the pane id, the size in dots, and the aspect (dot height / width). For a chart of numbers use plot.",
+            "inputSchema": { "type": "object", "properties": {
+                "place": { "type": "string", "enum": ["right", "down"], "description": "A split on the right (default) or below." },
+                "next_to": { "type": "integer", "description": "Split next to this pane." }
+            }}
+        },
+        {
+            "name": "draw_scene",
+            "description": "Draw into a scene. Commands (x, y in dots from the top left; text in cells): {op:clear}, {op:color, color:'#rrggbb'} (no color = normal), {op:dot|undot, x, y}, {op:line, x0, y0, x1, y1}, {op:rect, x, y, w, h, fill}, {op:circle, x, y, r, fill}, {op:text, col, row, text}, {op:plot, values, min, max, bars, x, y, w, h}. All commands of one call are drawn at once.",
+            "inputSchema": { "type": "object", "properties": {
+                "pane": { "type": "integer", "description": "The scene pane (from open_scene)." },
+                "commands": { "type": "array", "items": { "type": "object" }, "description": "The drawing commands." }
+            }, "required": ["pane", "commands"] }
+        },
+        {
+            "name": "plot",
+            "description": "Draw a chart of numbers in a scene: a line from left to right (or bars), scaled to the scene. Call it again with new values for a live chart.",
+            "inputSchema": { "type": "object", "properties": {
+                "pane": { "type": "integer", "description": "The scene pane (from open_scene)." },
+                "values": { "type": "array", "items": { "type": "number" }, "description": "The values, from left to right." },
+                "bars": { "type": "boolean", "description": "Bars instead of a line." },
+                "min": { "type": "number", "description": "The bottom of the scale. The default is the smallest value." },
+                "max": { "type": "number", "description": "The top of the scale. The default is the biggest value." },
+                "color": { "type": "string", "description": "#rrggbb" },
+                "title": { "type": "string", "description": "Text in the top left corner." },
+                "clear": { "type": "boolean", "description": "Clear the scene first (default true)." }
+            }, "required": ["pane", "values"] }
         }
     ])
 }
@@ -324,6 +354,53 @@ impl<B: Backend> Server<B> {
                     .call("set_title", pick(&[("pane", "pane"), ("title", "title")]))
                     .map(|_| "Done.".to_owned())
             }),
+            "open_scene" => self
+                .backend
+                .call(
+                    "scene_open",
+                    pick(&[("place", "place"), ("next_to", "pane")]),
+                )
+                .map(|v| {
+                    format!(
+                        "Opened scene pane {}: {}x{} dots (aspect {}). Draw with draw_scene or plot.",
+                        v["pane"], v["width"], v["height"], v["aspect"]
+                    )
+                }),
+            "draw_scene" => need("pane")
+                .and_then(|_| need("commands"))
+                .and_then(|commands| {
+                    let params = json!({ "pane": args["pane"], "ops": commands });
+                    self.backend.call("scene_draw", params).map(|v| {
+                        format!("Drawn. The scene is {}x{} dots.", v["width"], v["height"])
+                    })
+                }),
+            "plot" => need("pane").and_then(|_| need("values")).and_then(|values| {
+                let mut ops = Vec::new();
+                if args.get("clear").and_then(Value::as_bool).unwrap_or(true) {
+                    ops.push(json!({ "op": "clear" }));
+                }
+                let color = args.get("color").filter(|c| !c.is_null());
+                if let Some(color) = color {
+                    ops.push(json!({ "op": "color", "color": color }));
+                }
+                let mut plot = json!({ "op": "plot", "values": values });
+                for key in ["min", "max", "bars"] {
+                    if let Some(v) = args.get(key).filter(|v| !v.is_null()) {
+                        plot[key] = v.clone();
+                    }
+                }
+                ops.push(plot);
+                if let Some(title) = args.get("title").and_then(Value::as_str) {
+                    if color.is_some() {
+                        ops.push(json!({ "op": "color" }));
+                    }
+                    ops.push(json!({ "op": "text", "col": 0, "row": 0, "text": title }));
+                }
+                let params = json!({ "pane": args["pane"], "ops": ops });
+                self.backend
+                    .call("scene_draw", params)
+                    .map(|_| "Plotted.".to_owned())
+            }),
             _ => return None,
         };
         Some(result)
@@ -438,6 +515,9 @@ mod tests {
                 "spawn" => json!({ "pane": 7 }),
                 "get_text" => json!({ "pane": 1, "text": "hello\nworld" }),
                 "send_message" => json!({ "id": 3 }),
+                "scene_open" | "scene_draw" => {
+                    json!({ "pane": 7, "cols": 66, "rows": 21, "width": 132, "height": 84, "aspect": 1.1875 })
+                }
                 _ => json!({}),
             })
         }
@@ -540,6 +620,9 @@ mod tests {
             "focus_pane",
             "close_pane",
             "set_title",
+            "open_scene",
+            "draw_scene",
+            "plot",
         ] {
             assert!(names.contains(&name), "{name}");
         }
@@ -608,6 +691,63 @@ mod tests {
             result["content"][0]["text"],
             json!("Message 3 is in the inbox of pane 2.")
         );
+    }
+
+    #[test]
+    fn scenes_for_agents() {
+        let mut s = server();
+        let result = tool(
+            &mut s,
+            "open_scene",
+            json!({ "place": "down", "next_to": 2 }),
+        );
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("pane 7") && text.contains("132x84"), "{text}");
+        assert_eq!(
+            s.backend.calls[0],
+            ("scene_open".into(), json!({ "place": "down", "pane": 2 }))
+        );
+
+        let ops = json!([{ "op": "clear" }, { "op": "dot", "x": 1, "y": 1 }]);
+        tool(&mut s, "draw_scene", json!({ "pane": 7, "commands": ops }));
+        assert_eq!(
+            s.backend.calls[1],
+            ("scene_draw".into(), json!({ "pane": 7, "ops": ops }))
+        );
+
+        let result = tool(
+            &mut s,
+            "plot",
+            json!({ "pane": 7, "values": [1, 3, 2], "color": "#40c0ff", "title": "CPU %", "max": 100 }),
+        );
+        assert_eq!(result["isError"], json!(false));
+        assert_eq!(
+            s.backend.calls[2],
+            (
+                "scene_draw".into(),
+                json!({ "pane": 7, "ops": [
+                    { "op": "clear" },
+                    { "op": "color", "color": "#40c0ff" },
+                    { "op": "plot", "values": [1, 3, 2], "max": 100 },
+                    { "op": "color" },
+                    { "op": "text", "col": 0, "row": 0, "text": "CPU %" },
+                ] })
+            )
+        );
+        // Bars, and on top of the last picture (no clear).
+        tool(
+            &mut s,
+            "plot",
+            json!({ "pane": 7, "values": [5], "bars": true, "clear": false }),
+        );
+        assert_eq!(
+            s.backend.calls[3].1["ops"],
+            json!([{ "op": "plot", "values": [5], "bars": true }])
+        );
+        let result = tool(&mut s, "plot", json!({ "pane": 7 }));
+        assert_eq!(result["isError"], json!(true), "values are needed");
+        let result = tool(&mut s, "draw_scene", json!({ "commands": [] }));
+        assert_eq!(result["isError"], json!(true), "the scene pane is needed");
     }
 
     #[test]

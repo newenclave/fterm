@@ -316,7 +316,7 @@ Like a browser: when you open fterm again, you can get back what you had before 
 - Installers: MSI (`cargo-wix`) and winget, dmg, AppImage and deb.
 - Code signing, auto update, many windows, save and restore sessions.
 
-### Phase 11 — Braille scene
+### Phase 11 — Braille scene ✅ (done: the canvas, scene panes, `scene_open`/`scene_draw`, `ftermctl scene`/`draw`, MCP `open_scene`/`draw_scene`/`plot`; see [SCENE.md](SCENE.md))
 - Braille gives 2×4 "pixels" in every cell. So an 80×24 terminal is a 160×96 pixel screen.
 - A Braille canvas: `draw_dot`, `clear_dot`, lines, rects, circles, and text on top.
   Idea and code from [tank_rs](https://github.com/newenclave/tank_rs/blob/master/src/braille_canvas.rs)
