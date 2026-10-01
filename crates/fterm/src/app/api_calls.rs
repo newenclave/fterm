@@ -286,16 +286,39 @@ impl App {
             .map_or(200, |n| n as usize)
             .min(MAX_LINES);
         let running = self.running.as_ref().expect("checked in api_call");
-        let session = &running.panes[&pane].session;
+        let p = &running.panes[&pane];
+        let session = &p.session;
         let text = match what.as_str() {
             "screen" => session.screen_text(),
+            "last_output" => {
+                let range = session.with_term(|term| {
+                    let total = total_lines(term);
+                    p.shell.last_output(total).map(|(start, end)| {
+                        lines_text(term, start.max(end.saturating_sub(lines)), end)
+                    })
+                });
+                let Some(text) = range else {
+                    return Err(RpcError::new(
+                        RpcError::NOT_FOUND,
+                        "no command output yet (it needs shell integration)",
+                    ));
+                };
+                let last = p.last_command.as_ref();
+                return Ok(json!({
+                    "pane": pane.0,
+                    "text": text.trim_end(),
+                    "running": p.shell.is_running(),
+                    "command": last.and_then(|c| c.command.clone()),
+                    "exit": last.and_then(|c| c.exit),
+                }));
+            }
             "history" => session.with_term(|term| {
                 let total = total_lines(term);
                 lines_text(term, total.saturating_sub(lines), total)
             }),
             other => {
                 return Err(RpcError::invalid_params(format!(
-                    "`what` must be \"screen\" or \"history\", got `{other}`"
+                    "`what` must be \"screen\", \"history\", or \"last_output\", got `{other}`"
                 )));
             }
         };

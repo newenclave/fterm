@@ -28,6 +28,16 @@ pub struct ShellState {
     typed: Option<String>,
     /// Where the typed text starts (history line, column), while the shell waits for a command.
     input_start: Option<(usize, usize)>,
+    /// The lines of the last output: (start, end). `end` is `None` while the command runs.
+    output: Option<(usize, Option<usize>)>,
+    /// The next `OutputMark` is the start (after 133;C) or the end (after 133;D) of an output.
+    next_mark: Option<OutputMarkKind>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutputMarkKind {
+    Start,
+    End,
 }
 
 impl ShellState {
@@ -50,13 +60,31 @@ impl ShellState {
                 self.typed = Some(text.clone());
                 None
             }
+            OscEvent::OutputMark { line, column } => {
+                match self.next_mark.take() {
+                    // The cursor can still be after the typed command: then the output starts below it.
+                    Some(OutputMarkKind::Start) => {
+                        let start = if *column > 0 { line + 1 } else { *line };
+                        self.output = Some((start, None));
+                    }
+                    Some(OutputMarkKind::End) => {
+                        if let Some((_, end)) = &mut self.output {
+                            *end = Some(*line);
+                        }
+                    }
+                    None => {}
+                }
+                None
+            }
             OscEvent::Prompt(PromptMark::CommandExecuted) => {
+                self.next_mark = Some(OutputMarkKind::Start);
                 self.running_since = Some(now);
                 self.running = (self.typed.take(), self.cwd.clone());
                 self.input_start = None;
                 None
             }
             OscEvent::Prompt(PromptMark::CommandFinished(exit)) => {
+                self.next_mark = Some(OutputMarkKind::End);
                 let since = self.running_since.take()?;
                 let (command, cwd) = std::mem::take(&mut self.running);
                 Some(ShellEvent::CommandDone {
@@ -74,6 +102,15 @@ impl ShellState {
     /// `None` when a command runs, or the shell has no integration.
     pub fn input_start(&self) -> Option<(usize, usize)> {
         self.input_start
+    }
+
+    /// The lines (from the top of the history) of the last command output: `start..end`.
+    /// While the command runs, the end is `total` (all lines now).
+    pub fn last_output(&self, total: usize) -> Option<(usize, usize)> {
+        match self.output? {
+            (start, Some(end)) => Some((start, end.max(start))),
+            (start, None) => Some((start, total.max(start))),
+        }
     }
 
     /// The shell waits for a command, and we know where the typed text starts.
@@ -247,6 +284,50 @@ mod tests {
             panic!("a command ended");
         };
         assert_eq!(command, None);
+    }
+
+    #[test]
+    fn the_lines_of_the_last_output() {
+        let mut shell = ShellState::default();
+        let t0 = Instant::now();
+        assert_eq!(shell.last_output(100), None);
+        shell.apply(&mark(PromptMark::CommandExecuted), t0);
+        shell.apply(
+            &OscEvent::OutputMark {
+                line: 10,
+                column: 0,
+            },
+            t0,
+        );
+        // While it runs: from the start to the end of the history now.
+        assert_eq!(shell.last_output(14), Some((10, 14)));
+        shell.apply(&mark(PromptMark::CommandFinished(Some(0))), t0);
+        shell.apply(
+            &OscEvent::OutputMark {
+                line: 13,
+                column: 0,
+            },
+            t0,
+        );
+        assert_eq!(shell.last_output(50), Some((10, 13)), "it ended at line 13");
+        // The cursor was still after the typed command at 133;C: the output starts on the next line.
+        shell.apply(&mark(PromptMark::CommandExecuted), t0);
+        shell.apply(
+            &OscEvent::OutputMark {
+                line: 20,
+                column: 5,
+            },
+            t0,
+        );
+        shell.apply(&mark(PromptMark::CommandFinished(Some(1))), t0);
+        shell.apply(
+            &OscEvent::OutputMark {
+                line: 22,
+                column: 0,
+            },
+            t0,
+        );
+        assert_eq!(shell.last_output(50), Some((21, 22)));
     }
 
     #[test]

@@ -145,16 +145,26 @@ where
             self.scanner.feed_at(&buf[..unprocessed], &mut found);
             let mut from = 0;
             for (end, event) in found.drain(..) {
-                let input_start = event == OscEvent::Prompt(PromptMark::CommandStart);
+                // At 133;B the typed text starts; at 133;C and 133;D the output starts and ends.
+                let mark = match &event {
+                    OscEvent::Prompt(PromptMark::CommandStart) => Some(true),
+                    OscEvent::Prompt(
+                        PromptMark::CommandExecuted | PromptMark::CommandFinished(_),
+                    ) => Some(false),
+                    _ => None,
+                };
                 osc.push(event);
-                if input_start {
+                if let Some(input) = mark {
                     state.parser.advance(&mut **terminal, &buf[from..end]);
                     from = end;
                     let grid = terminal.grid();
                     let cursor = grid.cursor.point;
-                    osc.push(OscEvent::InputStart {
-                        line: (grid.history_size() as i32 + cursor.line.0).max(0) as usize,
-                        column: cursor.column.0,
+                    let line = (grid.history_size() as i32 + cursor.line.0).max(0) as usize;
+                    let column = cursor.column.0;
+                    osc.push(if input {
+                        OscEvent::InputStart { line, column }
+                    } else {
+                        OscEvent::OutputMark { line, column }
                     });
                 }
             }

@@ -19,6 +19,9 @@ pub enum OscEvent {
     /// Not from the shell: the pty loop adds it right after 133;B. The place of the cursor at that moment,
     /// where the typed text starts. `line` counts from the top of the history (history size + screen line).
     InputStart { line: usize, column: usize },
+    /// Not from the shell: the pty loop adds it right after 133;C and 133;D. The place of the cursor,
+    /// so fterm knows the lines of the command output.
+    OutputMark { line: usize, column: usize },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
