@@ -405,6 +405,8 @@ pub struct Config {
     pub window_title: Option<usize>,
     /// The Lua function `on_ai_request` (its number), if there is one.
     pub on_ai_request: Option<usize>,
+    /// The Lua function `on_restore` (its number), if there is one.
+    pub on_restore: Option<usize>,
 }
 
 impl Default for Config {
@@ -436,6 +438,7 @@ impl Default for Config {
             on_close_window: None,
             window_title: None,
             on_ai_request: None,
+            on_restore: None,
         }
     }
 }
@@ -689,6 +692,35 @@ impl LoadedConfig {
         run().map_err(|err| err.to_string())
     }
 
+    /// Asks `on_restore` (if the config has it) about a session before it opens (the session file as JSON).
+    /// `None` = do not restore it; `Some(session)` = restore this.
+    pub fn on_restore(
+        &self,
+        session: &serde_json::Value,
+    ) -> Result<Option<serde_json::Value>, String> {
+        use mlua::LuaSerdeExt;
+        let (Some(index), Some(lua), Some(api)) = (self.config.on_restore, &self._lua, &self.api)
+        else {
+            return Ok(Some(session.clone()));
+        };
+        let Some(function) = self.functions.get(index) else {
+            return Err(format!("no Lua function number {index}"));
+        };
+        let run = || -> mlua::Result<Option<serde_json::Value>> {
+            let table = lua.to_value(session)?;
+            match function.call::<Value>((table, api.clone()))? {
+                Value::Nil | Value::Boolean(true) => Ok(Some(session.clone())),
+                Value::Boolean(false) => Ok(None),
+                value @ Value::Table(_) => Ok(Some(lua.from_value(value)?)),
+                other => Err(mlua::Error::runtime(format!(
+                    "on_restore must return a table, true, false, or nil, got {}",
+                    other.type_name()
+                ))),
+            }
+        };
+        run().map_err(|err| err.to_string())
+    }
+
     /// Runs the Lua function `index` (from `Action::Lua`) and returns what it asked fterm to do.
     pub fn call(&self, index: usize) -> Result<Vec<ApiCall>, String> {
         let (Some(function), Some(api)) = (self.functions.get(index), &self.api) else {
@@ -894,6 +926,7 @@ impl Reader {
         config.on_close_window = self.hook(root, "on_close_window")?;
         config.window_title = self.hook(root, "window_title")?;
         config.on_ai_request = self.hook(root, "on_ai_request")?;
+        config.on_restore = self.hook(root, "on_restore")?;
         if let Some(table) = table_field(root, "ai", "ai")? {
             config.ai = ai(&table)?;
         }
@@ -1951,6 +1984,52 @@ mod tests {
             provider: "anthropic".into(),
             model: "claude-haiku-4-5-20251001".into(),
         }
+    }
+
+    fn saved() -> serde_json::Value {
+        serde_json::json!({
+            "version": 1,
+            "saved": 5,
+            "active_tab": 0,
+            "tabs": [
+                { "active": 0, "layout": { "pane": { "cwd": "C:/work", "program": "pwsh" } } },
+                { "active": 0, "layout": { "pane": { "cwd": "C:/tmp/x", "program": "pwsh", "ran": "npm run dev" } } }
+            ]
+        })
+    }
+
+    #[test]
+    fn without_on_restore_the_session_comes_back_as_it_is() {
+        assert_eq!(
+            load("return {}").on_restore(&saved()).unwrap(),
+            Some(saved())
+        );
+    }
+
+    #[test]
+    fn on_restore_can_change_the_session() {
+        let loaded = load(
+            r#"return { on_restore = function(s)
+              local keep = {}
+              for _, tab in ipairs(s.tabs) do
+                if not tab.layout.pane.cwd:find("tmp") then table.insert(keep, tab) end
+              end
+              s.tabs = keep
+              return s
+            end }"#,
+        );
+        let out = loaded.on_restore(&saved()).unwrap().unwrap();
+        assert_eq!(out["tabs"].as_array().map(Vec::len), Some(1));
+        assert_eq!(out["tabs"][0]["layout"]["pane"]["cwd"], "C:/work");
+        assert_eq!(out["saved"], 5);
+    }
+
+    #[test]
+    fn on_restore_can_stop_it() {
+        let loaded = load("return { on_restore = function(s) return #s.tabs < 2 end }");
+        assert_eq!(loaded.on_restore(&saved()).unwrap(), None);
+        let loaded = load("return { on_restore = function(s) return 42 end }");
+        assert!(loaded.on_restore(&saved()).is_err());
     }
 
     #[test]

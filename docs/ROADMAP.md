@@ -277,13 +277,13 @@ that want a URL, and saved "always allow" answers.
 - You see the command first. Then it goes into the terminal without Enter (or runs after you say yes).
 - **Check:** "find the 10 biggest files in this folder" gives a good command for PowerShell and for bash.
 
-### Phase 9b — Restore the session (an idea from the user) — in progress
+### Phase 9b — Restore the session (an idea from the user) — done
 Done: 9b.0 (save the window, the "Restore the last session?" box, the palette command) and
 9b.1 (the list of sessions, Ctrl+Shift+S: named sessions and the last 20 closed windows),
 9b.2 (a program that ran comes back into the prompt; Claude Code as `claude --continue`;
 `restore_programs` and `restore_agents` = "prompt" | "run" | "never"),
-9b.3 (the old text of a pane in grey above the new prompt, `restore_history = 200`).
-Still to do: `on_restore`. Later: ConPTY clears the screen when a shell starts, so the old text goes to
+9b.3 (the old text of a pane in grey above the new prompt, `restore_history = 200`),
+9b.4 (the Lua function `on_restore`). Later: ConPTY clears the screen when a shell starts, so the old text goes to
 the history and fterm scrolls it into view. With our own ConPTY code (the `PSEUDOCONSOLE_INHERIT_CURSOR` flag)
 it could stay on the screen.
 Like a browser: when you open fterm again, you can get back what you had before you closed it.
@@ -320,5 +320,5 @@ Like a browser: when you open fterm again, you can get back what you had before 
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
 ## Next step
-Choose the next phase: 9b (restore the session), 6d (WSL), or 3b (images).
+Choose the next phase: 6d (WSL) or 3b (images).
 Write a detailed plan for it. Then build it.

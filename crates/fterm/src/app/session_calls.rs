@@ -14,6 +14,7 @@ use crate::session_state::{
     Entry, EntryKind, SavedDock, SavedPane, SavedSession, SavedTab, SavedWindow, VERSION,
     adopt_dead, close_live, entry_text, intro_bytes, last_lines, list, live_path, load,
     newest_closed, rerun_command, restore_layout, save, save_layout, save_named, sessions_dir,
+    through_hook,
 };
 
 /// How often the session is saved (so a crash or a reboot loses little).
@@ -203,10 +204,28 @@ impl App {
     /// Restores a session of the list. A closed one leaves the list (it is open again);
     /// a named one stays.
     fn restore_from(&mut self, entry: Entry) {
+        let session = match through_hook(&self.config, &entry.session) {
+            Ok(Some(session)) => session,
+            // The config said no: the session stays in the list.
+            Ok(None) => {
+                return self.notify(
+                    None,
+                    "Not restored",
+                    "on_restore in your config said no.",
+                    Level::Info,
+                    Source::App,
+                );
+            }
+            // A broken function must not lose the session.
+            Err(err) => {
+                self.notify(None, "on_restore failed", &err, Level::Error, Source::App);
+                entry.session
+            }
+        };
         if entry.kind == EntryKind::Closed {
             let _ = std::fs::remove_file(&entry.path);
         }
-        self.restore_session(entry.session);
+        self.restore_session(session);
     }
 
     /// Enter in the sessions list: the row key is the file of the session.

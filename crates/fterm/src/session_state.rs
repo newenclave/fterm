@@ -444,6 +444,46 @@ pub fn intro_scroll(lines: usize, rows: usize) -> usize {
     (lines + 1).min(rows.saturating_sub(1))
 }
 
+/// The session after the Lua function `on_restore`. `Ok(None)` = do not restore it (the function
+/// said no, or left no tabs). An error = the function failed or gave something that is not a session.
+pub fn through_hook(
+    config: &fterm_config::load::LoadedConfig,
+    session: &SavedSession,
+) -> Result<Option<SavedSession>, String> {
+    if config.config.on_restore.is_none() {
+        return Ok(Some(session.clone()));
+    }
+    let value = serde_json::to_value(session).map_err(|err| err.to_string())?;
+    let Some(mut value) = config.on_restore(&value)? else {
+        return Ok(None);
+    };
+    // An empty Lua table has no type: `tabs = {}` comes back as an object.
+    if value["tabs"].as_object().is_some_and(|t| t.is_empty()) {
+        return Ok(None);
+    }
+    fix_empty_lists(&mut value);
+    let out: SavedSession =
+        serde_json::from_value(value).map_err(|err| format!("on_restore: {err}"))?;
+    Ok((!out.tabs.is_empty()).then_some(out))
+}
+
+/// `text = {}` from Lua is an empty object; the session wants a list there.
+fn fix_empty_lists(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, v) in map.iter_mut() {
+                if key == "text" && v.as_object().is_some_and(|o| o.is_empty()) {
+                    *v = serde_json::Value::Array(Vec::new());
+                } else {
+                    fix_empty_lists(v);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(fix_empty_lists),
+        _ => {}
+    }
+}
+
 /// The newest closed session (for "Restore the last session?").
 pub fn newest_closed(dir: &Path) -> Option<Entry> {
     list(dir).into_iter().find(|e| e.kind == EntryKind::Closed)
@@ -528,6 +568,82 @@ mod tests {
         assert_eq!(intro_scroll(5, 24), 6, "5 lines and the line \"restored\"");
         assert_eq!(intro_scroll(200, 24), 23);
         assert_eq!(intro_scroll(3, 1), 0);
+    }
+
+    fn session_of(cwds: &[&str]) -> SavedSession {
+        SavedSession {
+            version: VERSION,
+            name: None,
+            saved: 1_790_000_000_123,
+            window: None,
+            active_tab: 1,
+            tabs: cwds
+                .iter()
+                .map(|cwd| SavedTab {
+                    title: None,
+                    active: 0,
+                    layout: SavedLayout::Pane(SavedPane {
+                        cwd: Some((*cwd).to_owned()),
+                        program: "pwsh".into(),
+                        text: vec!["old".into()],
+                        ..SavedPane::default()
+                    }),
+                })
+                .collect(),
+            dock: SavedDock::default(),
+        }
+    }
+
+    #[test]
+    fn on_restore_gets_the_session_and_gives_it_back() {
+        let config = fterm_config::load::load_str(
+            r#"return { on_restore = function(s)
+              s.tabs[2].title = "dev"
+              s.tabs[2].layout.pane.text = {}
+              s.tabs[1].layout.pane.cwd = "D:/other"
+              return s
+            end }"#,
+            "t.lua",
+        )
+        .unwrap();
+        let out = through_hook(&config, &session_of(&["C:/a", "C:/b"]))
+            .unwrap()
+            .unwrap();
+        let mut want = session_of(&["D:/other", "C:/b"]);
+        want.tabs[1].title = Some("dev".into());
+        if let SavedLayout::Pane(p) = &mut want.tabs[1].layout {
+            p.text.clear();
+        }
+        assert_eq!(out, want);
+    }
+
+    #[test]
+    fn on_restore_can_drop_all_tabs() {
+        let config = fterm_config::load::load_str(
+            "return { on_restore = function(s) s.tabs = {} return s end }",
+            "t.lua",
+        )
+        .unwrap();
+        assert_eq!(through_hook(&config, &session_of(&["C:/a"])), Ok(None));
+        let config = fterm_config::load::load_str("return {}", "t.lua").unwrap();
+        assert_eq!(
+            through_hook(&config, &session_of(&["C:/a"])),
+            Ok(Some(session_of(&["C:/a"])))
+        );
+    }
+
+    #[test]
+    fn a_broken_on_restore_is_an_error() {
+        for source in [
+            "return { on_restore = function(s) error(\"oops\") end }",
+            "return { on_restore = function(s) s.tabs = 7 return s end }",
+        ] {
+            let config = fterm_config::load::load_str(source, "t.lua").unwrap();
+            assert!(
+                through_hook(&config, &session_of(&["C:/a"])).is_err(),
+                "{source}"
+            );
+        }
     }
 
     #[test]

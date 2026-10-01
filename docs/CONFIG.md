@@ -352,6 +352,30 @@ restore_history = 200,         -- lines of old text that a restored pane shows i
 - **Restore the last session** (`restore_session`, in the palette) opens the newest closed window.
 - The files are in `%LOCALAPPDATA%\fterm\sessions\` (or the folder in `FTERM_SESSION_DIR`).
 
+### on_restore
+This function gets a session before it opens. The session is a table with the same fields as the session file:
+`tabs` (each with `title`, `active`, and `layout`), `active_tab`, `window`, and `dock`. A `layout` is
+`{ pane = { profile, cwd, program, ran, text } }` or `{ split = { direction, ratio, first, second } }`.
+Return the table (changed or not) to restore it, `false` to not restore it (it stays in the list),
+or `nil` for no change.
+
+```lua
+on_restore = function(s)
+  local keep = {}
+  for _, tab in ipairs(s.tabs) do
+    local pane = tab.layout.pane
+    if not (pane and pane.cwd and pane.cwd:find("Temp")) then   -- no tabs from temp folders
+      table.insert(keep, tab)
+    end
+  end
+  s.tabs = keep           -- no tabs left = nothing to restore
+  s.window = nil          -- keep the window where it is
+  return s
+end,
+```
+
+When the function fails, fterm shows the error and restores the session as it was.
+
 ## Shell integration
 With shell integration, the shell tells fterm:
 - the current folder (OSC 7). New tabs and splits start in the folder of the active pane;

@@ -62,6 +62,8 @@ return {
   -- restore_agents = "prompt",
   -- Lines of old text that a restored pane shows in grey (0 = off; the text is saved as plain text).
   -- restore_history = 200,
+  -- Change or stop a session before it opens (see docs/CONFIG.md): return it, false, or nil.
+  -- on_restore = function(s) s.window = nil return s end,
 
   -- Toasts and OS notifications. OS notifications are off: they can be annoying.
   -- notifications = { toasts = "bottom_right", os = false, long_command = 10 },
