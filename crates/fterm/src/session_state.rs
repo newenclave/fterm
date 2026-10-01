@@ -69,6 +69,9 @@ pub struct SavedPane {
     /// The command that ran in the pane when it was saved (from shell integration).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ran: Option<String>,
+    /// The last lines of the pane (`restore_history`), shown in grey when it comes back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -407,6 +410,40 @@ pub fn rerun_command(ran: &str, programs: Rerun, agents: Rerun) -> Option<(Strin
     }
 }
 
+/// The last `n` lines of a pane text (from `lines_text`), without the empty lines at the end.
+pub fn last_lines(text: &str, n: usize) -> Vec<String> {
+    let lines: Vec<&str> = text.trim_end().lines().collect();
+    lines[lines.len().saturating_sub(n)..]
+        .iter()
+        .map(|l| (*l).to_owned())
+        .collect()
+}
+
+/// What a restored pane shows before its shell starts: its old text in grey and a line that says so.
+/// Escape sequences in the old text are not run.
+pub fn intro_bytes(lines: &[String], ago: &str) -> Vec<u8> {
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let mut out = String::from("\x1b[0m\x1b[90m");
+    for line in lines {
+        let line = line.replace('\t', "    ");
+        out.extend(line.chars().filter(|c| !c.is_control()));
+        out.push_str("\r\n");
+    }
+    out.push_str(&format!("── restored · saved {ago} ──\x1b[0m\r\n"));
+    out.into_bytes()
+}
+
+/// How many lines up a restored pane scrolls at its first prompt, so that its old text
+/// (`lines` lines and the "restored" line) is in view above the prompt.
+pub fn intro_scroll(lines: usize, rows: usize) -> usize {
+    if lines == 0 {
+        return 0;
+    }
+    (lines + 1).min(rows.saturating_sub(1))
+}
+
 /// The newest closed session (for "Restore the last session?").
 pub fn newest_closed(dir: &Path) -> Option<Entry> {
     list(dir).into_iter().find(|e| e.kind == EntryKind::Closed)
@@ -462,6 +499,35 @@ mod tests {
         assert_eq!(rerun_command("claude", p, Rerun::Never), None);
         // Not an agent: only the name starts the same.
         assert_eq!(rerun_command("claudette", Rerun::Never, p), None);
+    }
+
+    #[test]
+    fn the_last_lines_of_a_pane() {
+        let text = "one\n\ntwo\nthree\n\n\n";
+        assert_eq!(last_lines(text, 10), vec!["one", "", "two", "three"]);
+        assert_eq!(last_lines(text, 2), vec!["two", "three"]);
+        assert_eq!(last_lines("\n\n", 10), Vec::<String>::new());
+        assert_eq!(last_lines(text, 0), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_old_text_is_grey_and_safe() {
+        assert!(intro_bytes(&[], "5 min ago").is_empty());
+        let lines = vec!["PS C:\\> ls".to_owned(), "a\x1b[31mred\x07\tb".to_owned()];
+        let text = String::from_utf8(intro_bytes(&lines, "5 min ago")).unwrap();
+        assert_eq!(
+            text,
+            "\x1b[0m\x1b[90mPS C:\\> ls\r\na[31mred    b\r\n── restored · saved 5 min ago ──\x1b[0m\r\n"
+        );
+    }
+
+    #[test]
+    fn the_old_text_is_in_view() {
+        // The prompt stays on the screen: at most `rows - 1` old lines above it.
+        assert_eq!(intro_scroll(0, 24), 0);
+        assert_eq!(intro_scroll(5, 24), 6, "5 lines and the line \"restored\"");
+        assert_eq!(intro_scroll(200, 24), 23);
+        assert_eq!(intro_scroll(3, 1), 0);
     }
 
     #[test]

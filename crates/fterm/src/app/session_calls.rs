@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use fterm_config::load::{Rerun, Restore};
+use fterm_term::input::{lines_text, total_lines};
 
 use crate::ai_chat::InputBox;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -11,8 +12,8 @@ use super::*;
 use crate::history_popup::{HistoryPopup, PopupKind, PopupRow};
 use crate::session_state::{
     Entry, EntryKind, SavedDock, SavedPane, SavedSession, SavedTab, SavedWindow, VERSION,
-    adopt_dead, close_live, entry_text, list, live_path, load, newest_closed, rerun_command,
-    restore_layout, save, save_layout, save_named, sessions_dir,
+    adopt_dead, close_live, entry_text, intro_bytes, last_lines, list, live_path, load,
+    newest_closed, rerun_command, restore_layout, save, save_layout, save_named, sessions_dir,
 };
 
 /// How often the session is saved (so a crash or a reboot loses little).
@@ -25,6 +26,7 @@ impl App {
         if running.mux.tabs().is_empty() {
             return None;
         }
+        let lines = self.config.config.restore_history;
         let pane_of = |id: PaneId| {
             running
                 .panes
@@ -34,6 +36,17 @@ impl App {
                     cwd: p.shell.cwd.clone(),
                     program: display_name(p.session.program()).to_owned(),
                     ran: p.shell.running_command().map(str::to_owned),
+                    text: if lines == 0 {
+                        Vec::new()
+                    } else {
+                        p.session.with_term(|term| {
+                            let total = total_lines(term);
+                            last_lines(
+                                &lines_text(term, total.saturating_sub(lines + 50), total),
+                                lines,
+                            )
+                        })
+                    },
                 })
                 .unwrap_or_default()
         };
@@ -347,20 +360,28 @@ impl App {
             self.config.config.restore_agents,
         );
         let mut reruns = 0;
+        let ago = match crate::panels::short_ago(Duration::from_millis(
+            now_ms().saturating_sub(saved.saved),
+        )) {
+            now if now == "now" => "just now".to_owned(),
+            age => format!("{age} ago"),
+        };
         for tab in &saved.tabs {
             let layout = restore_layout(&tab.layout, &mut |pane| {
                 self.spawn_cwd = pane.cwd.clone();
+                self.spawn_intro = intro_bytes(&pane.text, &ago);
                 match self.spawn_pane(size, pane.profile.as_deref()) {
                     Ok(id) => {
                         let rerun = pane
                             .ran
                             .as_deref()
                             .and_then(|ran| rerun_command(ran, programs, agents));
-                        if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&id))
-                            && rerun.is_some()
-                        {
-                            p.rerun = rerun;
-                            reruns += 1;
+                        if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&id)) {
+                            p.intro_lines = pane.text.len();
+                            if rerun.is_some() {
+                                p.rerun = rerun;
+                                reruns += 1;
+                            }
                         }
                         Some(id)
                     }
@@ -371,6 +392,7 @@ impl App {
                 }
             });
             self.spawn_cwd = None;
+            self.spawn_intro.clear();
             let Some(layout) = layout else {
                 continue;
             };

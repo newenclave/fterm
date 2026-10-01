@@ -337,7 +337,13 @@ restore = "ask",   -- the default: at start, ask "Restore the last session?" (En
 ```lua
 restore_programs = "prompt",   -- the default: put the command into the prompt; "run" = run it at once; "never"
 restore_agents = "prompt",     -- the same for Claude Code (`claude --continue`)
+restore_history = 200,         -- lines of old text that a restored pane shows in grey; 0 = off
 ```
+
+- A restored pane shows its old text in grey, a line "── restored · saved 5 min ago ──", and then the new
+  prompt. When you type, the view goes down as usual; scroll up to see the old text again.
+- The old text is saved in the session file as plain text. If your screens can have secrets, use
+  `restore_history = 0`.
 
 - **Ctrl + Shift + S** (`sessions`) shows the list of sessions: your named sessions (★) first, then the last
   20 closed windows, newest first. Enter = restore, Delete = forget.

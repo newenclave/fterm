@@ -281,8 +281,11 @@ that want a URL, and saved "always allow" answers.
 Done: 9b.0 (save the window, the "Restore the last session?" box, the palette command) and
 9b.1 (the list of sessions, Ctrl+Shift+S: named sessions and the last 20 closed windows),
 9b.2 (a program that ran comes back into the prompt; Claude Code as `claude --continue`;
-`restore_programs` and `restore_agents` = "prompt" | "run" | "never").
-Still to do: the old text in grey, `on_restore`.
+`restore_programs` and `restore_agents` = "prompt" | "run" | "never"),
+9b.3 (the old text of a pane in grey above the new prompt, `restore_history = 200`).
+Still to do: `on_restore`. Later: ConPTY clears the screen when a shell starts, so the old text goes to
+the history and fterm scrolls it into view. With our own ConPTY code (the `PSEUDOCONSOLE_INHERIT_CURSOR` flag)
+it could stay on the screen.
 Like a browser: when you open fterm again, you can get back what you had before you closed it.
 - **What is saved:** the window size and place; all tabs (their titles, the active tab); the split layout of each tab
   (the tree and the sizes); for each pane its profile, its folder (OSC 7), and its title; the dock (open, the panel, the size);

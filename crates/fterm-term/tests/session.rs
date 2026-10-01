@@ -293,3 +293,24 @@ fn input_start_is_the_cell_after_the_prompt() {
     });
     assert_eq!(text, "def");
 }
+
+#[test]
+fn the_intro_text_stays_above_the_output() {
+    // A restored pane shows its old text first; the program must not wipe it.
+    let options = SessionOptions {
+        intro: b"\x1b[90mold line 1\r\nold line 2\x1b[0m\r\n".to_vec(),
+        ..echo_command()
+    };
+    let (session, rx) = spawn(options);
+    wait_for_exit(&session, &rx);
+    let text = session.with_term(|term| {
+        let total = fterm_term::input::total_lines(term);
+        fterm_term::input::lines_text(term, 0, total)
+    });
+    let (old, new) = (text.find("old line 2"), text.find("fterm-ok"));
+    assert!(
+        matches!((old, new), (Some(o), Some(n)) if o < n),
+        "the text was:\n{text}"
+    );
+    assert!(text.contains("old line 1\nold line 2"), "{text}");
+}

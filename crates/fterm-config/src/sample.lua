@@ -60,6 +60,8 @@ return {
   -- Claude Code comes back as `claude --continue`.
   -- restore_programs = "prompt",
   -- restore_agents = "prompt",
+  -- Lines of old text that a restored pane shows in grey (0 = off; the text is saved as plain text).
+  -- restore_history = 200,
 
   -- Toasts and OS notifications. OS notifications are off: they can be annoying.
   -- notifications = { toasts = "bottom_right", os = false, long_command = 10 },

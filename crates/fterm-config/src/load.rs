@@ -389,6 +389,8 @@ pub struct Config {
     pub restore: Restore,
     pub restore_programs: Rerun,
     pub restore_agents: Rerun,
+    /// Lines of old text that a restored pane shows in grey (0 = none).
+    pub restore_history: usize,
     pub api: ApiConfig,
     pub ai: AiConfig,
     /// The Lua function `on_notification` (its number), if there is one.
@@ -425,6 +427,7 @@ impl Default for Config {
             restore: Restore::default(),
             restore_programs: Rerun::default(),
             restore_agents: Rerun::default(),
+            restore_history: 200,
             api: ApiConfig::default(),
             ai: AiConfig::default(),
             on_notification: None,
@@ -854,6 +857,9 @@ impl Reader {
         }
         if let Some(padding) = number_field(root, "padding", "padding")? {
             config.padding = padding.max(0.0) as f32;
+        }
+        if let Some(lines) = number_field(root, "restore_history", "restore_history")? {
+            config.restore_history = lines.max(0.0) as usize;
         }
         if let Some(lines) = number_field(root, "scrollback", "scrollback")? {
             config.scrollback = lines.max(0.0) as usize;
@@ -2086,6 +2092,29 @@ mod tests {
             assert_eq!(load(&source).config.restore, value);
         }
         assert!(load_str(r#"return { restore = "maybe" }"#, "t").is_err());
+    }
+
+    #[test]
+    fn restore_history_lines() {
+        assert_eq!(load("return {}").config.restore_history, 200);
+        assert_eq!(
+            load("return { restore_history = 0 }")
+                .config
+                .restore_history,
+            0
+        );
+        assert_eq!(
+            load("return { restore_history = 1000 }")
+                .config
+                .restore_history,
+            1000
+        );
+        assert_eq!(
+            load("return { restore_history = -5 }")
+                .config
+                .restore_history,
+            0
+        );
     }
 
     #[test]

@@ -44,6 +44,8 @@ pub struct SessionOptions {
     pub env: Vec<(String, String)>,
     /// Lines of history.
     pub scrollback: usize,
+    /// Bytes for the terminal (not the program) before the program starts: the old text of a restored pane.
+    pub intro: Vec<u8>,
 }
 
 impl Default for SessionOptions {
@@ -54,6 +56,7 @@ impl Default for SessionOptions {
             cwd: None,
             env: Vec::new(),
             scrollback: 10_000,
+            intro: Vec::new(),
         }
     }
 }
@@ -133,6 +136,11 @@ impl Session {
             listener.clone(),
         )));
 
+        if !options.intro.is_empty() {
+            // Before the pty loop starts, so the program output comes after it.
+            alacritty_terminal::vte::ansi::Processor::<alacritty_terminal::vte::ansi::StdSyncHandler>::new()
+                .advance(&mut *term.lock(), &options.intro);
+        }
         let (program, args) = match options.program {
             Some(program) => (program, options.args),
             None => (default_shell(), options.args),

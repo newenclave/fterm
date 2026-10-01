@@ -112,6 +112,8 @@ struct Pane {
     profile: Option<String>,
     /// A restored pane: the command that ran in it, for its first prompt (true = run it).
     rerun: Option<(String, bool)>,
+    /// A restored pane: the lines of its old text, to scroll them into view at its first prompt.
+    intro_lines: usize,
 }
 
 /// Everything that exists only while the window is open.
@@ -343,6 +345,8 @@ pub struct App {
     /// The history popup (Alt+F8 / Alt+F12), when it is open.
     history_popup: Option<HistoryPopup>,
     /// The next new pane starts in this folder (a choice in the folder popup).
+    /// The old text of a restored pane, for the next `spawn_pane` (Phase 9b).
+    spawn_intro: Vec<u8>,
     spawn_cwd: Option<String>,
     /// The last hint: (typed text, folder, history changes) -> the rest of the command.
     hint_cache: RefCell<Option<HintCache>>,
@@ -414,6 +418,7 @@ impl App {
             events_seen: false,
             history: None,
             history_popup: None,
+            spawn_intro: Vec::new(),
             spawn_cwd: None,
             hint_cache: RefCell::new(None),
             history_changes: 0,
@@ -1222,7 +1227,7 @@ impl App {
             .map(std::path::PathBuf::from)
             .filter(|dir| dir.is_dir());
         let profile_name = self.profile(profile).map(|p| p.name.clone());
-        let mut options = match self.profile(profile) {
+        let options = match self.profile(profile) {
             Some(profile) => {
                 let (program, mut args) = launch_command(&profile, cfg!(windows), path_extension);
                 if self.config.config.shell_integration
@@ -1241,12 +1246,17 @@ impl App {
                         .or(active_cwd),
                     env: profile.env.clone(),
                     scrollback: self.config.config.scrollback,
+                    intro: Vec::new(),
                 }
             }
             None => SessionOptions {
                 scrollback: self.config.config.scrollback,
                 ..SessionOptions::default()
             },
+        };
+        let mut options = SessionOptions {
+            intro: std::mem::take(&mut self.spawn_intro),
+            ..options
         };
         let socket = self.api_socket();
         if let Some(dir) = self.spawn_cwd.take() {
@@ -1302,6 +1312,7 @@ impl App {
                 opened_by: None,
                 profile: profile_name,
                 rerun: None,
+                intro_lines: 0,
             },
         );
         Ok(id)
@@ -3391,11 +3402,19 @@ impl ApplicationHandler<UserEvent> for App {
                     _ => None,
                 };
                 let done = p.shell.apply(&osc, Instant::now());
-                if p.shell.at_prompt()
-                    && let Some((text, run)) = p.rerun.take()
-                {
-                    p.session
-                        .write(crate::history_popup::replace_input("", &text, run));
+                if p.shell.at_prompt() {
+                    // The first prompt of a restored pane: its old text above, its old command in it.
+                    let lines = std::mem::take(&mut p.intro_lines);
+                    if lines > 0 {
+                        p.session.with_term_mut(|term, _| {
+                            let up = crate::session_state::intro_scroll(lines, term.screen_lines());
+                            term.scroll_display(Scroll::Delta(up as i32));
+                        });
+                    }
+                    if let Some((text, run)) = p.rerun.take() {
+                        p.session
+                            .write(crate::history_popup::replace_input("", &text, run));
+                    }
                 }
                 let program = p.session.program().to_owned();
                 if let Some(dir) = &new_dir
