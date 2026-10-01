@@ -10,6 +10,8 @@ pub struct Profile {
     /// The start folder. `None` = the folder of fterm.
     pub cwd: Option<PathBuf>,
     pub env: Vec<(String, String)>,
+    /// The WSL distro of the profile (its panes have Linux folders).
+    pub wsl: Option<String>,
 }
 
 impl Profile {
@@ -20,6 +22,47 @@ impl Profile {
             args: args.iter().map(|a| (*a).to_owned()).collect(),
             cwd: None,
             env: Vec::new(),
+            wsl: None,
+        }
+    }
+}
+
+/// The names in the output of `wsl.exe -l -q` (UTF-16LE). Docker's own distros are not for people.
+pub fn wsl_distros(output: &[u8]) -> Vec<String> {
+    let units: Vec<u16> = output
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    String::from_utf16_lossy(&units)
+        .lines()
+        .map(|line| line.trim_matches(|c: char| c == '\u{feff}' || c.is_whitespace() || c == '\0'))
+        .filter(|name| !name.is_empty() && !name.starts_with("docker-desktop"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The WSL distros of this computer (`wsl.exe -l -q`, with no console window).
+pub fn installed_wsl_distros() -> Vec<String> {
+    let mut command = std::process::Command::new("wsl.exe");
+    command.args(["-l", "-q"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    match command.output() {
+        Ok(out) if out.status.success() => wsl_distros(&out.stdout),
+        _ => Vec::new(),
+    }
+}
+
+impl Profile {
+    /// A profile that opens a WSL distro in its home folder.
+    pub fn wsl(name: &str, distro: &str) -> Self {
+        Self {
+            wsl: Some(distro.to_owned()),
+            ..Self::new(name, "wsl.exe", &["-d", distro, "--cd", "~"])
         }
     }
 }
@@ -30,6 +73,7 @@ pub fn detect_profiles(
     windows: bool,
     which: impl Fn(&str) -> bool,
     exists: impl Fn(&Path) -> bool,
+    distros: &[String],
 ) -> Vec<Profile> {
     let mut profiles = Vec::new();
     if windows {
@@ -48,7 +92,9 @@ pub fn detect_profiles(
             }
         }
         if which("wsl") {
-            profiles.push(Profile::new("WSL", "wsl.exe", &[]));
+            for distro in distros {
+                profiles.push(Profile::wsl(distro, distro));
+            }
         }
     } else {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned());
@@ -146,11 +192,43 @@ mod tests {
     }
 
     #[test]
+    fn the_list_of_wsl_distros() {
+        // `wsl.exe -l -q` writes UTF-16LE, with CRLF, sometimes with a BOM.
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in "Ubuntu\r\nopenSUSE-Tumbleweed\r\n\r\ndocker-desktop\r\ndocker-desktop-data\r\n"
+            .encode_utf16()
+        {
+            bytes.extend(unit.to_le_bytes());
+        }
+        assert_eq!(wsl_distros(&bytes), ["Ubuntu", "openSUSE-Tumbleweed"]);
+        assert_eq!(wsl_distros(b""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_profile_for_each_wsl_distro() {
+        let distros = ["Ubuntu".to_owned(), "Debian".to_owned()];
+        let profiles = detect_profiles(true, |name| name == "wsl", |_| false, &distros);
+        assert_eq!(
+            names(&profiles),
+            ["Windows PowerShell", "Command Prompt", "Ubuntu", "Debian"]
+        );
+        let ubuntu = &profiles[2];
+        assert_eq!(ubuntu.command, "wsl.exe");
+        assert_eq!(ubuntu.args, ["-d", "Ubuntu", "--cd", "~"]);
+        assert_eq!(ubuntu.wsl.as_deref(), Some("Ubuntu"));
+        assert_eq!(profiles[0].wsl, None);
+        // wsl.exe is on every Windows 11, also without WSL: no distros, no profile.
+        let profiles = detect_profiles(true, |name| name == "wsl", |_| false, &[]);
+        assert_eq!(names(&profiles), ["Windows PowerShell", "Command Prompt"]);
+    }
+
+    #[test]
     fn windows_with_everything() {
         let profiles = detect_profiles(
             true,
             |name| ["pwsh", "wsl", "claude", "opencode", "ollama", "openclaude"].contains(&name),
             |path| path.ends_with("bash.exe"),
+            &["Ubuntu".to_owned()],
         );
         assert_eq!(
             names(&profiles),
@@ -159,7 +237,7 @@ mod tests {
                 "Windows PowerShell",
                 "Command Prompt",
                 "Git Bash",
-                "WSL",
+                "Ubuntu",
                 "Claude",
                 "OpenCode",
                 "Ollama",
@@ -174,7 +252,7 @@ mod tests {
 
     #[test]
     fn windows_with_nothing_extra() {
-        let profiles = detect_profiles(true, |_| false, |_| false);
+        let profiles = detect_profiles(true, |_| false, |_| false, &[]);
         // Windows PowerShell and cmd are always there.
         assert_eq!(names(&profiles), ["Windows PowerShell", "Command Prompt"]);
     }
@@ -185,6 +263,7 @@ mod tests {
             false,
             |name| ["zsh", "bash", "claude"].contains(&name),
             |_| false,
+            &[],
         );
         let names = names(&profiles);
         assert_eq!(names[0], "Shell", "the login shell first");

@@ -3722,7 +3722,12 @@ fn shell_script_path() -> Option<std::path::PathBuf> {
 /// The profiles from the config, or the ones found on this computer.
 fn profiles_for(config: &LoadedConfig) -> Vec<Profile> {
     if config.config.profiles.is_empty() {
-        detect_profiles(cfg!(windows), which, std::path::Path::exists)
+        let distros = if cfg!(windows) && which("wsl") {
+            fterm_config::profiles::installed_wsl_distros()
+        } else {
+            Vec::new()
+        };
+        detect_profiles(cfg!(windows), which, std::path::Path::exists, &distros)
     } else {
         config.config.profiles.clone()
     }

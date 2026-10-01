@@ -74,6 +74,7 @@ profiles = {
   { name = "Claude", command = "claude", cwd = "~/code/my-app" },
   { name = "Ollama", command = "ollama", args = { "run", "llama3.2" } },
   { name = "Build", command = "cmd.exe", args = { "/k", "cargo watch" }, env = { RUST_LOG = "debug" } },
+  { name = "Ubuntu", wsl = "Ubuntu" },   -- a WSL distro: no command is needed
 }
 ```
 
@@ -84,9 +85,11 @@ profiles = {
 | `args` | A list of arguments. |
 | `cwd` | The start folder. `~` is your home folder. |
 | `env` | More environment variables. |
+| `wsl` | A WSL distro (for example `"Ubuntu"`). fterm starts `wsl.exe -d Ubuntu --cd ~` and knows that the pane has Linux folders. |
 
 With no `profiles` in the config, fterm finds them itself: PowerShell 7, Windows PowerShell, cmd,
-Git Bash, WSL (on Linux and macOS: your shell, bash, zsh, fish), and the AI tools in your PATH:
+Git Bash, one profile for each WSL distro (from `wsl.exe -l -q`; on Linux and macOS: your shell, bash, zsh, fish),
+and the AI tools in your PATH:
 `claude`, `opencode`, `ollama` (with `run llama3.2`), `openclaude`.
 
 ### Keys

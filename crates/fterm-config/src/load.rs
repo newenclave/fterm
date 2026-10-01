@@ -1382,9 +1382,20 @@ fn notifications(table: &Table) -> Result<NotificationConfig, String> {
 fn profile(table: &Table, path: &str) -> Result<Profile, String> {
     let name = string_field(table, "name", &format!("{path}.name"))?
         .ok_or_else(|| format!("{path}.name: missing"))?;
-    let command = string_field(table, "command", &format!("{path}.command"))?
-        .ok_or_else(|| format!("{path}.command: missing"))?;
-    let mut args = Vec::new();
+    let wsl = string_field(table, "wsl", &format!("{path}.wsl"))?;
+    let command = string_field(table, "command", &format!("{path}.command"))?;
+    let (command, mut args) = match (command, &wsl) {
+        (Some(command), _) => (command, Vec::new()),
+        // `wsl = "Ubuntu"` is enough: fterm knows how to start it.
+        (None, Some(distro)) => {
+            let p = Profile::wsl(&name, distro);
+            (p.command, p.args)
+        }
+        (None, None) => return Err(format!("{path}.command: missing")),
+    };
+    if table_field(table, "args", &format!("{path}.args"))?.is_some() {
+        args.clear();
+    }
     if let Some(list_table) = table_field(table, "args", &format!("{path}.args"))? {
         for (i, value) in list(&list_table) {
             match value {
@@ -1428,6 +1439,7 @@ fn profile(table: &Table, path: &str) -> Result<Profile, String> {
         args,
         cwd,
         env,
+        wsl,
     })
 }
 
@@ -1759,6 +1771,17 @@ mod tests {
         .config;
         assert_eq!(config.font_size, 20.0);
         assert_eq!(config.profiles.len(), 2);
+    }
+
+    #[test]
+    fn a_wsl_profile_needs_no_command() {
+        let loaded = load(r#"return { profiles = { { name = "Dev", wsl = "Ubuntu" } } }"#);
+        let dev = &loaded.config.profiles[0];
+        assert_eq!(dev.command, "wsl.exe");
+        assert_eq!(dev.args, ["-d", "Ubuntu", "--cd", "~"]);
+        assert_eq!(dev.wsl.as_deref(), Some("Ubuntu"));
+        let plain = load(r#"return { profiles = { { name = "x", command = "cmd.exe" } } }"#);
+        assert_eq!(plain.config.profiles[0].wsl, None);
     }
 
     #[test]
