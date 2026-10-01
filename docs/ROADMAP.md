@@ -274,5 +274,5 @@ Now the window × (and Alt+F4) closes fterm at once, with all tabs and programs.
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
 ## Next step
-Choose the next phase: 6b (folder and command history), 7 (local API, CLI, and MCP), or 3b (images).
+Choose the next phase: 6c (close the window safely), 7 (local API, CLI, and MCP), or 3b (images).
 Write a detailed plan for it. Then build it.
