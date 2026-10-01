@@ -9,5 +9,6 @@ pub mod overlay;
 pub mod panes;
 mod renderer;
 pub mod tabbar;
+pub mod toasts;
 
 pub use renderer::{FrameParts, Renderer};

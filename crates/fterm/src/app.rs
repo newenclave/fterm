@@ -5,12 +5,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use fterm_config::keys::{Action, BuiltinAction, SpawnWhere};
-use fterm_config::load::{ApiCall, LoadedConfig, SAMPLE_CONFIG, config_path, load_file};
+use fterm_config::load::{
+    ApiCall, LoadedConfig, NotifyIn, NotifyOut, OsNotify, SAMPLE_CONFIG, ToastPosition,
+    config_path, load_file,
+};
 use fterm_config::profiles::{Profile, detect_profiles, launch_command, path_extension, which};
 use fterm_mux::{Closed, Direction, Edge, Mux, PaneId, Rect, TabId};
 use fterm_render::Renderer;
 use fterm_render::builtin::BrailleStyle;
 use fterm_render::tabbar::{Hit, TabBarInput, bar_height, hit, layout_tabs};
+use fterm_render::toasts::{
+    Corner, ToastLevel, ToastView, avoid_cursor, close_rect, layout_toasts,
+};
 use fterm_term::alacritty_terminal::grid::Scroll;
 use fterm_term::alacritty_terminal::index::{Point, Side};
 use fterm_term::alacritty_terminal::selection::{Selection, SelectionType};
@@ -18,6 +24,7 @@ use fterm_term::alacritty_terminal::term::TermMode;
 use fterm_term::colors::{ColorOverrides, Palette};
 use fterm_term::copy_mode::{self, CopyAction, CopyResult};
 use fterm_term::links::url_at;
+use fterm_term::osc::OscEvent;
 use fterm_term::process::{display_name, running_children};
 use fterm_term::session::{Session, SessionOptions, TermEvent};
 use fterm_term::shell::{ShellEvent, ShellState, install_scripts, is_powershell, powershell_args};
@@ -36,6 +43,7 @@ use crate::mouse::{
     ClickCounter, GridGeometry, ReportButton, ReportKind, ReportMods, Wheel, autoscroll_lines,
     encode_mouse,
 };
+use crate::notify::{Center, Level, Source, human_duration};
 use crate::palette::{PaletteItem, PaletteState, VISIBLE_ROWS};
 
 /// How often auto-scroll moves while the user drags a selection out of the pane.
@@ -217,6 +225,8 @@ pub struct App {
     shell_script: Option<std::path::PathBuf>,
     /// The command palette, when it is open.
     palette: Option<PaletteState>,
+    /// All notifications and the toasts on the screen.
+    center: Center,
 }
 
 impl App {
@@ -234,7 +244,7 @@ impl App {
             (LoadedConfig::defaults(), None)
         };
         let profiles = profiles_for(&config);
-        Self {
+        let mut app = Self {
             proxy,
             running: None,
             mods: ModifiersState::empty(),
@@ -250,9 +260,229 @@ impl App {
             _watcher: None,
             message,
             reload_at: None,
+            center: Center::new(4, true),
             shell_script: shell_script_path(),
             palette: None,
+        };
+        app.apply_notification_config();
+        if let Some(lines) = app.message.take() {
+            // A config error at start: a toast, not a box in the way.
+            let text = lines.join("\n");
+            app.notify(None, "Config error", &text, Level::Error, Source::App);
         }
+        app
+    }
+
+    fn apply_notification_config(&mut self) {
+        let n = &self.config.config.notifications;
+        self.center.max_toasts = n.max_visible;
+        self.center.toasts_on = n.toasts.is_some();
+    }
+
+    /// Makes a notification: the Lua filter, then the history and a toast, and maybe an OS notification.
+    fn notify(
+        &mut self,
+        pane: Option<PaneId>,
+        title: &str,
+        body: &str,
+        level: Level,
+        source: Source,
+    ) {
+        let input = NotifyIn {
+            title: title.to_owned(),
+            body: body.to_owned(),
+            level: level.name().to_owned(),
+            source: source.name().to_owned(),
+            pane: pane.map(|p| p.0),
+        };
+        let (title, body, level, os, toast) = match self.config.filter_notification(&input) {
+            Ok(NotifyOut::Drop) => return,
+            Ok(NotifyOut::Keep {
+                title,
+                body,
+                level: name,
+                os,
+                toast,
+            }) => (
+                title,
+                body,
+                Level::from_name(&name).unwrap_or(level),
+                os,
+                toast,
+            ),
+            Err(err) => {
+                tracing::warn!("on_notification error: {err}");
+                (input.title, input.body, level, None, None)
+            }
+        };
+        let now = Instant::now();
+        self.center.push(
+            now,
+            pane,
+            &title,
+            &body,
+            level,
+            source,
+            toast.unwrap_or(true),
+        );
+
+        let n = &self.config.config.notifications;
+        let level_ok = n.os_levels.is_empty() || n.os_levels.iter().any(|l| l == level.name());
+        let send_os = os.unwrap_or(match n.os {
+            OsNotify::Never => false,
+            OsNotify::Always => level_ok,
+            OsNotify::WhenUnfocused => level_ok && !self.focused,
+        });
+        if send_os {
+            let summary = if title.is_empty() {
+                "fterm".to_owned()
+            } else {
+                title.clone()
+            };
+            let text = body.clone();
+            // The OS call can be slow, so it runs on its own thread.
+            std::thread::spawn(move || {
+                if let Err(err) = notify_rust::Notification::new()
+                    .appname("fterm")
+                    .summary(&summary)
+                    .body(&text)
+                    .show()
+                {
+                    tracing::warn!("cannot show an OS notification: {err}");
+                }
+            });
+        }
+        if let Some(running) = &self.running {
+            if level == Level::Attention && n.flash && !self.focused {
+                running
+                    .window
+                    .request_user_attention(Some(winit::window::UserAttentionType::Informational));
+            }
+            running.window.request_redraw();
+        }
+    }
+
+    /// A command ended. If it ran long and you did not see it, fterm tells you.
+    fn command_done(&mut self, pane: PaneId, exit: Option<i32>, took: Duration) {
+        let limit = self.config.config.notifications.long_command;
+        if limit <= 0.0 || took.as_secs_f64() < limit {
+            return;
+        }
+        let Some(running) = &self.running else {
+            return;
+        };
+        let visible = running
+            .mux
+            .pane_rects(running.tab_area())
+            .iter()
+            .any(|(p, _)| *p == pane);
+        if visible && self.focused {
+            return;
+        }
+        let tab = running
+            .mux
+            .tabs()
+            .iter()
+            .position(|t| t.layout.contains(pane))
+            .and_then(|i| running.tab_titles().get(i).cloned())
+            .unwrap_or_default();
+        let (title, level) = match exit {
+            Some(0) | None => ("Command finished".to_owned(), Level::Success),
+            Some(code) => (format!("Command failed (exit {code})"), Level::Error),
+        };
+        let body = format!("{tab} · took {}", human_duration(took));
+        self.notify(Some(pane), &title, &body, level, Source::Command);
+    }
+
+    /// The toasts on the screen and their places (the same for drawing and for the mouse).
+    fn toast_layout(&self) -> Vec<(u64, Rect)> {
+        let Some(running) = &self.running else {
+            return Vec::new();
+        };
+        let Some(position) = self.config.config.notifications.toasts else {
+            return Vec::new();
+        };
+        let ids: Vec<u64> = self.center.toasts().iter().map(|t| t.id).collect();
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let cell = running.renderer.cell();
+        let area = running.tab_area();
+        let mut corner = match position {
+            ToastPosition::BottomRight => Corner::BottomRight,
+            ToastPosition::TopRight => Corner::TopRight,
+            ToastPosition::BottomLeft => Corner::BottomLeft,
+            ToastPosition::TopLeft => Corner::TopLeft,
+            ToastPosition::Bottom => Corner::Bottom,
+        };
+        let rects = layout_toasts(ids.len(), area, corner, cell);
+        // Do not cover the text cursor of the active pane.
+        if let (Some(first), Some(last), Some(cursor)) =
+            (rects.first(), rects.last(), self.cursor_rect())
+        {
+            let top = first.y.min(last.y);
+            let bottom = (first.y + first.height).max(last.y + last.height);
+            let stack = Rect::new(first.x, top, first.width, bottom - top);
+            corner = avoid_cursor(corner, stack, cursor);
+        }
+        ids.into_iter()
+            .zip(layout_toasts(
+                self.center.toasts().len(),
+                area,
+                corner,
+                cell,
+            ))
+            .collect()
+    }
+
+    /// The text cursor of the active pane, in window pixels.
+    fn cursor_rect(&self) -> Option<Rect> {
+        let running = self.running.as_ref()?;
+        let session = running.session()?;
+        let cell = running.renderer.cell();
+        let area = running.pane_area();
+        let (line, column) = session.with_term(|term| {
+            let point = term.grid().cursor.point;
+            (
+                point.line.0 + term.grid().display_offset() as i32,
+                point.column.0,
+            )
+        });
+        let padding = running.renderer.padding();
+        Some(Rect::new(
+            area.x + padding + column as f32 * cell.width,
+            area.y + padding + line.max(0) as f32 * cell.height,
+            cell.width,
+            cell.height,
+        ))
+    }
+
+    /// Goes to the tab and the pane (for example, after a click on a toast).
+    fn go_to_pane(&mut self, pane: PaneId) {
+        let Some(running) = &mut self.running else {
+            return;
+        };
+        if let Some(index) = running
+            .mux
+            .tabs()
+            .iter()
+            .position(|t| t.layout.contains(pane))
+        {
+            running.mux.select(index);
+            running.mux.focus(pane);
+            self.tab_changed();
+        }
+    }
+
+    /// The toast under the mouse: (id, is it the close button).
+    fn toast_under_mouse(&self) -> Option<(u64, bool)> {
+        let (x, y) = (self.mouse.position.0 as f32, self.mouse.position.1 as f32);
+        let cell = self.running.as_ref()?.renderer.cell();
+        self.toast_layout()
+            .into_iter()
+            .rev()
+            .find(|(_, rect)| rect.contains(x, y))
+            .map(|(id, rect)| (id, close_rect(rect, cell).contains(x, y)))
     }
 
     /// Watches the folder of the config file (editors often write a new file, so we watch the folder).
@@ -296,13 +526,14 @@ impl App {
                 tracing::info!("config reloaded");
                 self.config = config;
                 self.profiles = profiles_for(&self.config);
-                self.message = None;
+                self.apply_notification_config();
                 self.apply_config();
                 self.title_message("Config reloaded");
             }
             Err(err) => {
                 tracing::warn!("config error: {err}");
-                self.message = Some(error_lines(&err));
+                let text = format!("{err}\nThe old config is still used.");
+                self.notify(None, "Config error", &text, Level::Error, Source::App);
             }
         }
         if let Some(running) = &self.running {
@@ -629,10 +860,7 @@ impl App {
                 }
                 Err(err) => {
                     tracing::warn!("Lua error: {err}");
-                    self.message = Some(error_lines(&err));
-                    if let Some(running) = &self.running {
-                        running.window.request_redraw();
-                    }
+                    self.notify(None, "Lua error", &err, Level::Error, Source::App);
                 }
             },
         }
@@ -647,7 +875,11 @@ impl App {
                     session.write(text.into_bytes());
                 }
             }
-            ApiCall::Notify(text) => self.title_message(&text),
+            ApiCall::Notify { title, body, level } => {
+                let pane = self.running.as_ref().and_then(|r| r.mux.active_pane());
+                let level = Level::from_name(&level).unwrap_or(Level::Info);
+                self.notify(pane, &title, &body, level, Source::Lua);
+            }
             ApiCall::Copy(text) => self.copy_text(text),
             ApiCall::Action(builtin) => self.run_builtin(event_loop, builtin),
         }
@@ -661,7 +893,13 @@ impl App {
         };
         if let Err(err) = result {
             tracing::error!("cannot start: {err:#}");
-            self.message = Some(error_lines(&format!("Cannot start: {err:#}")));
+            self.notify(
+                None,
+                "Cannot start",
+                &format!("{err:#}"),
+                Level::Error,
+                Source::App,
+            );
         }
     }
 
@@ -1170,6 +1408,21 @@ impl App {
         state: ElementState,
         button: MouseButton,
     ) {
+        // A click on a toast: × closes it, the rest goes to its pane.
+        if state == ElementState::Pressed
+            && self.palette.is_none()
+            && let Some((id, close)) = self.toast_under_mouse()
+        {
+            let pane = self.center.get(id).and_then(|n| n.pane);
+            self.center.dismiss(id);
+            if !close && let Some(pane) = pane {
+                self.go_to_pane(pane);
+            }
+            if let Some(running) = &self.running {
+                running.window.request_redraw();
+            }
+            return;
+        }
         if self.close_question.is_some() || self.palette.is_some() {
             if self.palette.is_some() && state == ElementState::Pressed {
                 // A click outside of the list closes the palette.
@@ -1271,6 +1524,18 @@ impl App {
     fn mouse_moved(&mut self, x: f64, y: f64) {
         let old = self.mouse.position;
         self.mouse.position = (x, y);
+
+        // The mouse over a toast stops its timer.
+        let over = self.toast_under_mouse();
+        let before: Vec<u64> = Vec::new();
+        let _ = before;
+        self.center.hover(over.map(|(id, _)| id), Instant::now());
+        if over.is_some() {
+            if let Some(running) = &self.running {
+                running.window.request_redraw();
+            }
+            return;
+        }
 
         // Hover in the tab bar.
         let hover = if self.mouse.selecting {
@@ -1497,6 +1762,23 @@ impl App {
             .as_ref()
             .map(|q| q.lines.clone())
             .or_else(|| self.message.clone());
+        let hovered = self.toast_under_mouse().map(|(id, _)| id);
+        let toast_layout = self.toast_layout();
+        let toast_rects: Vec<Rect> = toast_layout.iter().map(|(_, r)| *r).collect();
+        let toast_data: Vec<(String, String, ToastLevel, bool)> = toast_layout
+            .iter()
+            .filter_map(|(id, _)| {
+                let n = self.center.get(*id)?;
+                let level = match n.level {
+                    Level::Info => ToastLevel::Info,
+                    Level::Success => ToastLevel::Success,
+                    Level::Warning => ToastLevel::Warning,
+                    Level::Error => ToastLevel::Error,
+                    Level::Attention => ToastLevel::Attention,
+                };
+                Some((n.title.clone(), n.body.clone(), level, hovered == Some(*id)))
+            })
+            .collect();
         let palette_rows: Option<(String, Vec<PaletteRow>)> = self.palette.as_ref().map(|p| {
             let rows = p
                 .visible()
@@ -1565,6 +1847,16 @@ impl App {
                     }
                 }
                 parts.pane_chrome(&dividers, active_frame);
+                let views: Vec<ToastView> = toast_data
+                    .iter()
+                    .map(|(title, body, level, hover)| ToastView {
+                        title,
+                        body,
+                        level: *level,
+                        hover: *hover,
+                    })
+                    .collect();
+                parts.toasts(&views, &toast_rects)?;
                 if let Some((query, rows)) = &palette_rows {
                     parts.palette(&fterm_render::overlay::PaletteView { query, rows }, view)?;
                 }
@@ -1590,7 +1882,11 @@ impl ApplicationHandler<UserEvent> for App {
         }
         self.watch_config();
         match self.start(event_loop) {
-            Ok(running) => self.running = Some(running),
+            Ok(running) => {
+                // winit sends `Focused` only on a change, so read the first state here.
+                self.focused = running.window.has_focus();
+                self.running = Some(running);
+            }
             Err(err) => {
                 tracing::error!("cannot start: {err:#}");
                 event_loop.exit();
@@ -1674,10 +1970,19 @@ impl ApplicationHandler<UserEvent> for App {
                 let Some(p) = running.panes.get_mut(&pane) else {
                     return;
                 };
-                if let Some(ShellEvent::CommandDone { exit, took }) =
-                    p.shell.apply(&osc, Instant::now())
-                {
+                let done = p.shell.apply(&osc, Instant::now());
+                let program = p.session.program().to_owned();
+                if let OscEvent::Notify { title, body } = &osc {
+                    let title = title.clone().unwrap_or(program);
+                    self.notify(Some(pane), &title, body, Level::Info, Source::Terminal);
+                } else if let Some(ShellEvent::CommandDone { exit, took }) = done {
                     tracing::debug!(pane = pane.0, ?exit, ?took, "command done");
+                    self.command_done(pane, exit, took);
+                }
+            }
+            TermEvent::Bell => {
+                if self.config.config.notifications.bell {
+                    self.notify(Some(pane), "Bell", "", Level::Info, Source::Terminal);
                 }
             }
             TermEvent::Exit => {
@@ -1712,6 +2017,13 @@ impl ApplicationHandler<UserEvent> for App {
         if self.autoscroll() {
             let tick = now + AUTOSCROLL_TICK;
             wake_at = Some(wake_at.map_or(tick, |t: Instant| t.min(tick)));
+        }
+        self.center.tick(now);
+        if let Some(at) = self.center.next_deadline() {
+            wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
+            if let Some(running) = &self.running {
+                running.window.request_redraw();
+            }
         }
         if let Some(until) = self.title_message_until {
             if now >= until {

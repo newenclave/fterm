@@ -28,6 +28,8 @@ pub enum TermEvent {
     Exit,
     /// Shell integration, a notification, or an agent state (from our OSC scanner).
     Osc(OscEvent),
+    /// The bell (BEL).
+    Bell,
 }
 
 /// What to run in the session.
@@ -92,7 +94,7 @@ impl EventListener for Listener {
                 }
             }
             Event::ChildExit(status) => tracing::debug!(?status, "child process ended"),
-            Event::Bell => tracing::debug!("bell"),
+            Event::Bell => (self.on_event)(TermEvent::Bell),
             other => tracing::trace!(?other, "terminal event not used yet"),
         }
     }

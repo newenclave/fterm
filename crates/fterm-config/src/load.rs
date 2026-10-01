@@ -18,6 +18,81 @@ pub enum BrailleStyle {
     Dots,
 }
 
+/// Where toasts show in the window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToastPosition {
+    #[default]
+    BottomRight,
+    TopRight,
+    BottomLeft,
+    TopLeft,
+    Bottom,
+}
+
+/// When fterm also sends a system (OS) notification.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OsNotify {
+    /// Never (the default: they can be very annoying).
+    #[default]
+    Never,
+    Always,
+    WhenUnfocused,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NotificationConfig {
+    /// `None` = no toasts (the notifications still go to the Events panel).
+    pub toasts: Option<ToastPosition>,
+    pub max_visible: usize,
+    pub os: OsNotify,
+    /// Only these levels go to the OS. Empty = all levels.
+    pub os_levels: Vec<String>,
+    /// A command that runs longer than this (seconds) makes a notification when it ends. 0 = off.
+    pub long_command: f64,
+    /// The bell (BEL) makes a notification.
+    pub bell: bool,
+    /// Flash the taskbar for "attention" when the window is not in front.
+    pub flash: bool,
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self {
+            toasts: Some(ToastPosition::BottomRight),
+            max_visible: 4,
+            os: OsNotify::Never,
+            os_levels: Vec::new(),
+            long_command: 10.0,
+            bell: false,
+            flash: true,
+        }
+    }
+}
+
+/// A notification before `on_notification` sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotifyIn {
+    pub title: String,
+    pub body: String,
+    pub level: String,
+    pub source: String,
+    pub pane: Option<u64>,
+}
+
+/// What `on_notification` said.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NotifyOut {
+    Drop,
+    Keep {
+        title: String,
+        body: String,
+        level: String,
+        /// `Some` = the function chose (true = send to the OS too).
+        os: Option<bool>,
+        toast: Option<bool>,
+    },
+}
+
 /// A line in the command palette from the config.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserCommand {
@@ -40,6 +115,9 @@ pub struct Config {
     pub commands: Vec<UserCommand>,
     /// Load the shell integration script (PowerShell now; bash and zsh by hand, see the docs).
     pub shell_integration: bool,
+    pub notifications: NotificationConfig,
+    /// The Lua function `on_notification` (its number), if there is one.
+    pub on_notification: Option<usize>,
 }
 
 impl Default for Config {
@@ -55,6 +133,8 @@ impl Default for Config {
             keys: Keymap::with_defaults(),
             commands: Vec::new(),
             shell_integration: true,
+            notifications: NotificationConfig::default(),
+            on_notification: None,
         }
     }
 }
@@ -67,7 +147,11 @@ pub enum ApiCall {
         place: SpawnWhere,
     },
     SendText(String),
-    Notify(String),
+    Notify {
+        title: String,
+        body: String,
+        level: String,
+    },
     Copy(String),
     Action(BuiltinAction),
 }
@@ -95,6 +179,50 @@ impl LoadedConfig {
             queue: Rc::default(),
             _lua: None,
         }
+    }
+
+    /// Asks `on_notification` (if the config has it) what to do with a notification.
+    pub fn filter_notification(&self, input: &NotifyIn) -> Result<NotifyOut, String> {
+        let keep = || NotifyOut::Keep {
+            title: input.title.clone(),
+            body: input.body.clone(),
+            level: input.level.clone(),
+            os: None,
+            toast: None,
+        };
+        let (Some(index), Some(lua), Some(api)) =
+            (self.config.on_notification, &self._lua, &self.api)
+        else {
+            return Ok(keep());
+        };
+        let Some(function) = self.functions.get(index) else {
+            return Ok(keep());
+        };
+        let run = || -> mlua::Result<NotifyOut> {
+            let n = lua.create_table()?;
+            n.set("title", input.title.as_str())?;
+            n.set("body", input.body.as_str())?;
+            n.set("level", input.level.as_str())?;
+            n.set("source", input.source.as_str())?;
+            n.set("pane", input.pane)?;
+            match function.call::<Value>((n, api.clone()))? {
+                Value::Nil | Value::Boolean(false) => Ok(NotifyOut::Drop),
+                Value::Table(out) => Ok(NotifyOut::Keep {
+                    title: out.get::<Option<String>>("title")?.unwrap_or_default(),
+                    body: out.get::<Option<String>>("body")?.unwrap_or_default(),
+                    level: out
+                        .get::<Option<String>>("level")?
+                        .unwrap_or_else(|| input.level.clone()),
+                    os: out.get::<Option<bool>>("os")?,
+                    toast: out.get::<Option<bool>>("toast")?,
+                }),
+                other => Err(mlua::Error::runtime(format!(
+                    "on_notification must return a table or nil, got {}",
+                    other.type_name()
+                ))),
+            }
+        };
+        run().map_err(|err| err.to_string())
     }
 
     /// Runs the Lua function `index` (from `Action::Lua`) and returns what it asked fterm to do.
@@ -172,8 +300,28 @@ fn make_api(lua: &Lua, queue: &Rc<RefCell<Vec<ApiCall>>>) -> mlua::Result<Table>
     let q = queue.clone();
     api.set(
         "notify",
-        lua.create_function(move |_, text: String| {
-            q.borrow_mut().push(ApiCall::Notify(text));
+        lua.create_function(move |_, value: Value| {
+            let call = match value {
+                Value::String(text) => ApiCall::Notify {
+                    title: String::new(),
+                    body: text.to_string_lossy(),
+                    level: "info".to_owned(),
+                },
+                Value::Table(t) => ApiCall::Notify {
+                    title: t.get::<Option<String>>("title")?.unwrap_or_default(),
+                    body: t.get::<Option<String>>("body")?.unwrap_or_default(),
+                    level: t
+                        .get::<Option<String>>("level")?
+                        .unwrap_or_else(|| "info".to_owned()),
+                },
+                other => {
+                    return Err(mlua::Error::runtime(format!(
+                        "notify: expected a string or a table, got {}",
+                        other.type_name()
+                    )));
+                }
+            };
+            q.borrow_mut().push(call);
             Ok(())
         })?,
     )?;
@@ -248,6 +396,25 @@ impl Reader {
         config.default_profile = string_field(root, "default_profile", "default_profile")?;
         if let Some(on) = bool_field(root, "shell_integration", "shell_integration")? {
             config.shell_integration = on;
+        }
+        if let Some(table) = table_field(root, "notifications", "notifications")? {
+            config.notifications = notifications(&table)?;
+        }
+        match root
+            .get::<Value>("on_notification")
+            .map_err(|err| format!("on_notification: {err}"))?
+        {
+            Value::Nil => {}
+            Value::Function(function) => {
+                self.functions.push(function);
+                config.on_notification = Some(self.functions.len() - 1);
+            }
+            other => {
+                return Err(format!(
+                    "on_notification: expected a function, got {}",
+                    other.type_name()
+                ));
+            }
         }
         if let Some(profiles) = table_field(root, "profiles", "profiles")? {
             for (i, value) in list(&profiles) {
@@ -368,6 +535,99 @@ impl Reader {
             )),
         }
     }
+}
+
+fn notifications(table: &Table) -> Result<NotificationConfig, String> {
+    let mut n = NotificationConfig::default();
+    match table
+        .get::<Value>("toasts")
+        .map_err(|err| format!("notifications.toasts: {err}"))?
+    {
+        Value::Nil | Value::Boolean(true) => {}
+        Value::Boolean(false) => n.toasts = None,
+        Value::String(place) => {
+            n.toasts = Some(match place.to_string_lossy().as_str() {
+                "bottom_right" => ToastPosition::BottomRight,
+                "top_right" => ToastPosition::TopRight,
+                "bottom_left" => ToastPosition::BottomLeft,
+                "top_left" => ToastPosition::TopLeft,
+                "bottom" => ToastPosition::Bottom,
+                other => {
+                    return Err(format!(
+                        "notifications.toasts: must be bottom_right, top_right, bottom_left, top_left, bottom, or false, got `{other}`"
+                    ));
+                }
+            });
+        }
+        other => {
+            return Err(format!(
+                "notifications.toasts: expected a place or false, got {}",
+                other.type_name()
+            ));
+        }
+    }
+    if let Some(count) = number_field(table, "max_visible", "notifications.max_visible")? {
+        n.max_visible = count.max(0.0) as usize;
+    }
+    let os_mode = |text: &str| match text {
+        "always" => Ok(OsNotify::Always),
+        "when_unfocused" => Ok(OsNotify::WhenUnfocused),
+        "never" => Ok(OsNotify::Never),
+        other => Err(format!(
+            "notifications.os: must be true, false, \"always\", \"when_unfocused\", or a table, got `{other}`"
+        )),
+    };
+    match table
+        .get::<Value>("os")
+        .map_err(|err| format!("notifications.os: {err}"))?
+    {
+        Value::Nil | Value::Boolean(false) => {}
+        Value::Boolean(true) => n.os = OsNotify::Always,
+        Value::String(text) => n.os = os_mode(&text.to_string_lossy())?,
+        Value::Table(os) => {
+            n.os = match string_field(&os, "when", "notifications.os.when")? {
+                Some(text) => os_mode(&text)?,
+                None => OsNotify::Always,
+            };
+            if let Some(levels) = table_field(&os, "levels", "notifications.os.levels")? {
+                for (i, value) in list(&levels) {
+                    match value {
+                        Value::String(level) => n.os_levels.push(level.to_string_lossy()),
+                        other => {
+                            return Err(format!(
+                                "notifications.os.levels[{i}]: expected a string, got {}",
+                                other.type_name()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        other => {
+            return Err(format!(
+                "notifications.os: expected true, false, a string, or a table, got {}",
+                other.type_name()
+            ));
+        }
+    }
+    if let Some(seconds) = number_field(table, "long_command", "notifications.long_command")? {
+        n.long_command = seconds.max(0.0);
+    }
+    if let Some(bell) = string_field(table, "bell", "notifications.bell")? {
+        n.bell = match bell.as_str() {
+            "notify" => true,
+            "ignore" => false,
+            other => {
+                return Err(format!(
+                    "notifications.bell: must be \"notify\" or \"ignore\", got `{other}`"
+                ));
+            }
+        };
+    }
+    if let Some(flash) = bool_field(table, "flash", "notifications.flash")? {
+        n.flash = flash;
+    }
+    Ok(n)
 }
 
 fn profile(table: &Table, path: &str) -> Result<Profile, String> {
@@ -704,7 +964,11 @@ mod tests {
                     profile: None,
                     place: SpawnWhere::Tab
                 },
-                ApiCall::Notify("hello".into()),
+                ApiCall::Notify {
+                    title: String::new(),
+                    body: "hello".into(),
+                    level: "info".into()
+                },
                 ApiCall::Copy("text".into()),
                 ApiCall::Action(BuiltinAction::Zoom),
             ]
@@ -787,5 +1051,154 @@ mod tests {
         let loaded = LoadedConfig::defaults();
         assert_eq!(loaded.config.font_size, 14.0);
         assert!(loaded.call(0).is_err());
+    }
+
+    #[test]
+    fn notification_defaults() {
+        let n = load("return {}").config.notifications;
+        assert_eq!(n.toasts, Some(ToastPosition::BottomRight));
+        assert_eq!(n.os, OsNotify::Never, "OS notifications are off by default");
+        assert_eq!(n.max_visible, 4);
+        assert_eq!(n.long_command, 10.0);
+        assert!(!n.bell);
+    }
+
+    #[test]
+    fn notification_settings() {
+        let n = load(
+            r#"return { notifications = {
+              toasts = "top_left", max_visible = 2, os = "when_unfocused",
+              long_command = 30, bell = "notify", flash = false,
+            } }"#,
+        )
+        .config
+        .notifications;
+        assert_eq!(n.toasts, Some(ToastPosition::TopLeft));
+        assert_eq!(n.max_visible, 2);
+        assert_eq!(n.os, OsNotify::WhenUnfocused);
+        assert_eq!(n.long_command, 30.0);
+        assert!(n.bell && !n.flash);
+
+        let off = load("return { notifications = { toasts = false, os = true } }")
+            .config
+            .notifications;
+        assert_eq!(off.toasts, None);
+        assert_eq!(off.os, OsNotify::Always);
+
+        let levels = load(
+            r#"return { notifications = { os = { when = "always", levels = { "attention", "error" } } } }"#,
+        )
+        .config
+        .notifications;
+        assert_eq!(levels.os, OsNotify::Always);
+        assert_eq!(levels.os_levels, ["attention", "error"]);
+
+        assert!(
+            error(r#"return { notifications = { toasts = "middle" } }"#)
+                .contains("notifications.toasts")
+        );
+        assert!(
+            error(r#"return { notifications = { os = "sometimes" } }"#)
+                .contains("notifications.os")
+        );
+    }
+
+    fn input(body: &str) -> NotifyIn {
+        NotifyIn {
+            title: "T".into(),
+            body: body.into(),
+            level: "info".into(),
+            source: "terminal".into(),
+            pane: Some(3),
+        }
+    }
+
+    #[test]
+    fn without_on_notification_everything_stays() {
+        let loaded = load("return {}");
+        assert_eq!(
+            loaded.filter_notification(&input("x")).unwrap(),
+            NotifyOut::Keep {
+                title: "T".into(),
+                body: "x".into(),
+                level: "info".into(),
+                os: None,
+                toast: None
+            }
+        );
+    }
+
+    #[test]
+    fn on_notification_can_drop_change_and_route() {
+        let loaded = load(
+            r#"return { on_notification = function(n, fterm)
+              if n.body:find("spam") then return nil end
+              if n.source == "terminal" and n.pane == 3 then
+                n.level = "attention"; n.os = true; n.toast = false
+                n.title = n.title .. "!"
+              end
+              return n
+            end }"#,
+        );
+        assert_eq!(
+            loaded
+                .filter_notification(&input("some spam here"))
+                .unwrap(),
+            NotifyOut::Drop
+        );
+        assert_eq!(
+            loaded.filter_notification(&input("ok")).unwrap(),
+            NotifyOut::Keep {
+                title: "T!".into(),
+                body: "ok".into(),
+                level: "attention".into(),
+                os: Some(true),
+                toast: Some(false)
+            }
+        );
+    }
+
+    #[test]
+    fn on_notification_errors_are_reported() {
+        let loaded = load(r#"return { on_notification = function(n) error("bad filter") end }"#);
+        assert!(
+            loaded
+                .filter_notification(&input("x"))
+                .unwrap_err()
+                .contains("bad filter")
+        );
+    }
+
+    #[test]
+    fn fterm_notify_takes_a_string_or_a_table() {
+        let loaded = load(
+            r#"return { keys = { { key = "f7", action = function(fterm)
+              fterm.notify("just text")
+              fterm.notify({ title = "Build", body = "done", level = "success" })
+            end } } }"#,
+        );
+        let Some(Action::Lua(index)) = loaded
+            .config
+            .keys
+            .get(&KeyChord::parse("f7").unwrap())
+            .cloned()
+        else {
+            panic!("no f7");
+        };
+        assert_eq!(
+            loaded.call(index).unwrap(),
+            [
+                ApiCall::Notify {
+                    title: String::new(),
+                    body: "just text".into(),
+                    level: "info".into()
+                },
+                ApiCall::Notify {
+                    title: "Build".into(),
+                    body: "done".into(),
+                    level: "success".into()
+                },
+            ]
+        );
     }
 }

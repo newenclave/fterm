@@ -6,6 +6,7 @@ mod clipboard;
 mod gpu;
 mod input;
 mod mouse;
+mod notify;
 mod palette;
 
 use tracing_subscriber::EnvFilter;

@@ -450,6 +450,17 @@ impl FrameParts<'_> {
         Ok(())
     }
 
+    /// Toasts at their places (from `toasts::layout_toasts`).
+    pub fn toasts(
+        &mut self,
+        toasts: &[crate::toasts::ToastView],
+        rects: &[Rect],
+    ) -> Result<(), AtlasFull> {
+        let quads = crate::toasts::build_toasts(toasts, rects, self.cell, &mut *self.glyph)?;
+        self.quads.extend(quads);
+        Ok(())
+    }
+
     /// A message box in the middle of `view`, on top of everything.
     pub fn message_box(&mut self, lines: &[String], view: Rect) -> Result<(), AtlasFull> {
         let quads = build_message_box(lines, view, self.cell, &mut *self.glyph)?;

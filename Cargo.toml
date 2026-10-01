@@ -16,6 +16,7 @@ bytemuck = { version = "1", features = ["derive"] }
 cosmic-text = "0.19"
 etagere = "0.3"
 notify = "8.2"
+notify-rust = "4.17"
 mlua = { version = "0.12", features = ["luau", "vendored"] }
 open = "5"
 pollster = "1"

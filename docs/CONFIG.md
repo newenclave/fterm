@@ -45,6 +45,8 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `keys` | list | see `KEYS.md` | See "Keys". |
 | `commands` | list | none | More lines for the command palette. |
 | `shell_integration` | true / false | `true` | Load the fterm script into PowerShell (see "Shell integration"). |
+| `notifications` | table | see "Notifications" | Toasts, OS notifications, long commands. |
+| `on_notification` | function | none | See every notification first: drop, change, or route it. |
 
 ### Colors
 All fields can be left out. Colors are `#rrggbb` or `#rgb`.
@@ -150,6 +152,58 @@ commands = {
 ```
 
 Commands show in the command palette (Ctrl + Shift + P), next to all actions and profiles.
+
+## Notifications
+fterm collects notifications from many places:
+- apps in a pane (OSC 9, OSC 99, OSC 777 — for example from scripts or Claude Code hooks);
+- a long command that ended while you did not see its pane;
+- `fterm.notify` in your config;
+- fterm itself (for example, an error in the config).
+
+They show as **toasts**: small boxes in a corner. Toasts never take the focus, your keys always go to the terminal,
+and the mouse only works on the toast itself:
+- the mouse over a toast stops its timer;
+- a click goes to its tab and pane;
+- `×` closes it.
+
+Info and success toasts hide after 4 s, warnings after 8 s, errors and "attention" stay until you close them.
+
+```lua
+notifications = {
+  toasts = "bottom_right",      -- "top_right", "bottom_left", "top_left", "bottom", or false (no toasts)
+  max_visible = 4,
+  os = false,                   -- system notifications: OFF by default
+                                -- true / "always", "when_unfocused",
+                                -- or { when = "when_unfocused", levels = { "attention", "error" } }
+  long_command = 10,            -- seconds; 0 = no "command finished" notifications
+  bell = "ignore",              -- "notify" = the bell makes a notification
+  flash = true,                 -- flash the taskbar for "attention" when fterm is not in front
+},
+```
+
+Levels: `info`, `success`, `warning`, `error`, `attention`.
+
+### on_notification
+This function sees every notification before it shows. Return `nil` to drop it, or return the table
+(you can change it). Fields: `title`, `body`, `level`, `source` (`terminal`, `command`, `agent`, `lua`, `app`),
+`pane` (a number or nil). Set `os = true` or `false` to choose the OS notification for this one, and
+`toast = false` to show no toast.
+
+```lua
+on_notification = function(n, fterm)
+  if n.body:find("heartbeat") then return nil end           -- drop noise
+  if n.source == "command" and n.level == "error" then
+    n.os = true                                             -- failed builds also go to the OS
+  end
+  return n
+end,
+```
+
+### fterm.notify
+```lua
+fterm.notify("Saved")                                                  -- info
+fterm.notify({ title = "Deploy", body = "done", level = "success" })
+```
 
 ## Shell integration
 With shell integration, the shell tells fterm:
