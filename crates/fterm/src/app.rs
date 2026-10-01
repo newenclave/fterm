@@ -35,6 +35,7 @@ use crate::mouse::{
     ClickCounter, GridGeometry, ReportButton, ReportKind, ReportMods, Wheel, autoscroll_lines,
     encode_mouse,
 };
+use crate::palette::{PaletteItem, PaletteState, VISIBLE_ROWS};
 
 /// How often auto-scroll moves while the user drags a selection out of the pane.
 const AUTOSCROLL_TICK: Duration = Duration::from_millis(16);
@@ -178,6 +179,9 @@ enum CloseTarget {
     Pane(PaneId),
 }
 
+/// One line of the command palette to draw: (label, key, is it selected).
+type PaletteRow = (String, String, bool);
+
 /// "Close the tab? A program is running."
 struct CloseQuestion {
     target: CloseTarget,
@@ -206,6 +210,8 @@ pub struct App {
     message: Option<Vec<String>>,
     /// Editors save in several steps: we load the config a moment after the last change.
     reload_at: Option<Instant>,
+    /// The command palette, when it is open.
+    palette: Option<PaletteState>,
 }
 
 impl App {
@@ -239,6 +245,7 @@ impl App {
             _watcher: None,
             message,
             reload_at: None,
+            palette: None,
         }
     }
 
@@ -714,13 +721,90 @@ impl App {
             A::ScrollTop => return scroll(running, Scroll::Top),
             A::ScrollBottom => return scroll(running, Scroll::Bottom),
             A::CommandPalette => {
-                // The command palette comes in the next step (5.2).
+                running.window.request_redraw();
+                self.palette = Some(PaletteState::new(self.palette_items()));
                 return;
             }
             A::ReloadConfig => return self.reload_config(),
             A::OpenConfig => return self.open_config(),
         }
         self.tab_changed();
+    }
+
+    /// All lines of the command palette: profiles, actions, and the commands from the config.
+    fn palette_items(&self) -> Vec<PaletteItem> {
+        let keys = &self.config.config.keys;
+        let key = |action: &Action| keys.key_for(action).unwrap_or_default();
+        let mut items = Vec::new();
+        for profile in &self.profiles {
+            for (label, place) in [
+                ("New tab", SpawnWhere::Tab),
+                ("Split right", SpawnWhere::SplitRight),
+                ("Split down", SpawnWhere::SplitDown),
+            ] {
+                let action = Action::Spawn {
+                    profile: Some(profile.name.clone()),
+                    place,
+                };
+                items.push(PaletteItem {
+                    label: format!("{label}: {}", profile.name),
+                    key: key(&action),
+                    action,
+                });
+            }
+        }
+        for command in &self.config.config.commands {
+            items.push(PaletteItem {
+                label: command.name.clone(),
+                key: key(&command.action),
+                action: command.action.clone(),
+            });
+        }
+        for builtin in BuiltinAction::ALL {
+            if builtin == BuiltinAction::CommandPalette {
+                continue;
+            }
+            let action = Action::Builtin(builtin);
+            items.push(PaletteItem {
+                label: builtin.label(),
+                key: key(&action),
+                action,
+            });
+        }
+        items
+    }
+
+    /// Keys while the command palette is open. All keys go to the palette.
+    fn palette_key(&mut self, event_loop: &ActiveEventLoop, event: &KeyEvent) {
+        let Some(palette) = &mut self.palette else {
+            return;
+        };
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => self.palette = None,
+            Key::Named(NamedKey::Enter) => {
+                let action = palette.selected_action().cloned();
+                self.palette = None;
+                if let Some(action) = action {
+                    self.run_action(event_loop, action);
+                }
+            }
+            Key::Named(NamedKey::ArrowUp) => palette.move_selection(-1),
+            Key::Named(NamedKey::ArrowDown) => palette.move_selection(1),
+            Key::Named(NamedKey::PageUp) => palette.move_selection(-(VISIBLE_ROWS as i32)),
+            Key::Named(NamedKey::PageDown) => palette.move_selection(VISIBLE_ROWS as i32),
+            Key::Named(NamedKey::Backspace) => palette.backspace(),
+            _ => {
+                if let Some(text) = event.text.as_deref()
+                    && !self.mods.control_key()
+                    && !self.mods.alt_key()
+                {
+                    palette.type_text(text);
+                }
+            }
+        }
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
     }
 
     /// Opens the config file in the default editor. It makes a sample file first if there is none.
@@ -1061,7 +1145,14 @@ impl App {
         state: ElementState,
         button: MouseButton,
     ) {
-        if self.close_question.is_some() {
+        if self.close_question.is_some() || self.palette.is_some() {
+            if self.palette.is_some() && state == ElementState::Pressed {
+                // A click outside of the list closes the palette.
+                self.palette = None;
+                if let Some(running) = &self.running {
+                    running.window.request_redraw();
+                }
+            }
             return;
         }
         // The tab bar.
@@ -1237,6 +1328,17 @@ impl App {
     }
 
     fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        if let Some(palette) = &mut self.palette {
+            let step = match delta {
+                MouseScrollDelta::LineDelta(_, y) => -y.signum() as i32,
+                MouseScrollDelta::PixelDelta(p) => -(p.y.signum() as i32),
+            };
+            palette.move_selection(step);
+            if let Some(running) = &self.running {
+                running.window.request_redraw();
+            }
+            return;
+        }
         let Some(running) = &mut self.running else {
             return;
         };
@@ -1370,6 +1472,14 @@ impl App {
             .as_ref()
             .map(|q| q.lines.clone())
             .or_else(|| self.message.clone());
+        let palette_rows: Option<(String, Vec<PaletteRow>)> = self.palette.as_ref().map(|p| {
+            let rows = p
+                .visible()
+                .into_iter()
+                .map(|(item, selected)| (item.label.clone(), item.key.clone(), selected))
+                .collect();
+            (p.query().to_owned(), rows)
+        });
         let running = self.running.as_mut().unwrap();
         let Running {
             gpu,
@@ -1430,6 +1540,9 @@ impl App {
                     }
                 }
                 parts.pane_chrome(&dividers, active_frame);
+                if let Some((query, rows)) = &palette_rows {
+                    parts.palette(&fterm_render::overlay::PaletteView { query, rows }, view)?;
+                }
                 if let Some(lines) = &question {
                     parts.message_box(lines, view)?;
                 }
@@ -1624,6 +1737,10 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if self.close_question.is_some() {
                     self.close_question_key(event_loop, &event);
+                    return;
+                }
+                if self.palette.is_some() {
+                    self.palette_key(event_loop, &event);
                     return;
                 }
                 if self.renaming.is_some() {

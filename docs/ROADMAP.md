@@ -158,7 +158,7 @@ Still to do later: move and swap panes, move a pane to another tab, broadcast in
 - **Check:** split 2×2, run `claude`, `vim`, `htop`-like output, and a shell. Resize with the mouse,
   zoom one pane, close panes in any order. Every pane gets the right size, and no processes stay alive.
 
-### Phase 5 — Config and profiles
+### Phase 5 — Config and profiles ✅ (done: Luau config, profiles, keys, live reload, command palette)
 - The config is a **script**, not only a list of values: it has functions and tables,
   so you can use `if`, loops, and your own helpers (like WezTerm with Lua).
   - Plan: **Luau** (a fast Lua with types and a sandbox, from Roblox) through the `mlua` crate.
@@ -224,4 +224,4 @@ Still to do later: move and swap panes, move a pane to another tab, broadcast in
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
 ## Next step
-Write a detailed plan for Phase 5 (config and profiles) or Phase 3b (images). Then build it.
+Write a detailed plan for Phase 6 (events and shell integration) or Phase 3b (images). Then build it.

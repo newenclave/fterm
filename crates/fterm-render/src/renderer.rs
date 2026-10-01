@@ -439,6 +439,17 @@ impl FrameParts<'_> {
             .extend(crate::panes::build_pane_chrome(dividers, active));
     }
 
+    /// The command palette at the top of `view`.
+    pub fn palette(
+        &mut self,
+        palette: &crate::overlay::PaletteView,
+        view: Rect,
+    ) -> Result<(), AtlasFull> {
+        let quads = crate::overlay::build_palette(palette, view, self.cell, &mut *self.glyph)?;
+        self.quads.extend(quads);
+        Ok(())
+    }
+
     /// A message box in the middle of `view`, on top of everything.
     pub fn message_box(&mut self, lines: &[String], view: Rect) -> Result<(), AtlasFull> {
         let quads = build_message_box(lines, view, self.cell, &mut *self.glyph)?;

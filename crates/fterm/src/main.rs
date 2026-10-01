@@ -6,6 +6,7 @@ mod clipboard;
 mod gpu;
 mod input;
 mod mouse;
+mod palette;
 
 use tracing_subscriber::EnvFilter;
 use winit::event_loop::{ControlFlow, EventLoop};

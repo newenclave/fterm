@@ -3,6 +3,12 @@
 These are the default keys. You can change them in the config (see [CONFIG.md](CONFIG.md)).
 **Ctrl + Shift + P** opens the command palette. **Ctrl + Shift + ,** opens the config file.
 
+## Command palette
+Ctrl + Shift + P shows all actions, all profiles ("New tab: Claude", "Split right: Claude", …),
+and the `commands` from your config. Type a few letters to filter (for example `spl cl`).
+Up / Down / PageUp / PageDown or the mouse wheel select a line, Enter runs it, Esc closes the palette.
+The key of each action is on the right.
+
 ## Tabs
 | Key or mouse | What it does |
 |---|---|
