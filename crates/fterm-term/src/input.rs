@@ -66,14 +66,23 @@ pub fn typed_input<T>(term: &Term<T>, start: (usize, usize)) -> Option<Input> {
             chars += 1;
         }
     }
+    // Spaces at the end are typed when the cursor is after them ("test here "); ConPTY often draws
+    // a typed space only as a cursor move, so the cells are empty but the cursor is further right.
+    // Empty cells after the cursor are not typed.
+    let raw: Vec<char> = text.chars().collect();
+    let trimmed = text.trim_end().chars().count();
+    let cursor_on_input = (line..=end).contains(&cursor.line.0);
+    let length = if cursor_on_input {
+        trimmed.max(before_cursor.min(raw.len()))
+    } else {
+        trimmed
+    };
     if cursor.line.0 > end {
-        before_cursor = chars;
+        before_cursor = length;
     }
-    let text = text.trim_end().to_owned();
-    let length = text.chars().count();
     Some(Input {
         cursor_at_end: before_cursor >= length,
-        text,
+        text: raw[..length].iter().collect(),
     })
 }
 
@@ -172,6 +181,21 @@ mod tests {
     fn nothing_typed() {
         let t = term(20, 4, "PS> ");
         assert_eq!(typed_input(&t, (0, 4)), input("", true));
+    }
+
+    #[test]
+    fn spaces_before_the_cursor_are_typed() {
+        // "test here " with a space at the end: the space is a part of the input
+        // (text to command deletes as many chars as the input has).
+        let t = term(20, 4, "PS> test here ");
+        assert_eq!(typed_input(&t, (0, 4)), input("test here ", true));
+        let t = term(20, 4, "PS> a   ");
+        assert_eq!(typed_input(&t, (0, 4)), input("a   ", true));
+        // Empty cells after the cursor are not typed.
+        let t = term(20, 4, "PS> ab\x1b[5C");
+        assert_eq!(typed_input(&t, (0, 4)), input("ab     ", true));
+        let t = term(20, 4, "PS> ab cd\x1b[3D");
+        assert_eq!(typed_input(&t, (0, 4)), input("ab cd", false));
     }
 
     #[test]
