@@ -38,6 +38,7 @@ fterm-ai = { path = "crates/fterm-ai" }
 fterm-api = { path = "crates/fterm-api" }
 fterm-config = { path = "crates/fterm-config" }
 fterm-history = { path = "crates/fterm-history" }
+fterm-scene = { path = "crates/fterm-scene" }
 fterm-mux = { path = "crates/fterm-mux" }
 fterm-render = { path = "crates/fterm-render" }
 fterm-term = { path = "crates/fterm-term" }

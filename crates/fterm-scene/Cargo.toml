@@ -1,0 +1,14 @@
+[package]
+name = "fterm-scene"
+description = "A Braille canvas for fterm: 2x4 dots in every cell, lines, shapes, text, and colors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
