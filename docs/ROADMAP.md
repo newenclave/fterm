@@ -189,7 +189,7 @@ Still to do later: move and swap panes, move a pane to another tab, broadcast in
 - A dock with service panels: an Events panel and an Agents panel.
 - **Check:** Claude finishes in a background tab → the tab shows a badge and a notification. `cd` changes the tab folder.
 
-### Phase 6b — Folder and command history (like Far Manager)
+### Phase 6b — Folder and command history (like Far Manager) (in work: the command text, the input start, and the history files are done)
 An idea from the user. Shell integration (Phase 6) already tells us the folder (OSC 7) and where each command starts and ends (OSC 133).
 - **Folder history** (like Alt+F12 in Far): fterm saves every folder where a pane was.
   - A list window, like the command palette: newest at the top, type to filter, Enter = `cd` to it in the active pane

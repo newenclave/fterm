@@ -6,10 +6,11 @@ use std::time::{Duration, Instant};
 
 use fterm_config::keys::{Action, BuiltinAction, SpawnWhere};
 use fterm_config::load::{
-    AgentIn, AgentOut, ApiCall, DockPlace, LoadedConfig, NotifyIn, NotifyOut, OsNotify,
+    AgentIn, AgentOut, ApiCall, DockPlace, HistoryIn, LoadedConfig, NotifyIn, NotifyOut, OsNotify,
     SAMPLE_CONFIG, ToastPosition, config_path, load_file,
 };
 use fterm_config::profiles::{Profile, detect_profiles, launch_command, path_extension, which};
+use fterm_history::{CommandRecord, History, Limits, now_ms, should_save};
 use fterm_mux::{Closed, Direction, Edge, Mux, PaneId, Rect, TabId};
 use fterm_render::Renderer;
 use fterm_render::builtin::BrailleStyle;
@@ -288,6 +289,8 @@ pub struct App {
     palette: Option<PaletteState>,
     /// All notifications and the toasts on the screen.
     center: Center,
+    /// The folder and command history (`None` when it is off, or its folder cannot be made).
+    history: Option<History>,
     /// The Events panel was on the screen (and fterm in front) in the last frame.
     /// When it goes away, its events count as read.
     events_seen: bool,
@@ -325,11 +328,13 @@ impl App {
             message,
             reload_at: None,
             events_seen: false,
+            history: None,
             center: Center::new(4, true),
             shell_script: shell_script_path(),
             palette: None,
         };
         app.apply_notification_config();
+        Self::open_history(&mut app.history, &app.config.config.history);
         if let Some(lines) = app.message.take() {
             // A config error at start: a toast, not a box in the way.
             let text = lines.join("\n");
@@ -536,6 +541,90 @@ impl App {
     }
 
     /// The toasts on the screen and their places (the same for drawing and for the mouse).
+    /// Opens the history when it is on (and closes it when it is off). Changed limits open it again.
+    fn open_history(history: &mut Option<History>, config: &fterm_config::load::HistoryConfig) {
+        let limits = Limits {
+            commands: config.commands,
+            dirs: config.dirs,
+        };
+        if !config.enabled {
+            *history = None;
+            return;
+        }
+        if history.as_ref().is_some_and(|h| h.limits() == limits) {
+            return;
+        }
+        let Some(folder) = fterm_history::default_folder() else {
+            tracing::warn!("no folder for the history");
+            return;
+        };
+        match History::open(&folder, limits) {
+            Ok((h, problems)) => {
+                for problem in problems {
+                    tracing::warn!("history: {problem}");
+                }
+                tracing::info!(folder = %folder.display(), "history loaded");
+                *history = Some(h);
+            }
+            Err(err) => {
+                tracing::warn!(folder = %folder.display(), "cannot open the history: {err}")
+            }
+        }
+    }
+
+    /// A command ended: save it in the history (if the config and `on_history` say yes).
+    fn save_command(
+        &mut self,
+        pane: PaneId,
+        command: Option<String>,
+        cwd: Option<String>,
+        exit: Option<i32>,
+        took: Duration,
+    ) {
+        let Some(cmd) = command else {
+            return;
+        };
+        let settings = &self.config.config.history;
+        if self.history.is_none() || !should_save(&cmd, settings.ignore_space) {
+            return;
+        }
+        let shell = self
+            .running
+            .as_ref()
+            .and_then(|r| r.panes.get(&pane))
+            .map(|p| display_name(p.session.program()).to_owned())
+            .unwrap_or_default();
+        let input = HistoryIn {
+            cmd,
+            cwd: cwd.clone(),
+            exit,
+            shell: shell.clone(),
+        };
+        let cmd = match self.config.on_history(&input) {
+            Ok(Some(cmd)) if should_save(&cmd, false) => cmd,
+            Ok(_) => return,
+            Err(err) => {
+                tracing::warn!("on_history: {err}");
+                self.notify(None, "Lua error", &err, Level::Error, Source::App);
+                return;
+            }
+        };
+        let took_ms = took.as_millis() as u64;
+        let record = CommandRecord {
+            cmd,
+            cwd,
+            exit,
+            start: now_ms().saturating_sub(took_ms),
+            took_ms,
+            shell: (!shell.is_empty()).then_some(shell),
+        };
+        if let Some(history) = &mut self.history
+            && let Err(err) = history.add_command(record)
+        {
+            tracing::warn!("cannot save the command: {err}");
+        }
+    }
+
     /// The panel tabs: "Events 3", "Agents 2".
     fn dock_tabs(&self) -> Vec<String> {
         let unread = self.center.unread();
@@ -931,6 +1020,7 @@ impl App {
             .renderer
             .set_braille_style(running.gpu.device(), braille);
         running.dock.side = dock_side(config.panels.dock);
+        Self::open_history(&mut self.history, &config.history);
         running.dock.ratio = config.panels.size;
         running.resize_all_panes();
         running.window.request_redraw();
@@ -2454,14 +2544,16 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         if let Some(running) = &mut self.running {
-            // Dev only: FTERM_RUN="command" types this command into the first tab after start.
-            // Test scripts use it, so they do not need to send keys to the window.
+            // Dev only: FTERM_RUN="command" types this command into the first tab after start
+            // (many commands: one per line). Test scripts use it, so they do not need to send keys to the window.
             if cfg!(debug_assertions)
                 && let Ok(command) = std::env::var("FTERM_RUN")
                 && let Some(session) = running.session()
             {
                 tracing::info!(%command, "FTERM_RUN");
-                session.write(format!("{command}\r").into_bytes());
+                for line in command.lines() {
+                    session.write(format!("{line}\r").into_bytes());
+                }
             }
         }
         self.tab_changed();
@@ -2496,15 +2588,32 @@ impl ApplicationHandler<UserEvent> for App {
                 let Some(p) = running.panes.get_mut(&pane) else {
                     return;
                 };
+                let new_dir = match &osc {
+                    OscEvent::Cwd(dir) if p.shell.cwd.as_deref() != Some(dir) => Some(dir.clone()),
+                    _ => None,
+                };
                 let done = p.shell.apply(&osc, Instant::now());
                 let program = p.session.program().to_owned();
+                if let Some(dir) = new_dir
+                    && let Some(history) = &mut self.history
+                    && let Err(err) = history.visit_dir(&dir, now_ms())
+                {
+                    tracing::warn!("cannot save the folder: {err}");
+                }
                 if let OscEvent::Notify { title, body } = &osc {
                     let title = title.clone().unwrap_or(program);
                     self.notify(Some(pane), &title, body, Level::Info, Source::Terminal);
                 } else if let OscEvent::Agent { state, message } = &osc {
                     self.agent_state(event_loop, pane, state, message);
-                } else if let Some(ShellEvent::CommandDone { exit, took, .. }) = done {
-                    tracing::debug!(pane = pane.0, ?exit, ?took, "command done");
+                } else if let Some(ShellEvent::CommandDone {
+                    exit,
+                    took,
+                    command,
+                    cwd,
+                }) = done
+                {
+                    tracing::debug!(pane = pane.0, ?exit, ?took, ?command, "command done");
+                    self.save_command(pane, command, cwd, exit, took);
                     self.command_done(pane, exit, took);
                 }
             }

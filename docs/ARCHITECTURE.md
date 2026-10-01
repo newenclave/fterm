@@ -85,6 +85,13 @@ processes and real escape codes, and later use it from the CLI and MCP (Phase 7)
   and makes the rows. `fterm-render/src/dock.rs` places and draws it. The dock takes its part of the window
   first, and the tab gets the rest (`Running::tab_area`), so panes, splits, and toasts move by themselves.
 
+## History
+- `fterm-history` keeps the commands and folders in memory and in two JSON lines files. New records go to the
+  end of a file with one `write`, so many windows can write at the same time. Each window reads the new lines
+  of the others (`refresh`). A file with two times the limit of lines is written again (a temp file, then rename).
+- The shell scripts send the command text (OSC 633;E). The pty loop runs the parser only up to the end of
+  133;B and reads the cursor there (`InputStart`), so fterm knows where the typed text starts.
+
 ## Colors
 
 - `fterm-term/src/colors.rs` has the palette: 16 colors (Catppuccin Mocha), the 256-color table,

@@ -10,6 +10,7 @@ license.workspace = true
 anyhow.workspace = true
 arboard.workspace = true
 fterm-config.workspace = true
+fterm-history.workspace = true
 fterm-mux.workspace = true
 fterm-render.workspace = true
 fterm-term.workspace = true

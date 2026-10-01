@@ -20,6 +20,8 @@ notify-rust = "4.17"
 mlua = { version = "0.12", features = ["luau", "vendored"] }
 open = "5"
 pollster = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
 tracing = "0.1"
 unicode-width = "0.2"
@@ -29,6 +31,7 @@ winit = "0.30.13"
 
 # Our own crates.
 fterm-config = { path = "crates/fterm-config" }
+fterm-history = { path = "crates/fterm-history" }
 fterm-mux = { path = "crates/fterm-mux" }
 fterm-render = { path = "crates/fterm-render" }
 fterm-term = { path = "crates/fterm-term" }

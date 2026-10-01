@@ -58,6 +58,41 @@ impl Default for PanelsConfig {
     }
 }
 
+/// `history = { enabled, commands, dirs, ignore_space, hints }`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryConfig {
+    /// Save commands and folders.
+    pub enabled: bool,
+    /// How many commands and folders to keep.
+    pub commands: usize,
+    pub dirs: usize,
+    /// A command that starts with a space is not saved.
+    pub ignore_space: bool,
+    /// Grey hints from the history while you type.
+    pub hints: bool,
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            commands: 10_000,
+            dirs: 500,
+            ignore_space: true,
+            hints: false,
+        }
+    }
+}
+
+/// A command before `on_history` sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryIn {
+    pub cmd: String,
+    pub cwd: Option<String>,
+    pub exit: Option<i32>,
+    pub shell: String,
+}
+
 /// The panel names.
 pub const PANEL_NAMES: [&str; 2] = ["events", "agents"];
 
@@ -170,10 +205,13 @@ pub struct Config {
     pub shell_integration: bool,
     pub notifications: NotificationConfig,
     pub panels: PanelsConfig,
+    pub history: HistoryConfig,
     /// The Lua function `on_notification` (its number), if there is one.
     pub on_notification: Option<usize>,
     /// The Lua function `on_agent` (its number), if there is one.
     pub on_agent: Option<usize>,
+    /// The Lua function `on_history` (its number), if there is one.
+    pub on_history: Option<usize>,
 }
 
 impl Default for Config {
@@ -191,8 +229,10 @@ impl Default for Config {
             shell_integration: true,
             notifications: NotificationConfig::default(),
             panels: PanelsConfig::default(),
+            history: HistoryConfig::default(),
             on_notification: None,
             on_agent: None,
+            on_history: None,
         }
     }
 }
@@ -311,6 +351,35 @@ impl LoadedConfig {
             notify,
             calls: std::mem::take(&mut *self.queue.borrow_mut()),
         })
+    }
+
+    /// Asks `on_history` (if the config has it) about a command before it goes to the history.
+    /// `None` = do not save it; `Some(text)` = save this text (maybe changed).
+    pub fn on_history(&self, input: &HistoryIn) -> Result<Option<String>, String> {
+        let (Some(index), Some(lua), Some(api)) = (self.config.on_history, &self._lua, &self.api)
+        else {
+            return Ok(Some(input.cmd.clone()));
+        };
+        let Some(function) = self.functions.get(index) else {
+            return Err(format!("no Lua function number {index}"));
+        };
+        let run = || -> mlua::Result<Option<String>> {
+            let h = lua.create_table()?;
+            h.set("cmd", input.cmd.as_str())?;
+            h.set("cwd", input.cwd.as_deref())?;
+            h.set("exit", input.exit)?;
+            h.set("shell", input.shell.as_str())?;
+            match function.call::<Value>((h, api.clone()))? {
+                Value::Nil | Value::Boolean(true) => Ok(Some(input.cmd.clone())),
+                Value::Boolean(false) => Ok(None),
+                Value::Table(out) => Ok(out.get::<Option<String>>("cmd")?),
+                other => Err(mlua::Error::runtime(format!(
+                    "on_history must return a table, false, or nil, got {}",
+                    other.type_name()
+                ))),
+            }
+        };
+        run().map_err(|err| err.to_string())
     }
 
     /// Runs the Lua function `index` (from `Action::Lua`) and returns what it asked fterm to do.
@@ -511,6 +580,10 @@ impl Reader {
         }
         config.on_notification = self.hook(root, "on_notification")?;
         config.on_agent = self.hook(root, "on_agent")?;
+        config.on_history = self.hook(root, "on_history")?;
+        if let Some(table) = table_field(root, "history", "history")? {
+            config.history = history(&table)?;
+        }
         if let Some(profiles) = table_field(root, "profiles", "profiles")? {
             for (i, value) in list(&profiles) {
                 let path = format!("profiles[{i}]");
@@ -630,6 +703,43 @@ impl Reader {
             )),
         }
     }
+}
+
+fn history(table: &Table) -> Result<HistoryConfig, String> {
+    let mut h = HistoryConfig::default();
+    let flag = |key: &str| -> Result<Option<bool>, String> {
+        match table
+            .get::<Value>(key)
+            .map_err(|err| format!("history.{key}: {err}"))?
+        {
+            Value::Nil => Ok(None),
+            Value::Boolean(on) => Ok(Some(on)),
+            other => Err(format!(
+                "history.{key}: expected true or false, got {}",
+                other.type_name()
+            )),
+        }
+    };
+    if let Some(on) = flag("enabled")? {
+        h.enabled = on;
+    }
+    if let Some(on) = flag("ignore_space")? {
+        h.ignore_space = on;
+    }
+    if let Some(on) = flag("hints")? {
+        h.hints = on;
+    }
+    for (key, field) in [("commands", &mut h.commands), ("dirs", &mut h.dirs)] {
+        if let Some(count) = number_field(table, key, &format!("history.{key}"))? {
+            if !(1.0..=1_000_000.0).contains(&count) {
+                return Err(format!(
+                    "history.{key}: must be between 1 and 1000000, got {count}"
+                ));
+            }
+            *field = count as usize;
+        }
+    }
+    Ok(h)
 }
 
 fn panels(table: &Table) -> Result<PanelsConfig, String> {
@@ -1318,6 +1428,67 @@ mod tests {
             message: "Allow Bash?".into(),
             name: "claude".into(),
         }
+    }
+
+    #[test]
+    fn history_defaults_and_fields() {
+        let h = load("return {}").config.history;
+        assert_eq!(h, HistoryConfig::default());
+        assert!(h.enabled && h.ignore_space && !h.hints);
+        assert_eq!((h.commands, h.dirs), (10_000, 500));
+        let h = load(
+            r#"return { history = { enabled = false, commands = 50, dirs = 20, ignore_space = false, hints = true } }"#,
+        )
+        .config
+        .history;
+        assert!(!h.enabled && !h.ignore_space && h.hints);
+        assert_eq!((h.commands, h.dirs), (50, 20));
+        let Err(err) = load_str("return { history = { commands = 0 } }", "t") else {
+            panic!("0 commands is not a history");
+        };
+        assert!(err.contains("history.commands"), "{err}");
+    }
+
+    fn history_in(cmd: &str) -> HistoryIn {
+        HistoryIn {
+            cmd: cmd.into(),
+            cwd: Some("C:/work".into()),
+            exit: Some(0),
+            shell: "pwsh".into(),
+        }
+    }
+
+    #[test]
+    fn without_on_history_the_command_is_saved() {
+        let out = load("return {}").on_history(&history_in("ls")).unwrap();
+        assert_eq!(out, Some("ls".to_owned()));
+    }
+
+    #[test]
+    fn on_history_can_skip_and_change() {
+        let loaded = load(
+            r#"return { on_history = function(h)
+              if h.cmd:find("token") then return false end
+              if h.cwd == "C:/work" and h.shell == "pwsh" and h.exit == 0 then
+                h.cmd = h.cmd:gsub("password=%S+", "password=***")
+                return h
+              end
+            end }"#,
+        );
+        assert_eq!(
+            loaded.on_history(&history_in("curl --token x")).unwrap(),
+            None
+        );
+        assert_eq!(
+            loaded.on_history(&history_in("db password=abc")).unwrap(),
+            Some("db password=***".to_owned())
+        );
+        // nil = keep it as it is.
+        let other = HistoryIn {
+            exit: Some(1),
+            ..history_in("make")
+        };
+        assert_eq!(loaded.on_history(&other).unwrap(), Some("make".to_owned()));
     }
 
     #[test]

@@ -236,6 +236,34 @@ on_agent = function(a, fterm)
 end,
 ```
 
+## History
+fterm saves the commands that you run and the folders where you were (it needs shell integration, see below).
+The lists for them come in the next steps (Alt+F8 and Alt+F12, see [ROADMAP.md](ROADMAP.md), Phase 6b).
+
+```lua
+history = {
+  enabled = true,          -- false = save nothing
+  commands = 10000,        -- how many commands to keep
+  dirs = 500,              -- how many folders to keep (pinned folders always stay)
+  ignore_space = true,     -- a command that starts with a space is not saved
+},
+```
+
+The files are in `%APPDATA%\fterm\history\` (Linux and macOS: `~/.local/share/fterm/history/`):
+`commands.jsonl` and `dirs.jsonl`, one JSON record per line. They are plain text: you can read them,
+change them, or delete them. Many fterm windows can write to them at the same time. When a file gets
+two times bigger than the limit, fterm writes it again with only the newest records.
+
+### on_history
+This function sees every command before it is saved. Fields: `cmd`, `cwd`, `exit`, `shell`.
+Return `false` to not save it, or return the table (you can change `cmd`). `nil` saves it as it is.
+
+```lua
+on_history = function(h)
+  if h.cmd:find("token") or h.cmd:find("password") then return false end   -- never save secrets
+end,
+```
+
 ## Shell integration
 With shell integration, the shell tells fterm:
 - the current folder (OSC 7). New tabs and splits start in the folder of the active pane;
