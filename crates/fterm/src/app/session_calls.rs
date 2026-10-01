@@ -37,6 +37,7 @@ impl App {
                     cwd: p.shell.cwd.clone(),
                     program: display_name(p.session.program()).to_owned(),
                     ran: p.shell.running_command().map(str::to_owned),
+                    scene: p.scene.is_some(),
                     text: if lines == 0 {
                         Vec::new()
                     } else {
@@ -387,6 +388,9 @@ impl App {
         };
         for tab in &saved.tabs {
             let layout = restore_layout(&tab.layout, &mut |pane| {
+                if pane.scene {
+                    return Some(self.spawn_scene(size));
+                }
                 self.spawn_cwd = pane.cwd.clone();
                 self.spawn_intro = intro_bytes(&pane.text, &ago);
                 match self.spawn_pane(size, pane.profile.as_deref()) {

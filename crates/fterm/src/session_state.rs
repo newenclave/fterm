@@ -72,6 +72,9 @@ pub struct SavedPane {
     /// The last lines of the pane (`restore_history`), shown in grey when it comes back.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text: Vec<String>,
+    /// A Braille scene pane: it comes back as an empty scene (not as a shell).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scene: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -652,6 +655,25 @@ mod tests {
         assert_eq!(pane.ran, None);
         let text = serde_json::to_string(&SavedPane::default()).unwrap();
         assert!(!text.contains("ran"), "{text}");
+    }
+
+    #[test]
+    fn a_scene_pane_is_saved_as_a_scene() {
+        let old: SavedPane = serde_json::from_str(r#"{"program":"pwsh"}"#).unwrap();
+        assert!(!old.scene);
+        let scene = SavedPane {
+            scene: true,
+            ..SavedPane::default()
+        };
+        let text = serde_json::to_string(&scene).unwrap();
+        assert!(text.contains(r#""scene":true"#), "{text}");
+        let back: SavedPane = serde_json::from_str(&text).unwrap();
+        assert!(back.scene);
+        assert!(
+            !serde_json::to_string(&SavedPane::default())
+                .unwrap()
+                .contains("scene")
+        );
     }
 
     fn tree() -> Layout {

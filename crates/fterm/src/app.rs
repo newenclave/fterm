@@ -117,6 +117,8 @@ struct Pane {
     rerun: Option<(String, bool)>,
     /// A restored pane: the lines of its old text, to scroll them into view at its first prompt.
     intro_lines: usize,
+    /// A Braille scene pane (Phase 11): its canvas. The pane's grid shows it; there is no program.
+    scene: Option<std::sync::Mutex<fterm_scene::Canvas>>,
 }
 
 /// Everything that exists only while the window is open.
@@ -216,6 +218,11 @@ impl Running {
                     && pane.session.grid_size() != size
                 {
                     pane.session.resize(size, cell);
+                    if let Some(scene) = &pane.scene {
+                        let mut canvas = scene.lock().unwrap();
+                        canvas.resize(size.columns, size.rows);
+                        pane.session.feed(&fterm_scene::render(&canvas));
+                    }
                 }
             }
         }
@@ -1234,6 +1241,38 @@ impl App {
         })
     }
 
+    /// A new Braille scene pane with this grid size (no program; the API draws into it).
+    fn spawn_scene(&mut self, size: GridSize) -> PaneId {
+        let running = self.running.as_mut().expect("the window is open");
+        let id = running.mux.new_pane_id();
+        let session = Session::scene(size);
+        let canvas = fterm_scene::Canvas::new(size.columns, size.rows);
+        session.feed(&fterm_scene::render(&canvas));
+        running.panes.insert(
+            id,
+            Pane {
+                session,
+                app_title: Some("scene".to_owned()),
+                shell: ShellState::default(),
+                agent: None,
+                last_command: None,
+                remote: true,
+                opened_by: None,
+                profile: None,
+                rerun: None,
+                intro_lines: 0,
+                scene: Some(std::sync::Mutex::new(canvas)),
+            },
+        );
+        tracing::info!(
+            pane = id.0,
+            columns = size.columns,
+            rows = size.rows,
+            "new scene"
+        );
+        id
+    }
+
     /// Starts a profile (or the default profile) for a new pane with this grid size.
     fn spawn_pane(&mut self, size: GridSize, profile: Option<&str>) -> anyhow::Result<PaneId> {
         // A new pane starts in the folder of the active pane (or the saved one), unless the profile
@@ -1390,6 +1429,7 @@ impl App {
                 profile: profile_name,
                 rerun: None,
                 intro_lines: 0,
+                scene: None,
             },
         );
         Ok(id)
@@ -1407,6 +1447,15 @@ impl App {
 
     /// Splits the active pane. The new pane gets the focus.
     fn split(&mut self, direction: Direction, profile: Option<&str>) -> anyhow::Result<()> {
+        self.split_with(direction, |app, size| app.spawn_pane(size, profile))
+    }
+
+    /// Splits the active pane; `make` starts the new pane with its grid size.
+    fn split_with(
+        &mut self,
+        direction: Direction,
+        make: impl FnOnce(&mut Self, GridSize) -> anyhow::Result<PaneId>,
+    ) -> anyhow::Result<()> {
         let running = self.running.as_ref().expect("the window is open");
         let half = running.pane_area();
         let half = match direction {
@@ -1414,7 +1463,7 @@ impl App {
             Direction::Down => Rect::new(half.x, half.y, half.width, half.height / 2.0),
         };
         let size = running.grid_for(half);
-        let id = self.spawn_pane(size, profile)?;
+        let id = make(self, size)?;
         let running = self.running.as_mut().unwrap();
         running.mux.split_active(id, direction);
         running.resize_all_panes();
@@ -1460,6 +1509,10 @@ impl App {
         let Some(p) = running.panes.get(&pane) else {
             return Vec::new();
         };
+        if p.scene.is_some() {
+            // A scene runs nothing.
+            return Vec::new();
+        }
         if !is_shell(p.session.program()) {
             let file = p
                 .session
@@ -1790,6 +1843,14 @@ impl App {
         if action == A::Sessions {
             return self.open_sessions_popup();
         }
+        if action == A::NewScene {
+            if let Err(err) =
+                self.split_with(Direction::Right, |app, size| Ok(app.spawn_scene(size)))
+            {
+                tracing::error!("cannot open a scene: {err:#}");
+            }
+            return;
+        }
         if action == A::SaveSessionAs {
             return self.start_name_prompt();
         }
@@ -1935,7 +1996,8 @@ impl App {
             | A::TextToCommand
             | A::RestoreSession
             | A::Sessions
-            | A::SaveSessionAs => {}
+            | A::SaveSessionAs
+            | A::NewScene => {}
             A::ToggleRemoteControl => {
                 let Some(pane) = running.mux.active_pane() else {
                     return;

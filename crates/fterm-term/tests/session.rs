@@ -380,3 +380,19 @@ fn bash_integration_sends_cwd_and_exit_codes() {
         "{osc:?}"
     );
 }
+
+#[test]
+fn a_scene_session_has_no_program() {
+    let session = Session::scene(GridSize::new(10, 3));
+    assert_eq!(session.pid(), None);
+    assert_eq!(session.program(), "scene");
+    // Keys go nowhere (there is no program), and nothing breaks.
+    session.write(b"hello\r".to_vec());
+    session.feed(b"\x1b[2;3Hab\x1b[31mc");
+    assert_eq!(session.screen_text(), "\n  abc\n\n");
+    session.resize(GridSize::new(20, 5), (8, 16));
+    assert_eq!(session.grid_size(), GridSize::new(20, 5));
+    let rows = session.with_term(|term| term.screen_lines());
+    assert_eq!(rows, 5);
+    drop(session);
+}

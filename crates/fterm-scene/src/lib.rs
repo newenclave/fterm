@@ -3,6 +3,8 @@
 
 pub mod canvas;
 pub mod ops;
+pub mod render;
 
 pub use canvas::{Canvas, Cell, Rgb};
 pub use ops::{Op, apply, parse_ops};
+pub use render::render;

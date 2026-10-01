@@ -105,7 +105,8 @@ impl EventListener for Listener {
 
 pub struct Session {
     term: Arc<FairMutex<Term<Listener>>>,
-    notifier: Mutex<Notifier>,
+    /// The pty loop. `None` for a scene (no pty).
+    notifier: Mutex<Option<Notifier>>,
     size: Mutex<GridSize>,
     /// The user's selection. It is kept here, so the terminal cannot remove it.
     selection: Mutex<StickySelection>,
@@ -180,7 +181,7 @@ impl Session {
 
         Ok(Self {
             term,
-            notifier: Mutex::new(Notifier(sender)),
+            notifier: Mutex::new(Some(Notifier(sender))),
             size: Mutex::new(size),
             selection: Mutex::new(StickySelection::default()),
             pid,
@@ -190,21 +191,53 @@ impl Session {
 
     /// Sends bytes to the program (keys, paste).
     pub fn write(&self, bytes: Vec<u8>) {
-        self.notifier.lock().unwrap().notify(bytes);
+        if let Some(notifier) = &*self.notifier.lock().unwrap() {
+            notifier.notify(bytes);
+        }
     }
 
     pub fn resize(&self, size: GridSize, cell: (u16, u16)) {
         *self.size.lock().unwrap() = size;
         self.term.lock().resize(size);
-        self.notifier
-            .lock()
-            .unwrap()
-            .on_resize(window_size(size, cell));
+        if let Some(notifier) = &mut *self.notifier.lock().unwrap() {
+            notifier.on_resize(window_size(size, cell));
+        }
     }
 
     /// The shell process id.
     pub fn pid(&self) -> Option<u32> {
         self.pid
+    }
+
+    /// A session with no pty and no program, for a Braille scene (Phase 11): fterm draws into it
+    /// with `feed`, and keys go nowhere.
+    pub fn scene(size: GridSize) -> Self {
+        let listener = Listener {
+            on_event: Arc::new(|_| {}),
+            sender: Arc::new(OnceLock::new()),
+        };
+        let term = Term::new(
+            Config {
+                scrolling_history: 0,
+                ..term_config()
+            },
+            &size,
+            listener,
+        );
+        Self {
+            term: Arc::new(FairMutex::new(term)),
+            notifier: Mutex::new(None),
+            size: Mutex::new(size),
+            selection: Mutex::new(StickySelection::default()),
+            pid: None,
+            program: "scene".to_owned(),
+        }
+    }
+
+    /// Bytes for the terminal (not for a program): they are drawn at once.
+    pub fn feed(&self, bytes: &[u8]) {
+        alacritty_terminal::vte::ansi::Processor::<alacritty_terminal::vte::ansi::StdSyncHandler>::new()
+            .advance(&mut *self.term.lock(), bytes);
     }
 
     /// The program name, for example `pwsh` or `cmd`.
@@ -260,7 +293,9 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         // Stop the pty thread. The shell ends when its pty closes.
-        self.notifier.lock().unwrap().0.send(Msg::Shutdown);
+        if let Some(notifier) = &*self.notifier.lock().unwrap() {
+            notifier.0.send(Msg::Shutdown);
+        }
     }
 }
 

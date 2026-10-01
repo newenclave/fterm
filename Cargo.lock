@@ -980,6 +980,7 @@ dependencies = [
  "fterm-history",
  "fterm-mux",
  "fterm-render",
+ "fterm-scene",
  "fterm-term",
  "notify",
  "notify-rust",
@@ -1056,6 +1057,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "unicode-width",
 ]
 
 [[package]]

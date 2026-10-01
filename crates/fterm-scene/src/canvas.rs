@@ -268,7 +268,7 @@ impl Canvas {
                 break;
             }
             let at = row * self.cols + c;
-            self.text[at] = Some(ch);
+            self.text[at] = Some(safe_char(ch));
             self.colors[at] = self.pen;
         }
     }
@@ -322,6 +322,19 @@ impl Canvas {
         (0..self.rows)
             .map(|row| (0..self.cols).map(|col| self.cell(col, row).ch).collect())
             .collect()
+    }
+}
+
+/// A char that is safe in one cell: a control char (it could start an escape sequence) is a space,
+/// and a char of two cells (CJK, emoji) is `?`, so the row does not move.
+fn safe_char(ch: char) -> char {
+    use unicode_width::UnicodeWidthChar;
+    if ch.is_control() {
+        ' '
+    } else if ch.width() == Some(1) {
+        ch
+    } else {
+        '?'
     }
 }
 
@@ -465,6 +478,17 @@ mod tests {
         assert_eq!(c.rows_text(), ["⠉hi!"]);
         c.text(-1, 0, "ab");
         assert_eq!(c.rows_text(), ["bhi!"], "text left of the canvas is cut");
+    }
+
+    #[test]
+    fn text_is_safe_for_a_terminal() {
+        // Text comes from the API: no escape sequences, and one cell for each char.
+        let mut c = Canvas::new(6, 1);
+        c.text(0, 0, "a\x1b[2Jb\tc");
+        assert_eq!(c.rows_text(), ["a [2Jb"]);
+        let mut c = Canvas::new(4, 1);
+        c.text(0, 0, "日x😀é");
+        assert_eq!(c.rows_text(), ["?x?é"]);
     }
 
     #[test]
