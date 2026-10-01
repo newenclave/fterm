@@ -120,6 +120,7 @@ also work on other layouts (for example, Russian).
 | `copy`, `paste`, `copy_mode` | Copy and paste. |
 | `scroll_page_up`, `scroll_page_down`, `scroll_top`, `scroll_bottom` | Scroll. |
 | `command_palette`, `reload_config`, `open_config` | fterm itself. |
+| `copy_claude_hooks` | Copy the Claude Code hooks for tab dots (see [CLAUDE.md](CLAUDE.md)). |
 
 ### Lua functions
 A function gets an object `fterm` with these functions:
@@ -203,6 +204,20 @@ end,
 ```lua
 fterm.notify("Saved")                                                  -- info
 fterm.notify({ title = "Deploy", body = "done", level = "success" })
+```
+
+### on_agent
+This function runs when an agent in a pane changes its state (see [CLAUDE.md](CLAUDE.md)).
+Fields: `pane`, `state` (`working`, `waiting`, `done`, `error`, `idle`), `previous`, `message`, and `name` (the tab title).
+It can call `fterm.notify`, `fterm.spawn`, and the other functions. Return `false` to stop the normal notification.
+
+```lua
+on_agent = function(a, fterm)
+  if a.state == "done" and a.previous == "working" then
+    fterm.notify({ title = a.name .. " is ready", level = "success" })
+    return false                                            -- my notification, not the normal one
+  end
+end,
 ```
 
 ## Shell integration

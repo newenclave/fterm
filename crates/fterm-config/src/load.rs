@@ -93,6 +93,27 @@ pub enum NotifyOut {
     },
 }
 
+/// An agent state change before `on_agent` sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentIn {
+    pub pane: u64,
+    /// `working`, `waiting`, `done`, `error`, or `idle`.
+    pub state: String,
+    pub previous: Option<String>,
+    pub message: String,
+    /// The tab title of the pane.
+    pub name: String,
+}
+
+/// What `on_agent` said.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentOut {
+    /// Show the built-in notification (`false` when the function returned `false`).
+    pub notify: bool,
+    /// What the function asked fterm to do (`fterm.notify`, `fterm.spawn`, ...).
+    pub calls: Vec<ApiCall>,
+}
+
 /// A line in the command palette from the config.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserCommand {
@@ -118,6 +139,8 @@ pub struct Config {
     pub notifications: NotificationConfig,
     /// The Lua function `on_notification` (its number), if there is one.
     pub on_notification: Option<usize>,
+    /// The Lua function `on_agent` (its number), if there is one.
+    pub on_agent: Option<usize>,
 }
 
 impl Default for Config {
@@ -135,6 +158,7 @@ impl Default for Config {
             shell_integration: true,
             notifications: NotificationConfig::default(),
             on_notification: None,
+            on_agent: None,
         }
     }
 }
@@ -223,6 +247,36 @@ impl LoadedConfig {
             }
         };
         run().map_err(|err| err.to_string())
+    }
+
+    /// Tells `on_agent` (if the config has it) that an agent changed its state.
+    pub fn on_agent(&self, input: &AgentIn) -> Result<AgentOut, String> {
+        let (Some(index), Some(lua), Some(api)) = (self.config.on_agent, &self._lua, &self.api)
+        else {
+            return Ok(AgentOut {
+                notify: true,
+                calls: Vec::new(),
+            });
+        };
+        let Some(function) = self.functions.get(index) else {
+            return Err(format!("no Lua function number {index}"));
+        };
+        self.queue.borrow_mut().clear();
+        let run = || -> mlua::Result<bool> {
+            let a = lua.create_table()?;
+            a.set("pane", input.pane)?;
+            a.set("state", input.state.as_str())?;
+            a.set("previous", input.previous.as_deref())?;
+            a.set("message", input.message.as_str())?;
+            a.set("name", input.name.as_str())?;
+            let result = function.call::<Value>((a, api.clone()))?;
+            Ok(!matches!(result, Value::Boolean(false)))
+        };
+        let notify = run().map_err(|err| err.to_string())?;
+        Ok(AgentOut {
+            notify,
+            calls: std::mem::take(&mut *self.queue.borrow_mut()),
+        })
     }
 
     /// Runs the Lua function `index` (from `Action::Lua`) and returns what it asked fterm to do.
@@ -363,6 +417,24 @@ struct Reader {
 }
 
 impl Reader {
+    /// An event function like `on_notification`: keeps it and gives its number.
+    fn hook(&mut self, root: &Table, name: &str) -> Result<Option<usize>, String> {
+        match root
+            .get::<Value>(name)
+            .map_err(|err| format!("{name}: {err}"))?
+        {
+            Value::Nil => Ok(None),
+            Value::Function(function) => {
+                self.functions.push(function);
+                Ok(Some(self.functions.len() - 1))
+            }
+            other => Err(format!(
+                "{name}: expected a function, got {}",
+                other.type_name()
+            )),
+        }
+    }
+
     fn config(&mut self, root: &Table) -> Result<Config, String> {
         let mut config = Config::default();
         if let Some(font) = table_field(root, "font", "font")? {
@@ -400,22 +472,8 @@ impl Reader {
         if let Some(table) = table_field(root, "notifications", "notifications")? {
             config.notifications = notifications(&table)?;
         }
-        match root
-            .get::<Value>("on_notification")
-            .map_err(|err| format!("on_notification: {err}"))?
-        {
-            Value::Nil => {}
-            Value::Function(function) => {
-                self.functions.push(function);
-                config.on_notification = Some(self.functions.len() - 1);
-            }
-            other => {
-                return Err(format!(
-                    "on_notification: expected a function, got {}",
-                    other.type_name()
-                ));
-            }
-        }
+        config.on_notification = self.hook(root, "on_notification")?;
+        config.on_agent = self.hook(root, "on_agent")?;
         if let Some(profiles) = table_field(root, "profiles", "profiles")? {
             for (i, value) in list(&profiles) {
                 let path = format!("profiles[{i}]");
@@ -1167,6 +1225,67 @@ mod tests {
                 .unwrap_err()
                 .contains("bad filter")
         );
+    }
+
+    fn agent(state: &str) -> AgentIn {
+        AgentIn {
+            pane: 2,
+            state: state.into(),
+            previous: Some("working".into()),
+            message: "Allow Bash?".into(),
+            name: "claude".into(),
+        }
+    }
+
+    #[test]
+    fn without_on_agent_the_notification_stays() {
+        let out = load("return {}").on_agent(&agent("waiting")).unwrap();
+        assert_eq!(
+            out,
+            AgentOut {
+                notify: true,
+                calls: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn on_agent_sees_the_state_and_can_act() {
+        let loaded = load(
+            r#"return { on_agent = function(a, fterm)
+              if a.state == "waiting" and a.previous == "working" and a.pane == 2 then
+                fterm.notify{ title = a.name .. ": " .. a.message, level = "warning" }
+                return false
+              end
+            end }"#,
+        );
+        let out = loaded.on_agent(&agent("waiting")).unwrap();
+        assert!(!out.notify, "false = no built-in notification");
+        assert_eq!(
+            out.calls,
+            vec![ApiCall::Notify {
+                title: "claude: Allow Bash?".into(),
+                body: String::new(),
+                level: "warning".into()
+            }]
+        );
+        let out = loaded.on_agent(&agent("done")).unwrap();
+        assert_eq!(
+            out,
+            AgentOut {
+                notify: true,
+                calls: vec![]
+            },
+            "nil = keep"
+        );
+    }
+
+    #[test]
+    fn on_agent_must_be_a_function() {
+        let Err(err) = load_str("return { on_agent = 5 }", "t") else {
+            panic!("a number is not a function");
+        };
+        assert!(err.contains("on_agent"));
     }
 
     #[test]

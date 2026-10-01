@@ -59,7 +59,6 @@ pub enum Source {
     /// A long command ended.
     Command,
     /// An agent changed its state (Claude, ...).
-    #[expect(dead_code, reason = "agent states come in phase 6.4")]
     Agent,
     /// The config (`fterm.notify`).
     Lua,

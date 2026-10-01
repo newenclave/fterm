@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use fterm_config::keys::{Action, BuiltinAction, SpawnWhere};
 use fterm_config::load::{
-    ApiCall, LoadedConfig, NotifyIn, NotifyOut, OsNotify, SAMPLE_CONFIG, ToastPosition,
-    config_path, load_file,
+    AgentIn, AgentOut, ApiCall, LoadedConfig, NotifyIn, NotifyOut, OsNotify, SAMPLE_CONFIG,
+    ToastPosition, config_path, load_file,
 };
 use fterm_config::profiles::{Profile, detect_profiles, launch_command, path_extension, which};
 use fterm_mux::{Closed, Direction, Edge, Mux, PaneId, Rect, TabId};
@@ -36,6 +36,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
+use crate::agent::{AgentKind, AgentState, badge_color, notification_for, tab_badge};
 use crate::clipboard::{Clipboard, paste_bytes};
 use crate::gpu::Gpu;
 use crate::input::{KeyInput, copy_mode_action, encode_key, key_chord};
@@ -67,6 +68,8 @@ struct Pane {
     app_title: Option<String>,
     /// The folder and the commands, from shell integration.
     shell: ShellState,
+    /// What the agent in this pane (for example Claude Code) does now.
+    agent: Option<AgentState>,
 }
 
 /// Everything that exists only while the window is open.
@@ -144,6 +147,31 @@ impl Running {
                 }
             }
         }
+    }
+
+    /// The agent badge of each tab: the most important agent state of its panes.
+    fn tab_badges(&self) -> Vec<Option<AgentKind>> {
+        self.mux
+            .tabs()
+            .iter()
+            .map(|tab| {
+                let panes = tab.layout.panes();
+                tab_badge(
+                    panes
+                        .iter()
+                        .filter_map(|id| self.panes.get(id)?.agent.as_ref()),
+                )
+            })
+            .collect()
+    }
+
+    /// Panes on the screen now (in the active tab).
+    fn visible_panes(&self) -> Vec<PaneId> {
+        self.mux
+            .pane_rects(self.tab_area())
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
     }
 
     fn tab_titles(&self) -> Vec<String> {
@@ -363,6 +391,82 @@ impl App {
     }
 
     /// A command ended. If it ran long and you did not see it, fterm tells you.
+    /// An agent in a pane says what it does now (`OSC 777;fterm-agent;<state>;<message>`).
+    fn agent_state(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        pane: PaneId,
+        state: &str,
+        message: &str,
+    ) {
+        let Some(kind) = AgentKind::parse(state) else {
+            tracing::debug!(pane = pane.0, state, "unknown agent state");
+            return;
+        };
+        let focused = self.focused;
+        let Some(running) = self.running.as_mut() else {
+            return;
+        };
+        let seen = focused && running.visible_panes().contains(&pane);
+        let tab = running
+            .mux
+            .tabs()
+            .iter()
+            .position(|t| t.layout.contains(pane))
+            .and_then(|i| running.tab_titles().get(i).cloned())
+            .unwrap_or_default();
+        let Some(p) = running.panes.get_mut(&pane) else {
+            return;
+        };
+        let previous = p.agent.as_ref().map(|old| old.kind);
+        if previous == kind && p.agent.as_ref().is_none_or(|old| old.message == message) {
+            return;
+        }
+        p.agent = kind.map(|kind| AgentState {
+            kind,
+            message: message.to_owned(),
+            since: match &p.agent {
+                Some(old) if previous == Some(kind) => old.since,
+                _ => Instant::now(),
+            },
+            seen,
+        });
+        running.window.request_redraw();
+        if previous == kind {
+            // Only the message changed.
+            return;
+        }
+        tracing::debug!(pane = pane.0, ?previous, ?kind, "agent state");
+        let input = AgentIn {
+            pane: pane.0,
+            state: kind.map_or("idle", AgentKind::name).to_owned(),
+            previous: previous.map(|k| k.name().to_owned()),
+            message: message.to_owned(),
+            name: tab.clone(),
+        };
+        let out = match self.config.on_agent(&input) {
+            Ok(out) => out,
+            Err(err) => {
+                tracing::warn!("on_agent: {err}");
+                self.notify(None, "Lua error", &err, Level::Error, Source::App);
+                AgentOut {
+                    notify: true,
+                    calls: Vec::new(),
+                }
+            }
+        };
+        for call in out.calls {
+            self.run_api_call(event_loop, call);
+        }
+        if out.notify
+            && !seen
+            && let Some(kind) = kind
+            && let Some((title, body, level)) = notification_for(kind, message, &tab)
+        {
+            self.notify(Some(pane), &title, &body, level, Source::Agent);
+        }
+    }
+
     fn command_done(&mut self, pane: PaneId, exit: Option<i32>, took: Duration) {
         let limit = self.config.config.notifications.long_command;
         if limit <= 0.0 || took.as_secs_f64() < limit {
@@ -624,7 +728,7 @@ impl App {
             .and_then(|pane| pane.shell.cwd.clone())
             .map(std::path::PathBuf::from)
             .filter(|dir| dir.is_dir());
-        let options = match self.profile(profile) {
+        let mut options = match self.profile(profile) {
             Some(profile) => {
                 let (program, mut args) = launch_command(&profile, cfg!(windows), path_extension);
                 if self.config.config.shell_integration
@@ -652,6 +756,10 @@ impl App {
         };
         let running = self.running.as_mut().expect("the window is open");
         let id = running.mux.new_pane_id();
+        // Hooks of tools in the pane (for example Claude Code) can use it.
+        options
+            .env
+            .push(("FTERM_PANE_ID".to_owned(), id.0.to_string()));
         let proxy = self.proxy.clone();
         let session = Session::spawn(options, size, cell_px(&running.renderer), move |event| {
             // The window may be closed already. Then nobody needs the event.
@@ -669,6 +777,7 @@ impl App {
                 session,
                 app_title: None,
                 shell: ShellState::default(),
+                agent: None,
             },
         );
         Ok(id)
@@ -990,6 +1099,17 @@ impl App {
             }
             A::ReloadConfig => return self.reload_config(),
             A::OpenConfig => return self.open_config(),
+            A::CopyClaudeHooks => {
+                self.copy_text(crate::agent::CLAUDE_HOOKS.to_owned());
+                self.notify(
+                    None,
+                    "Claude Code hooks copied",
+                    "Put them into ~/.claude/settings.json (see docs/CLAUDE.md).",
+                    Level::Success,
+                    Source::App,
+                );
+                return;
+            }
         }
         self.tab_changed();
     }
@@ -1748,8 +1868,24 @@ impl App {
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
         let focused = self.focused;
-        let titles = match &self.running {
-            Some(running) => running.tab_titles(),
+        let (titles, badges) = match &mut self.running {
+            Some(running) => {
+                if focused {
+                    for id in running.visible_panes() {
+                        if let Some(agent) =
+                            running.panes.get_mut(&id).and_then(|p| p.agent.as_mut())
+                        {
+                            agent.seen = true;
+                        }
+                    }
+                }
+                let badges: Vec<_> = running
+                    .tab_badges()
+                    .into_iter()
+                    .map(|kind| kind.map(badge_color))
+                    .collect();
+                (running.tab_titles(), badges)
+            }
             None => return,
         };
         let renaming = self
@@ -1836,6 +1972,7 @@ impl App {
                     active,
                     hover,
                     editing,
+                    badges: &badges,
                     cell,
                     width,
                 })?;
@@ -1975,6 +2112,8 @@ impl ApplicationHandler<UserEvent> for App {
                 if let OscEvent::Notify { title, body } = &osc {
                     let title = title.clone().unwrap_or(program);
                     self.notify(Some(pane), &title, body, Level::Info, Source::Terminal);
+                } else if let OscEvent::Agent { state, message } = &osc {
+                    self.agent_state(event_loop, pane, state, message);
                 } else if let Some(ShellEvent::CommandDone { exit, took }) = done {
                     tracing::debug!(pane = pane.0, ?exit, ?took, "command done");
                     self.command_done(pane, exit, took);

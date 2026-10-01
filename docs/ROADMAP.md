@@ -178,21 +178,57 @@ Still to do later: move and swap panes, move a pane to another tab, broadcast in
 - Braille style: `braille_style = "pixels"` (default, no gaps) or `"dots"` (round dots).
 - **Check:** change the config and see the change at once. Start an AI tool from the palette.
 
-### Phase 6 — Events and shell integration
+### Phase 6 — Events and shell integration (in work: OSC loop, shell integration, notifications, agent badges are done)
 - An event bus inside the app.
 - Support OSC 7 (current folder), OSC 133 (command start and end, exit code), OSC 9 and OSC 777 (notifications), bell.
 - Tab status: "agent is working", "agent waits for you", "done", "error". Show a badge and a system notification.
 - Every pane gets the env var `FTERM_PANE_ID`.
-- Claude Code hooks (`Notification`, `Stop`) call `fterm cli notify ...`. We give a ready example for `settings.json`.
+- Claude Code hooks (`UserPromptSubmit`, `Notification`, `Stop`) send `OSC 777;fterm-agent;<state>` to the terminal.
+  No `fterm cli` is needed. A ready example for `settings.json` is in [CLAUDE.md](CLAUDE.md).
+- A notification center: toasts that do not get in the way, a history, a Lua filter, and optional OS notifications (off by default).
+- A dock with service panels: an Events panel and an Agents panel.
 - **Check:** Claude finishes in a background tab → the tab shows a badge and a notification. `cd` changes the tab folder.
+
+### Phase 6b — Folder and command history (like Far Manager)
+An idea from the user. Shell integration (Phase 6) already tells us the folder (OSC 7) and where each command starts and ends (OSC 133).
+- **Folder history** (like Alt+F12 in Far): fterm saves every folder where a pane was.
+  - A list window, like the command palette: newest at the top, type to filter, Enter = `cd` to it in the active pane
+    (or open a new tab or split there).
+  - Folders you use often go higher (count + time). You can pin a folder or delete it from the list.
+- **Command history** (like Alt+F8 in Far): fterm saves every command with its folder, exit code, time, and how long it took.
+  - The command text comes from the shell script (a new mark with the command line, like VS Code `OSC 633;E`),
+    so it is exact, not read from the screen.
+  - A list window: filter by text, by "only this folder", by "only good (exit 0)". Enter = put the command
+    in the prompt (not run it), Shift+Enter = run it, Ctrl+C = copy.
+  - The history is one file for all tabs and sessions (`%APPDATA%\fterm\history.db` or a JSON lines file).
+    Commands with secrets can be skipped: a space at the start, or a Lua filter `on_history`.
+- **Hints while you type** (like Far): a grey suggestion after the cursor from the history of this folder.
+  - To think about: PowerShell (PSReadLine), fish, and zsh already have their own hints. So it is off by default
+    and fterm does not show it when the shell has its own. Right arrow = take it.
+- Keys (can be changed): `Alt+F12` folders, `Alt+F8` commands. Also in the palette and in Lua (`fterm.history`).
+- **Check:** cd into 5 folders in 2 tabs, Alt+F12 shows all 5, Enter goes there. Run commands, close fterm,
+  open it again: Alt+F8 shows them with exit codes.
 
 ### Phase 7 — Local API, CLI, and MCP
 - Local API: JSON-RPC over a named pipe (Windows) or a unix socket (Linux/macOS).
 - Commands: `list`, `spawn`, `send-text`, `get-text` (screen, scrollback, output of the last command), `set-title`, `notify`, `subscribe` (stream of events).
 - `fterm cli ...` — the same app, but in CLI mode.
 - `fterm mcp` — an MCP server (stdio). Claude Code and OpenCode can open tabs, run commands, read output, and listen to events.
+- **Control the terminal:** tabs and panes (`split`, `focus`, `resize`, `close`, `zoom`), titles, the dock and panels.
+- **Sessions talk to each other** (an idea from the user):
+  - every pane has an id (`FTERM_PANE_ID`), so an agent knows "me" and can find "the others";
+  - `list` shows all panes: the program, the folder, the agent state, the last command, and its exit code;
+  - an agent in one pane can read the screen or the last command output of another pane,
+    and send text to it (for example, Claude in the left pane runs tests in the right pane and reads the result);
+  - **messages between agents:** `send-message <pane> <text>` puts a message into the inbox of another pane.
+    The other agent reads it with an MCP tool (`read-messages`) or gets it as an event.
+    So two Claude sessions can work together: one writes code, one reviews it;
+  - `wait-for <pane> <event>`: wait until a command ends, or an agent is `done` or `waiting`.
+- MCP tools are the same as the API commands. MCP resources: the screen and history of each pane.
 - Safety: only the current user can use the pipe. Optional "Are you sure?" for `send-text`.
+  A pane can be marked "no remote control" (other agents cannot type into it or read it).
 - **Check:** `claude mcp add fterm -- fterm mcp`. Claude opens a tab, runs `cargo test`, and reads the result.
+  Two Claude sessions in two panes send messages to each other.
 
 ### Phase 8 — AI panel
 - `fterm-ai`: one interface for many providers:

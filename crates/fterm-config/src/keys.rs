@@ -168,11 +168,13 @@ pub enum BuiltinAction {
     CommandPalette,
     ReloadConfig,
     OpenConfig,
+    /// Put the Claude Code hooks for agent badges into the clipboard.
+    CopyClaudeHooks,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 30] = [
+    pub const ALL: [BuiltinAction; 31] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -203,6 +205,7 @@ impl BuiltinAction {
         Self::CommandPalette,
         Self::ReloadConfig,
         Self::OpenConfig,
+        Self::CopyClaudeHooks,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -238,6 +241,7 @@ impl BuiltinAction {
             Self::CommandPalette => "command_palette",
             Self::ReloadConfig => "reload_config",
             Self::OpenConfig => "open_config",
+            Self::CopyClaudeHooks => "copy_claude_hooks",
         };
         name.to_owned()
     }
@@ -261,6 +265,7 @@ impl BuiltinAction {
             Self::Zoom => "Zoom pane".to_owned(),
             Self::CommandPalette => "Command palette".to_owned(),
             Self::OpenConfig => "Open config file".to_owned(),
+            Self::CopyClaudeHooks => "Copy Claude Code hooks (settings.json)".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -389,6 +394,14 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copy_claude_hooks_action() {
+        let action = BuiltinAction::from_name("copy_claude_hooks").unwrap();
+        assert_eq!(action.name(), "copy_claude_hooks");
+        assert_eq!(action.label(), "Copy Claude Code hooks (settings.json)");
+        assert!(BuiltinAction::ALL.contains(&action));
+    }
 
     fn chord(text: &str) -> KeyChord {
         KeyChord::parse(text).unwrap()

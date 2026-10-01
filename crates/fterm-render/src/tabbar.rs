@@ -162,6 +162,8 @@ pub struct TabBarInput<'a> {
     pub hover: Hit,
     /// The tab being renamed and the text typed so far.
     pub editing: Option<(usize, &'a str)>,
+    /// A colored dot before the title of a tab (for example, the agent state). Empty = no dots.
+    pub badges: &'a [Option<Rgb>],
     pub cell: CellMetrics,
     pub width: f32,
 }
@@ -205,10 +207,35 @@ pub fn build_tab_bar(
                     ACTIVE_TEXT,
                 ));
             }
-            _ => {
-                let title = fit_title(&input.titles[i], title_cells);
-                push_text(&mut text, &title, x0, text_y, cell, color, glyph)?;
-            }
+            _ => match input.badges.get(i).copied().flatten() {
+                Some(badge) => {
+                    // A round-ish dot in the first title cell, then the title.
+                    let size = (cell.width * 0.5).round().max(3.0);
+                    quads.push(solid(
+                        Rect::new(
+                            x0 + (cell.width - size) / 2.0,
+                            text_y + (cell.height - size) / 2.0,
+                            size,
+                            size,
+                        ),
+                        badge,
+                    ));
+                    let title = fit_title(&input.titles[i], title_cells.saturating_sub(1));
+                    push_text(
+                        &mut text,
+                        &title,
+                        x0 + cell.width,
+                        text_y,
+                        cell,
+                        color,
+                        glyph,
+                    )?;
+                }
+                None => {
+                    let title = fit_title(&input.titles[i], title_cells);
+                    push_text(&mut text, &title, x0, text_y, cell, color, glyph)?;
+                }
+            },
         }
 
         let close_color = if input.hover == Hit::Close(i) {
@@ -386,6 +413,7 @@ mod tests {
             active,
             hover,
             editing,
+            badges: &[],
             cell: CELL,
             width: 1000.0,
         };
@@ -444,5 +472,38 @@ mod tests {
         // "new name" has 7 non-space chars, plus × and +.
         assert_eq!(glyphs, 7 + 2);
         assert_eq!(solid_with(&quads, ACTIVE_TEXT).len(), 1, "a text cursor");
+    }
+
+    #[test]
+    fn a_badge_is_a_dot_and_moves_the_title() {
+        let layout = layout_tabs(2, 1000.0, CELL);
+        let titles = vec!["ab".to_owned(), "cd".to_owned()];
+        let red = Rgb { r: 255, g: 0, b: 0 };
+        let badges = [None, Some(red)];
+        let input = TabBarInput {
+            layout: &layout,
+            titles: &titles,
+            active: 0,
+            hover: Hit::None,
+            editing: None,
+            badges: &badges,
+            cell: CELL,
+            width: 1000.0,
+        };
+        let quads = build_tab_bar(&input, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let dots = solid_with(&quads, red);
+        assert_eq!(dots.len(), 1);
+        let tab1 = layout.tabs[1].rect;
+        assert!(dots[0][0] >= tab1.x && dots[0][0] < tab1.x + CELL.width * 2.0);
+        assert!(dots[0][2] < CELL.width, "a small dot");
+        // The title of tab 2 starts one cell later than the title of tab 1.
+        let glyphs: Vec<&Instance> = quads.iter().filter(|q| q.kind == KIND_GLYPH).collect();
+        let first_tab_title = glyphs[0].rect[0] - layout.tabs[0].rect.x;
+        let second_tab_title = glyphs
+            .iter()
+            .map(|g| g.rect[0] - tab1.x)
+            .find(|x| *x > 0.0 && *x < 3.0 * CELL.width)
+            .unwrap();
+        assert_eq!(second_tab_title - first_tab_title, CELL.width);
     }
 }

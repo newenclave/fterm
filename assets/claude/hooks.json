@@ -1,0 +1,66 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"terminalSequence\":\"\\u001b]777;fterm-agent;working;\\u0007\"}'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"terminalSequence\":\"\\u001b]777;fterm-agent;working;\\u0007\"}'"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"terminalSequence\":\"\\u001b]777;fterm-agent;waiting;Claude needs your answer\\u0007\"}'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"terminalSequence\":\"\\u001b]777;fterm-agent;done;\\u0007\"}'"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"terminalSequence\":\"\\u001b]777;fterm-agent;error;\\u0007\"}'"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"terminalSequence\":\"\\u001b]777;fterm-agent;idle;\\u0007\"}'"
+          }
+        ]
+      }
+    ]
+  }
+}
