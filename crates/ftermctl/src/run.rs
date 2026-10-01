@@ -51,23 +51,26 @@ pub fn run_and_wait(
     text: &str,
     timeout_ms: u64,
 ) -> Result<Value, String> {
-    run_and_wait_as(window, "ftermctl", pane, text, timeout_ms)
+    let mut client = connect(window)?;
+    run_and_wait_with(&mut client, window, pane, text, timeout_ms)
 }
 
-pub fn run_and_wait_as(
+/// Like `run_and_wait`, on a connection that is open already. The text goes through `client`, so the
+/// user's answer to the access question for this client counts. Only the event stream is a second
+/// connection (events need no access).
+pub fn run_and_wait_with(
+    client: &mut Client,
     window: Option<u32>,
-    name: &str,
     pane: Option<u64>,
     text: &str,
     timeout_ms: u64,
 ) -> Result<Value, String> {
-    let mut client = connect_as(window, name)?;
     let target = match pane {
         Some(pane) => pane,
-        None => target_pane(&mut client)?,
+        None => target_pane(client)?,
     };
     // Subscribe first (on a second connection), so a fast command cannot end before we listen.
-    let mut events = connect_as(window, name)?;
+    let mut events = connect_as(window, "ftermctl events")?;
     events
         .call(
             "subscribe",

@@ -195,6 +195,26 @@ impl<B: Backend> Server<B> {
 impl<B: Backend> Server<B> {
     /// One tool. `None` = no such tool; `Some(Err)` = a tool error (the agent sees the text).
     fn tool(&mut self, name: &str, args: &Value) -> Option<Result<String, String>> {
+        // An argument that the tool does not have: say which ones it has, so the agent can fix it.
+        let all = tools();
+        let schema = all.as_array()?.iter().find(|t| t["name"] == name)?;
+        let known: Vec<&str> = schema["inputSchema"]["properties"]
+            .as_object()
+            .map(|p| p.keys().map(String::as_str).collect())
+            .unwrap_or_default();
+        if let Some(bad) = args
+            .as_object()
+            .and_then(|a| a.keys().find(|k| !known.contains(&k.as_str())))
+        {
+            return Some(Err(if known.is_empty() {
+                format!("unknown argument `{bad}`; this tool takes no arguments")
+            } else {
+                format!(
+                    "unknown argument `{bad}`; this tool takes: {}",
+                    known.join(", ")
+                )
+            }));
+        }
         let pick = |keys: &[(&str, &str)]| {
             let mut params = json!({});
             for (from, to) in keys {
@@ -346,7 +366,10 @@ impl Backend for Window {
         command: &str,
         timeout_ms: u64,
     ) -> Result<Value, String> {
-        crate::run::run_and_wait_as(self.window, &self.name, pane, command, timeout_ms)
+        // On our own connection, so the user's answer to the access question counts for it.
+        let window = self.window;
+        let client = self.client()?;
+        crate::run::run_and_wait_with(client, window, pane, command, timeout_ms)
     }
 }
 
@@ -604,6 +627,24 @@ mod tests {
             json!(false),
             "a failed command is a result, not a tool error"
         );
+    }
+
+    #[test]
+    fn an_unknown_argument_is_a_tool_error_that_helps() {
+        let mut s = server();
+        let result = tool(
+            &mut s,
+            "read_pane",
+            json!({ "pane": 3, "mode": "last_command" }),
+        );
+        assert_eq!(result["isError"], json!(true));
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("`mode`"), "{text}");
+        assert!(
+            text.contains("pane, what, lines"),
+            "the right names: {text}"
+        );
+        assert!(s.backend.calls.is_empty(), "nothing went to fterm");
     }
 
     #[test]
