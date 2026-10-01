@@ -350,6 +350,8 @@ impl App {
             "hello" => self.api_hello(client, params),
             "list" => Ok(self.api_list()),
             "spawn" => self.api_spawn(client, params),
+            "scene_open" => self.api_scene_open(client, params),
+            "scene_draw" => self.api_scene_draw(client, params),
             "send_text" => self.api_send_text(client, params),
             "get_text" => self.api_get_text(client, params),
             "focus" => {
@@ -557,6 +559,68 @@ impl App {
             p.opened_by = Some(client);
         }
         Ok(json!({ "pane": pane.map(|p| p.0) }))
+    }
+
+    /// `scene_open`: a Braille scene next to a pane (Phase 11). The client may draw in it at once.
+    fn api_scene_open(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
+        let direction = crate::api::scene_place(params)?;
+        if let Some(next_to) = pane_param(params, "pane")?.map(PaneId) {
+            let running = self.running.as_mut().expect("checked in api_call");
+            if !running.panes.contains_key(&next_to) {
+                return Err(not_found(&format!("pane {}", next_to.0)));
+            }
+            running.mux.focus(next_to);
+        }
+        self.split_with(direction, |app, size| Ok(app.spawn_scene(size)))
+            .map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
+        let pane = self
+            .running
+            .as_ref()
+            .and_then(|r| r.mux.active_pane())
+            .ok_or_else(|| RpcError::new(RpcError::INTERNAL, "no pane"))?;
+        if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {
+            p.opened_by = Some(client);
+        }
+        Ok(self.scene_size(pane))
+    }
+
+    /// `scene_draw`: drawing commands for a scene pane (see `fterm_scene::Op`).
+    fn api_scene_draw(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
+        let pane = self.target_pane(client, params)?;
+        let ops = params
+            .get("ops")
+            .ok_or_else(|| RpcError::invalid_params("`ops` is missing: a command or a list"))?;
+        let ops = fterm_scene::parse_ops(ops).map_err(RpcError::invalid_params)?;
+        let running = self.running.as_ref().expect("checked in api_call");
+        let p = &running.panes[&pane];
+        let Some(scene) = &p.scene else {
+            return Err(RpcError::invalid_params(format!(
+                "pane {} is not a scene (open one with scene_open)",
+                pane.0
+            )));
+        };
+        {
+            let mut canvas = scene.lock().unwrap();
+            fterm_scene::apply(&mut canvas, &ops).map_err(RpcError::invalid_params)?;
+            p.session.feed(&fterm_scene::render(&canvas));
+        }
+        running.window.request_redraw();
+        Ok(self.scene_size(pane))
+    }
+
+    /// The pane and the size of its scene, in cells and in dots.
+    fn scene_size(&self, pane: PaneId) -> Value {
+        let size = self
+            .running
+            .as_ref()
+            .and_then(|r| r.panes.get(&pane))
+            .and_then(|p| p.scene.as_ref())
+            .map(|s| {
+                let c = s.lock().unwrap();
+                (c.cols(), c.rows(), c.width(), c.height())
+            })
+            .unwrap_or_default();
+        json!({ "pane": pane.0, "cols": size.0, "rows": size.1, "width": size.2, "height": size.3 })
     }
 
     fn api_send_text(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {

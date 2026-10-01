@@ -27,6 +27,11 @@ Panes and tabs:
   focus N | close N [--force] | zoom [N] | title [--pane N] TEXT
   panel [events|agents]                  show a panel of the dock (no name = close the dock)
 
+Braille scenes (2x4 dots in each cell):
+  scene [--right|--down] [--pane N]      open a scene pane; prints its id and its size in dots
+  draw [--pane N] JSON|-                 draw commands (one or a list; `-` = read them from stdin), for example
+                                         '[{\"op\":\"line\",\"x0\":0,\"y0\":0,\"x1\":20,\"y1\":10}]' (see docs/SCENE.md)
+
 Text:
   send-text [--pane N] [--enter] TEXT    type TEXT into a pane
   run [--pane N] [--wait] [--timeout S] COMMAND
@@ -88,6 +93,24 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             wait,
             timeout_ms,
         } => run_command(cli, *pane, text, *wait, *timeout_ms),
+        Command::DrawStdin { pane } => {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+                .map_err(|err| format!("cannot read stdin: {err}"))?;
+            // PowerShell 5.1 puts a BOM before piped text.
+            let ops: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+                .map_err(|err| format!("bad JSON on stdin: {err}"))?;
+            let mut params = json!({ "ops": ops });
+            if let Some(pane) = pane {
+                params["pane"] = json!(pane);
+            }
+            let mut client = connect(cli.window)?;
+            let answer = client
+                .call("scene_draw", params)
+                .map_err(|err| err.to_string())?;
+            print_answer(cli.json, "scene_draw", &answer);
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Subscribe { events } => {
             let mut client = connect(cli.window)?;
             client
@@ -148,6 +171,11 @@ fn print_answer(as_json: bool, method: &str, answer: &Value) {
         "read_messages" => print!("{}", show::messages(answer)),
         "get_text" => println!("{}", answer["text"].as_str().unwrap_or("")),
         "spawn" => println!("{}", answer["pane"]),
+        "scene_open" => println!(
+            "{} ({}x{} dots)",
+            answer["pane"], answer["width"], answer["height"]
+        ),
+        "scene_draw" => {}
         "send_message" => println!("message {}", answer["id"]),
         "wait_for" => println!("{}", serde_json::to_string(answer).unwrap_or_default()),
         _ if answer.as_object().is_some_and(|o| o.is_empty()) => {}

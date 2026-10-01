@@ -72,6 +72,8 @@ A missing `pane` means: the pane of the client (from `hello`), else the active p
 | `wait_for` | `pane`, `event`: `"command_done"`, `"agent_done"`, `"agent_waiting"`, `"message"`, or `"text"` (with `pattern`); `timeout_ms` (default 30000, at most one hour) | the event (for example `command`, `exit`, `took_ms`) |
 | `send_message` | `to` (a pane id), `text` (at most 64 KB) | `id` |
 | `read_messages` | `pane` (default: yours), `unread_only` (default true), `mark_read` (default true) | `messages`: `id`, `from`, `from_name`, `text`, `time` |
+| `scene_open` | `place`: `"right"` (default) or `"down"`; `pane` (split next to it) | `pane`, `cols`, `rows`, `width`, `height` (dots) |
+| `scene_draw` | `pane`, `ops`: one drawing command or a list (see [SCENE.md](SCENE.md)) | `pane`, `cols`, `rows`, `width`, `height` |
 | `subscribe` | `events`: a list of names, or `["*"]` for all | `events` |
 | `unsubscribe` | `events` | `events` |
 

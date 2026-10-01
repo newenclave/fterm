@@ -29,6 +29,8 @@ pub const METHODS: &[&str] = &[
     "wait_for",
     "send_message",
     "read_messages",
+    "scene_open",
+    "scene_draw",
     "subscribe",
     "unsubscribe",
 ];
@@ -160,11 +162,43 @@ pub fn place_param(params: &Value) -> Result<SpawnWhere, RpcError> {
     }
 }
 
+/// `place` of a scene: "right" (the default) or "down". A scene is a split.
+pub fn scene_place(params: &Value) -> Result<fterm_mux::Direction, RpcError> {
+    match str_param(params, "place")?.as_deref() {
+        None | Some("right") => Ok(fterm_mux::Direction::Right),
+        Some("down") => Ok(fterm_mux::Direction::Down),
+        Some(other) => Err(RpcError::invalid_params(format!(
+            "a scene is a split: `place` must be \"right\" or \"down\", got `{other}`"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_scene_is_a_split() {
+        use fterm_mux::Direction;
+        assert_eq!(scene_place(&json!({})).unwrap(), Direction::Right);
+        assert_eq!(
+            scene_place(&json!({"place": "right"})).unwrap(),
+            Direction::Right
+        );
+        assert_eq!(
+            scene_place(&json!({"place": "down"})).unwrap(),
+            Direction::Down
+        );
+        let err = scene_place(&json!({"place": "tab"})).unwrap_err();
+        assert!(
+            err.message.contains("right") && err.message.contains("down"),
+            "{}",
+            err.message
+        );
+        assert!(scene_place(&json!({"place": 3})).is_err());
+    }
 
     #[test]
     fn timeouts() {

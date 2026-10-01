@@ -20,6 +20,10 @@ pub enum Command {
     Subscribe {
         events: Vec<String>,
     },
+    /// `draw -`: the drawing commands come on stdin (a big batch does not fit on a command line).
+    DrawStdin {
+        pane: Option<u64>,
+    },
     Mcp,
 }
 
@@ -192,6 +196,30 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             w.pane_into(&mut params)?;
             call("spawn", params)
         }
+        "scene" => {
+            let w = read(&["pane"], &["right", "down"])?;
+            let place = if w.flag("down") { "down" } else { "right" };
+            let mut params = json!({ "place": place });
+            w.pane_into(&mut params)?;
+            call("scene_open", params)
+        }
+        "draw" => {
+            let w = read(&["pane"], &[])?;
+            let text = w.text();
+            if text.trim() == "-" {
+                return Ok(Command::DrawStdin {
+                    pane: w.number("pane")?,
+                });
+            }
+            if text.trim().is_empty() {
+                return Err("draw needs the commands as JSON (or `-` for stdin)".to_owned());
+            }
+            let ops: Value =
+                serde_json::from_str(&text).map_err(|err| format!("bad JSON: {err}"))?;
+            let mut params = json!({ "ops": ops });
+            w.pane_into(&mut params)?;
+            call("scene_draw", params)
+        }
         "send-text" => {
             let w = read(&["pane"], &["enter"])?;
             let mut params = json!({ "text": w.text(), "enter": w.flag("enter") });
@@ -350,6 +378,40 @@ mod tests {
             )
         );
         assert_eq!(call("spawn --down").1["place"], json!("down"));
+    }
+
+    #[test]
+    fn scenes() {
+        assert_eq!(
+            call("scene"),
+            ("scene_open".into(), json!({"place": "right"}))
+        );
+        assert_eq!(
+            call("scene --down --pane 2"),
+            ("scene_open".into(), json!({"place": "down", "pane": 2}))
+        );
+        assert_eq!(
+            call(r#"draw [{"op":"clear"},{"op":"dot","x":1,"y":2}]"#),
+            (
+                "scene_draw".into(),
+                json!({"ops": [{"op": "clear"}, {"op": "dot", "x": 1, "y": 2}]})
+            )
+        );
+        // The JSON can have spaces (the shell splits it into words).
+        assert_eq!(
+            call(r#"draw --pane 3 {"op": "text", "col": 0, "row": 0, "text": "a b"}"#),
+            (
+                "scene_draw".into(),
+                json!({"ops": {"op": "text", "col": 0, "row": 0, "text": "a b"}, "pane": 3})
+            )
+        );
+        assert!(cli("draw").is_err(), "draw needs the commands");
+        assert!(cli("draw {nope").is_err(), "bad JSON");
+        assert_eq!(
+            cli("draw --pane 4 -").unwrap().command,
+            Command::DrawStdin { pane: Some(4) },
+            "`-` = the commands come on stdin"
+        );
     }
 
     #[test]
