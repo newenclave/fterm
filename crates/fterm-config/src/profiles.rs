@@ -227,7 +227,8 @@ mod tests {
         let profiles = detect_profiles(
             true,
             |name| ["pwsh", "wsl", "claude", "opencode", "ollama", "openclaude"].contains(&name),
-            |path| path.ends_with("bash.exe"),
+            // A Windows path is one name on Unix (`\` is not a separator there).
+            |path| path.to_string_lossy().ends_with("bash.exe"),
             &["Ubuntu".to_owned()],
         );
         assert_eq!(
