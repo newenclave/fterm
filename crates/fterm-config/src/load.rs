@@ -38,6 +38,8 @@ pub struct Config {
     pub profiles: Vec<Profile>,
     pub keys: Keymap,
     pub commands: Vec<UserCommand>,
+    /// Load the shell integration script (PowerShell now; bash and zsh by hand, see the docs).
+    pub shell_integration: bool,
 }
 
 impl Default for Config {
@@ -52,6 +54,7 @@ impl Default for Config {
             profiles: Vec::new(),
             keys: Keymap::with_defaults(),
             commands: Vec::new(),
+            shell_integration: true,
         }
     }
 }
@@ -243,6 +246,9 @@ impl Reader {
             config.colors = self.colors(&colors)?;
         }
         config.default_profile = string_field(root, "default_profile", "default_profile")?;
+        if let Some(on) = bool_field(root, "shell_integration", "shell_integration")? {
+            config.shell_integration = on;
+        }
         if let Some(profiles) = table_field(root, "profiles", "profiles")? {
             for (i, value) in list(&profiles) {
                 let path = format!("profiles[{i}]");
@@ -456,6 +462,20 @@ fn number_field(table: &Table, key: &str, path: &str) -> Result<Option<f64>, Str
     }
 }
 
+fn bool_field(table: &Table, key: &str, path: &str) -> Result<Option<bool>, String> {
+    match table
+        .get::<Value>(key)
+        .map_err(|err| format!("{path}: {err}"))?
+    {
+        Value::Nil => Ok(None),
+        Value::Boolean(b) => Ok(Some(b)),
+        other => Err(format!(
+            "{path}: expected true or false, got {}",
+            other.type_name()
+        )),
+    }
+}
+
 fn string_field(table: &Table, key: &str, path: &str) -> Result<Option<String>, String> {
     match table
         .get::<Value>(key)
@@ -526,6 +546,17 @@ mod tests {
                 .get(&KeyChord::parse("ctrl+shift+t").unwrap())
                 .is_some()
         );
+    }
+
+    #[test]
+    fn shell_integration_can_be_turned_off() {
+        assert!(load("return {}").config.shell_integration);
+        assert!(
+            !load("return { shell_integration = false }")
+                .config
+                .shell_integration
+        );
+        assert!(error(r#"return { shell_integration = "yes" }"#).contains("shell_integration"));
     }
 
     #[test]

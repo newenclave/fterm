@@ -44,6 +44,7 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `profiles` | list | found by fterm | See "Profiles". |
 | `keys` | list | see `KEYS.md` | See "Keys". |
 | `commands` | list | none | More lines for the command palette. |
+| `shell_integration` | true / false | `true` | Load the fterm script into PowerShell (see "Shell integration"). |
 
 ### Colors
 All fields can be left out. Colors are `#rrggbb` or `#rgb`.
@@ -149,6 +150,26 @@ commands = {
 ```
 
 Commands show in the command palette (Ctrl + Shift + P), next to all actions and profiles.
+
+## Shell integration
+With shell integration, the shell tells fterm:
+- the current folder (OSC 7). New tabs and splits start in the folder of the active pane;
+- when a command starts and ends, and its exit code (OSC 133).
+
+**PowerShell** (5.1 and 7): fterm loads its script by itself (after your profile). Your prompt does not change.
+Turn it off with `shell_integration = false`.
+
+**bash and zsh:** fterm writes the scripts to `%LOCALAPPDATA%term\shell\` (Windows) or
+`~/.local/share/fterm/shell/`. Add one line to your rc file:
+
+```sh
+# ~/.bashrc
+[ "$TERM_PROGRAM" = fterm ] && source ~/.local/share/fterm/shell/fterm.bash
+# ~/.zshrc
+[[ "$TERM_PROGRAM" == fterm ]] && source ~/.local/share/fterm/shell/fterm.zsh
+```
+
+Every pane gets `TERM_PROGRAM=fterm`.
 
 ## What comes later
 Functions for events (`on_output`, `on_agent_event`, …) come with Phase 6 (events and shell integration).

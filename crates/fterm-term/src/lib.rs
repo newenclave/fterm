@@ -9,6 +9,7 @@ pub mod osc;
 pub mod process;
 pub mod select;
 pub mod session;
+pub mod shell;
 pub mod size;
 
 pub use alacritty_terminal;

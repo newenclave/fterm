@@ -216,3 +216,33 @@ fn osc_events_come_through_the_pty() {
         "{osc:?}"
     );
 }
+
+#[cfg(windows)]
+#[test]
+fn powershell_integration_sends_cwd_and_exit_codes() {
+    use fterm_term::shell::{install_scripts, powershell_args};
+    let dir = std::env::temp_dir().join(format!("fterm-ps-test-{}", std::process::id()));
+    let script = install_scripts(&dir).unwrap();
+    let args = powershell_args(&["-NoLogo".to_owned(), "-NoProfile".to_owned()], &script);
+    let options = SessionOptions::command("powershell.exe", args);
+    let (session, rx) = spawn(options);
+    session.write(b"cmd /c exit 3\r".to_vec());
+    session.write(b"exit\r".to_vec());
+    let osc: Vec<OscEvent> = events_until_exit(&session, &rx)
+        .into_iter()
+        .filter_map(|e| match e {
+            TermEvent::Osc(osc) => Some(osc),
+            _ => None,
+        })
+        .collect();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(osc.iter().any(|e| matches!(e, OscEvent::Cwd(_))), "{osc:?}");
+    assert!(
+        osc.contains(&OscEvent::Prompt(PromptMark::CommandExecuted)),
+        "{osc:?}"
+    );
+    assert!(
+        osc.contains(&OscEvent::Prompt(PromptMark::CommandFinished(Some(3)))),
+        "{osc:?}"
+    );
+}

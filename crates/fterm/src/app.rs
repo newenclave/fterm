@@ -20,6 +20,7 @@ use fterm_term::copy_mode::{self, CopyAction, CopyResult};
 use fterm_term::links::url_at;
 use fterm_term::process::{display_name, running_children};
 use fterm_term::session::{Session, SessionOptions, TermEvent};
+use fterm_term::shell::{ShellEvent, ShellState, install_scripts, is_powershell, powershell_args};
 use fterm_term::size::GridSize;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
@@ -56,6 +57,8 @@ pub enum UserEvent {
 struct Pane {
     session: Session,
     app_title: Option<String>,
+    /// The folder and the commands, from shell integration.
+    shell: ShellState,
 }
 
 /// Everything that exists only while the window is open.
@@ -210,6 +213,8 @@ pub struct App {
     message: Option<Vec<String>>,
     /// Editors save in several steps: we load the config a moment after the last change.
     reload_at: Option<Instant>,
+    /// The PowerShell shell integration script (written at start).
+    shell_script: Option<std::path::PathBuf>,
     /// The command palette, when it is open.
     palette: Option<PaletteState>,
 }
@@ -245,6 +250,7 @@ impl App {
             _watcher: None,
             message,
             reload_at: None,
+            shell_script: shell_script_path(),
             palette: None,
         }
     }
@@ -379,13 +385,31 @@ impl App {
 
     /// Starts a profile (or the default profile) for a new pane with this grid size.
     fn spawn_pane(&mut self, size: GridSize, profile: Option<&str>) -> anyhow::Result<PaneId> {
+        // A new pane starts in the folder of the active pane, unless the profile has its own folder.
+        let active_cwd = self
+            .running
+            .as_ref()
+            .and_then(Running::active_pane)
+            .and_then(|pane| pane.shell.cwd.clone())
+            .map(std::path::PathBuf::from)
+            .filter(|dir| dir.is_dir());
         let options = match self.profile(profile) {
             Some(profile) => {
-                let (program, args) = launch_command(&profile, cfg!(windows), path_extension);
+                let (program, mut args) = launch_command(&profile, cfg!(windows), path_extension);
+                if self.config.config.shell_integration
+                    && is_powershell(&program)
+                    && let Some(script) = &self.shell_script
+                {
+                    args = powershell_args(&args, script);
+                }
                 SessionOptions {
                     program: Some(program),
                     args,
-                    cwd: profile.cwd.clone().filter(|dir| dir.is_dir()),
+                    cwd: profile
+                        .cwd
+                        .clone()
+                        .filter(|dir| dir.is_dir())
+                        .or(active_cwd),
                     env: profile.env.clone(),
                     scrollback: self.config.config.scrollback,
                 }
@@ -413,6 +437,7 @@ impl App {
             Pane {
                 session,
                 app_title: None,
+                shell: ShellState::default(),
             },
         );
         Ok(id)
@@ -1645,8 +1670,15 @@ impl ApplicationHandler<UserEvent> for App {
                 self.update_window_title();
             }
             TermEvent::Osc(osc) => {
-                // Shell integration, notifications, and agent states (handled in the next steps).
                 tracing::debug!(pane = pane.0, ?osc, "osc event");
+                let Some(p) = running.panes.get_mut(&pane) else {
+                    return;
+                };
+                if let Some(ShellEvent::CommandDone { exit, took }) =
+                    p.shell.apply(&osc, Instant::now())
+                {
+                    tracing::debug!(pane = pane.0, ?exit, ?took, "command done");
+                }
             }
             TermEvent::Exit => {
                 tracing::info!(pane = pane.0, "the shell ended");
@@ -1800,6 +1832,25 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::MouseWheel { delta, .. } => self.mouse_wheel(delta),
             WindowEvent::RedrawRequested => self.redraw(event_loop),
             _ => {}
+        }
+    }
+}
+
+/// Writes the shell integration scripts and returns the PowerShell one.
+fn shell_script_path() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os(if cfg!(windows) {
+        "LOCALAPPDATA"
+    } else {
+        "XDG_DATA_HOME"
+    })
+    .map(std::path::PathBuf::from)
+    .or_else(|| fterm_config::profiles::home_dir().map(|h| h.join(".local").join("share")))
+    .unwrap_or_else(std::env::temp_dir);
+    match install_scripts(&base.join("fterm").join("shell")) {
+        Ok(path) => Some(path),
+        Err(err) => {
+            tracing::warn!("cannot write the shell integration scripts: {err}");
+            None
         }
     }
 }
