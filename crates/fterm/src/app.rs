@@ -1172,6 +1172,21 @@ impl App {
     }
 
     /// The profile by name, else the default profile, else the first one.
+    /// Windows, or the WSL distro of the active pane (for the history of folders and commands).
+    fn active_world(&self) -> crate::history_popup::World {
+        let distro = self
+            .running
+            .as_ref()
+            .and_then(Running::active_pane)
+            .and_then(|pane| pane.profile.as_deref())
+            .and_then(|name| self.profiles.iter().find(|p| p.name == name))
+            .and_then(|p| p.wsl.clone());
+        match distro {
+            Some(distro) => crate::history_popup::World::Wsl(distro),
+            None => crate::history_popup::World::Windows,
+        }
+    }
+
     fn profile(&self, name: Option<&str>) -> Option<Profile> {
         let wanted = name.or(self.config.config.default_profile.as_deref());
         wanted
@@ -1993,11 +2008,25 @@ impl App {
                     },
                     only_ok,
                 };
-                command_rows(&history.commands(&filter), now)
+                let world = self.active_world();
+                let commands: Vec<_> = history
+                    .commands(&filter)
+                    .into_iter()
+                    .filter(|e| world.has_command(e.cwd.as_deref()))
+                    .collect();
+                command_rows(&commands, now)
             }
-            PopupKind::Dirs => dir_rows(&history.dirs(now), now, |dir| {
-                std::path::Path::new(dir).is_dir()
-            }),
+            PopupKind::Dirs => {
+                let world = self.active_world();
+                let dirs: Vec<_> = history
+                    .dirs(now)
+                    .into_iter()
+                    .filter(|e| world.has(&e.dir))
+                    .collect();
+                dir_rows(&dirs, now, |dir| {
+                    std::path::Path::new(&world.host_path(dir)).is_dir()
+                })
+            }
         }
     }
 
@@ -2152,7 +2181,12 @@ impl App {
                     cwd: cwd.clone(),
                     only_ok: false,
                 });
-                let all = history.commands(&CommandFilter::default());
+                let world = self.active_world();
+                let all: Vec<_> = history
+                    .commands(&CommandFilter::default())
+                    .into_iter()
+                    .filter(|e| world.has_command(e.cwd.as_deref()))
+                    .collect();
                 let hint = crate::hints::pick_hint(&input.text, &here, &all);
                 *cache = Some((input.text.clone(), cwd, self.history_changes, hint.clone()));
                 hint

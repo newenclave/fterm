@@ -107,6 +107,9 @@ A failed command shows its exit code in red.
 **Alt + F12: folders.** Often and recently used folders are at the top. Pinned folders (★) are always first.
 A folder that is not there any more says "not found".
 
+In a WSL pane both lists show only Linux folders (`/home/...`) and the commands that ran there; in a Windows pane
+only Windows folders. So `cd` always gets a folder that the shell knows.
+
 | Key | What it does |
 |---|---|
 | Enter | Go there (`cd`) in the active pane. |

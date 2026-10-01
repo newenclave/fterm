@@ -189,6 +189,47 @@ pub fn dir_rows(entries: &[DirEntry], now: u64, exists: impl Fn(&str) -> bool) -
         .collect()
 }
 
+/// Where a pane lives: Windows, or a WSL distro (its folders are Linux paths). The history popups
+/// and hints show only the folders and commands of the pane's world.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum World {
+    Windows,
+    Wsl(String),
+}
+
+impl World {
+    /// The folder belongs to this world.
+    pub fn has(&self, dir: &str) -> bool {
+        dir.starts_with('/') == matches!(self, World::Wsl(_))
+    }
+
+    /// A command (with the folder where it ran) belongs to this world.
+    pub fn has_command(&self, cwd: Option<&str>) -> bool {
+        cwd.is_none_or(|dir| self.has(dir))
+    }
+
+    /// The path that Windows can check (`\\wsl.localhost\<distro>\...` for a Linux folder).
+    pub fn host_path(&self, dir: &str) -> String {
+        match self {
+            World::Wsl(distro) if dir.starts_with('/') => {
+                // `/mnt/c/...` is the C: drive.
+                if let Some(rest) = dir.strip_prefix("/mnt/") {
+                    let (drive, tail) = rest.split_once('/').unwrap_or((rest, ""));
+                    if drive.len() == 1 && drive.chars().all(|c| c.is_ascii_alphabetic()) {
+                        return format!(
+                            r"{}:\{}",
+                            drive.to_ascii_uppercase(),
+                            tail.replace('/', "\\")
+                        );
+                    }
+                }
+                format!(r"\\wsl.localhost\{distro}{}", dir.replace('/', "\\"))
+            }
+            _ => dir.to_owned(),
+        }
+    }
+}
+
 /// The bytes that put `text` into the prompt in place of the typed text:
 /// End (go to the end of the line), Backspace for each typed char, then the text, and Enter with `run`.
 pub fn replace_input(typed: &str, text: &str, run: bool) -> Vec<u8> {
@@ -222,7 +263,8 @@ fn ago(now: u64, then: u64) -> String {
 
 /// A folder for people: with `\` on Windows.
 pub fn shown_dir(dir: &str) -> String {
-    if cfg!(windows) {
+    // A Linux folder (WSL) keeps its `/`.
+    if cfg!(windows) && !dir.starts_with('/') {
         dir.replace('/', "\\")
     } else {
         dir.to_owned()
@@ -250,6 +292,40 @@ mod tests {
     use super::*;
 
     const MIN: u64 = 60_000;
+
+    #[test]
+    fn each_folder_has_its_world() {
+        let windows = World::Windows;
+        let ubuntu = World::Wsl("Ubuntu".into());
+        assert!(windows.has("C:/work") && windows.has(r"\\wsl$\Ubuntu\home"));
+        assert!(!windows.has("/home/me"));
+        assert!(ubuntu.has("/home/me") && !ubuntu.has("C:/work"));
+        // A command without a folder is for every world.
+        assert!(windows.has_command(None) && ubuntu.has_command(None));
+        assert!(ubuntu.has_command(Some("/tmp")) && !ubuntu.has_command(Some("C:/x")));
+    }
+
+    #[test]
+    fn a_linux_folder_is_checked_through_windows() {
+        let ubuntu = World::Wsl("Ubuntu".into());
+        assert_eq!(
+            ubuntu.host_path("/home/me"),
+            r"\\wsl.localhost\Ubuntu\home\me"
+        );
+        assert_eq!(World::Windows.host_path("C:/work"), "C:/work");
+        // The Windows drives in WSL are not in \\wsl.localhost: check them on the drive.
+        assert_eq!(ubuntu.host_path("/mnt/c/work/fterm"), r"C:\work\fterm");
+        assert_eq!(ubuntu.host_path("/mnt/d"), r"D:\");
+        assert_eq!(
+            ubuntu.host_path("/mnt/wsl"),
+            r"\\wsl.localhost\Ubuntu\mnt\wsl"
+        );
+    }
+
+    #[test]
+    fn a_linux_folder_keeps_its_slashes() {
+        assert_eq!(shown_dir("/home/me/src"), "/home/me/src");
+    }
 
     fn row(text: &str) -> PopupRow {
         PopupRow {
