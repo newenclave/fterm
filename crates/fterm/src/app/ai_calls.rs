@@ -468,12 +468,25 @@ impl App {
             "linux" => "Linux",
             other => other,
         };
+        // Examples first (small models follow them better than rules), then the task.
+        let mut messages = Vec::new();
+        for (task, command) in crate::text_command::examples(&shell) {
+            messages.push(fterm_ai::Message {
+                role: fterm_ai::Role::User,
+                content: task.to_owned(),
+            });
+            messages.push(fterm_ai::Message {
+                role: fterm_ai::Role::Assistant,
+                content: command.to_owned(),
+            });
+        }
+        messages.push(fterm_ai::Message {
+            role: fterm_ai::Role::User,
+            content: typed.trim().to_owned(),
+        });
         let chat = Chat {
             system: crate::text_command::system_prompt(os, &shell, cwd.as_deref()),
-            messages: vec![fterm_ai::Message {
-                role: fterm_ai::Role::User,
-                content: typed.trim().to_owned(),
-            }],
+            messages,
             max_tokens: 400,
         };
         self.command_next_id += 1;
