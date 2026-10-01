@@ -1217,6 +1217,21 @@ impl App {
         if let Some(socket) = socket {
             options.env.push(("FTERM_SOCKET".to_owned(), socket));
         }
+        // The folder of fterm.exe (with ftermctl.exe) at the end of PATH, so `ftermctl mcp` works in panes.
+        if let Some(dir) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|d| d.display().to_string()))
+        {
+            let base = options
+                .env
+                .iter()
+                .rev()
+                .find(|(k, _)| k.eq_ignore_ascii_case("PATH"))
+                .map(|(_, v)| v.clone())
+                .or_else(|| std::env::var("PATH").ok());
+            let path = crate::env::path_with(base.as_deref(), &dir, cfg!(windows));
+            options.env.push(("PATH".to_owned(), path));
+        }
         let proxy = self.proxy.clone();
         let session = Session::spawn(options, size, cell_px(&running.renderer), move |event| {
             // The window may be closed already. Then nobody needs the event.

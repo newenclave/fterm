@@ -350,6 +350,11 @@ impl Backend for Window {
     }
 }
 
+/// One line from the client as JSON. A UTF-8 BOM in front (PowerShell 5.1 sends one) is skipped.
+pub fn parse_line(line: &str) -> Result<Value, serde_json::Error> {
+    serde_json::from_str(line.trim_start_matches('\u{feff}'))
+}
+
 /// Reads stdin and writes stdout until the client closes stdin.
 pub fn serve(window: Option<u32>) -> Result<(), String> {
     use std::io::{BufRead, Write};
@@ -366,7 +371,7 @@ pub fn serve(window: Option<u32>) -> Result<(), String> {
         if line.trim().is_empty() {
             continue;
         }
-        let answer = match serde_json::from_str::<Value>(&line) {
+        let answer = match parse_line(&line) {
             Ok(message) => server.handle(&message),
             Err(err) => Some(json!({
                 "jsonrpc": "2.0",
@@ -443,6 +448,13 @@ mod tests {
         ))
         .unwrap()["result"]
             .clone()
+    }
+
+    #[test]
+    fn a_line_with_a_byte_order_mark() {
+        let line = "\u{feff}{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}";
+        assert_eq!(parse_line(line).unwrap()["method"], json!("ping"));
+        assert!(parse_line("not json").is_err());
     }
 
     #[test]

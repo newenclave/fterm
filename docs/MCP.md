@@ -21,7 +21,8 @@ Claude Code (once, for all projects):
 claude mcp add --scope user fterm -- ftermctl mcp
 ```
 
-`ftermctl.exe` must be in your `PATH` (it is next to `fterm.exe`), or give the full path:
+Inside fterm this just works: fterm puts its own folder (with `ftermctl.exe`) at the end of `PATH` in every pane.
+To use it in Claude Code that runs outside of fterm, put the folder of `fterm.exe` into your `PATH`, or give the full path:
 
 ```
 claude mcp add --scope user fterm -- C:\path\to\ftermctl.exe mcp

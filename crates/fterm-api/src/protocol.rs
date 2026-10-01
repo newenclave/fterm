@@ -130,6 +130,8 @@ impl Notification {
 
 /// Reads one request line. A bad line gives the JSON-RPC error to send back.
 pub fn parse_request(line: &str) -> Result<Request, RpcError> {
+    // PowerShell 5.1 puts a UTF-8 BOM in front of what it pipes to a program.
+    let line = line.trim_start_matches('\u{feff}');
     let value: serde_json::Value = serde_json::from_str(line)
         .map_err(|err| RpcError::new(RpcError::PARSE, err.to_string()))?;
     if !value.is_object() || value.get("method").is_none_or(|m| !m.is_string()) {
@@ -167,6 +169,13 @@ mod tests {
         assert_eq!(r.params, Value::Null);
         // No id: a notification.
         assert_eq!(parse_request(r#"{"method":"ping"}"#).unwrap().id, None);
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_skipped() {
+        // PowerShell 5.1 puts a UTF-8 BOM in front of the first line it pipes to a program.
+        let r = parse_request("\u{feff}{\"id\":1,\"method\":\"list\"}").unwrap();
+        assert_eq!(r.method, "list");
     }
 
     #[test]

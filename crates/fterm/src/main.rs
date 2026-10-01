@@ -7,6 +7,7 @@ mod api;
 mod app;
 mod clipboard;
 mod close;
+mod env;
 mod gpu;
 mod hints;
 mod history_popup;
