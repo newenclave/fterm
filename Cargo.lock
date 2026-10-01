@@ -974,6 +974,7 @@ dependencies = [
  "notify-rust",
  "open",
  "pollster",
+ "serde",
  "serde_json",
  "tracing",
  "tracing-subscriber",

@@ -51,6 +51,19 @@ impl Mux {
         self.next_id
     }
 
+    /// Adds a tab with this layout at the end (to restore a session). It does not become active.
+    pub fn add_tab(&mut self, layout: Layout, active_pane: PaneId, title: Option<String>) -> TabId {
+        let id = TabId(self.next());
+        self.tabs.push(Tab {
+            id,
+            layout,
+            active_pane,
+            custom_title: title,
+            zoomed: None,
+        });
+        id
+    }
+
     /// Opens a tab with one pane, after the active tab, and makes it active.
     pub fn new_tab(&mut self, pane: PaneId) -> TabId {
         let id = TabId(self.next());
@@ -283,6 +296,29 @@ mod tests {
 
     fn order(mux: &Mux) -> Vec<PaneId> {
         mux.tabs().iter().map(|t| t.active_pane).collect()
+    }
+
+    #[test]
+    fn a_saved_tab_comes_back_at_the_end() {
+        let (mut mux, _) = mux_with(1);
+        let (a, b) = (mux.new_pane_id(), mux.new_pane_id());
+        let layout = Layout::Split {
+            direction: Direction::Right,
+            ratio: 0.3,
+            first: Box::new(Layout::Pane(a)),
+            second: Box::new(Layout::Pane(b)),
+        };
+        let tab = mux.add_tab(layout.clone(), b, Some("build".into()));
+        assert_eq!(mux.tabs().len(), 2);
+        let added = mux.tabs().last().unwrap();
+        assert_eq!(added.id, tab);
+        assert_eq!(added.layout, layout);
+        assert_eq!(added.active_pane, b);
+        assert_eq!(added.custom_title.as_deref(), Some("build"));
+        assert_eq!(mux.active_index(), 0, "it does not take the focus");
+        // A new id after it is still new.
+        let next = mux.new_pane_id();
+        assert!(next != a && next != b);
     }
 
     #[test]

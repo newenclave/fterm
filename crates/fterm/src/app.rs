@@ -85,6 +85,7 @@ pub enum UserEvent {
 
 mod ai_calls;
 mod api_calls;
+mod session_calls;
 
 /// The last command of a pane (for the API).
 struct LastCommand {
@@ -107,6 +108,8 @@ struct Pane {
     remote: bool,
     /// The API client that opened this pane (it may use it without a question).
     opened_by: Option<fterm_api::server::ClientId>,
+    /// The profile that started it (for restoring the session).
+    profile: Option<String>,
 }
 
 /// Everything that exists only while the window is open.
@@ -363,6 +366,10 @@ pub struct App {
     key_prompt: Option<crate::ai_chat::InputBox>,
     /// "Text to command" that waits for its answer.
     pending_command: Option<ai_calls::PendingCommand>,
+    /// The last session, while fterm asks "Restore the last session?".
+    restore_offer: Option<crate::session_state::SavedSession>,
+    /// When the session was saved last.
+    session_saved_at: Option<Instant>,
     command_next_id: u64,
     /// The Events panel was on the screen (and fterm in front) in the last frame.
     /// When it goes away, its events count as read.
@@ -418,6 +425,8 @@ impl App {
             ai_stop: None,
             key_prompt: None,
             pending_command: None,
+            restore_offer: None,
+            session_saved_at: None,
             command_next_id: 0,
             center: Center::new(4, true),
             shell_script: shell_script_path(),
@@ -1207,6 +1216,7 @@ impl App {
             .and_then(|pane| pane.shell.cwd.clone())
             .map(std::path::PathBuf::from)
             .filter(|dir| dir.is_dir());
+        let profile_name = self.profile(profile).map(|p| p.name.clone());
         let mut options = match self.profile(profile) {
             Some(profile) => {
                 let (program, mut args) = launch_command(&profile, cfg!(windows), path_extension);
@@ -1285,6 +1295,7 @@ impl App {
                 last_command: None,
                 remote: true,
                 opened_by: None,
+                profile: profile_name,
             },
         );
         Ok(id)
@@ -1679,6 +1690,9 @@ impl App {
         if action == A::TextToCommand {
             return self.text_to_command();
         }
+        if action == A::RestoreSession {
+            return self.restore_last_session();
+        }
         if action == A::AskAiSelection {
             return self.ask_ai_selection();
         }
@@ -1814,7 +1828,12 @@ impl App {
             A::OpenConfig => return self.open_config(),
             A::ToggleDock | A::PanelEvents | A::PanelAgents | A::FocusDock => {}
             A::HistoryCommands | A::HistoryDirs => {}
-            A::PanelAi | A::SetAiKey | A::ExplainError | A::AskAiSelection | A::TextToCommand => {}
+            A::PanelAi
+            | A::SetAiKey
+            | A::ExplainError
+            | A::AskAiSelection
+            | A::TextToCommand
+            | A::RestoreSession => {}
             A::ToggleRemoteControl => {
                 let Some(pane) = running.mux.active_pane() else {
                     return;
@@ -3005,7 +3024,8 @@ impl App {
             .map(|(tab, text)| (*tab, text.clone()));
         let hover = self.mouse.tab_hover;
         let question = self
-            .key_prompt_lines()
+            .restore_question_lines()
+            .or_else(|| self.key_prompt_lines())
             .or_else(|| self.access_question_lines())
             .or_else(|| self.close_question.as_ref().map(|q| q.lines.clone()))
             .or_else(|| self.message.clone());
@@ -3283,6 +3303,11 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         self.tab_changed();
+        self.offer_restore();
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.save_or_forget_session();
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
@@ -3437,6 +3462,10 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(at) = self.expire_waits(now) {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
+        if self.running.is_some() {
+            let at = self.autosave(now);
+            wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
+        }
         if let Some(until) = self.title_message_until {
             if now >= until {
                 self.title_message_until = None;
@@ -3501,6 +3530,10 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Ime(Ime::Commit(text)) => self.ime_commit(&text),
             WindowEvent::ModifiersChanged(mods) => self.mods = mods.state(),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                if self.restore_offer.is_some() {
+                    self.restore_key(&event);
+                    return;
+                }
                 if self.key_prompt.is_some() {
                     self.key_prompt_key(&event);
                     return;

@@ -20,6 +20,7 @@ notify.workspace = true
 notify-rust.workspace = true
 open.workspace = true
 pollster.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 unicode-width.workspace = true

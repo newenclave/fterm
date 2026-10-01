@@ -230,6 +230,16 @@ pub struct TitleIn {
     pub default: String,
 }
 
+/// What fterm does with the last session at start.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Restore {
+    /// Ask: "Restore the last session?"
+    #[default]
+    Ask,
+    Always,
+    Never,
+}
+
 /// When the window × asks first.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ConfirmClose {
@@ -365,6 +375,7 @@ pub struct Config {
     pub panels: PanelsConfig,
     pub history: HistoryConfig,
     pub confirm_close: ConfirmClose,
+    pub restore: Restore,
     pub api: ApiConfig,
     pub ai: AiConfig,
     /// The Lua function `on_notification` (its number), if there is one.
@@ -398,6 +409,7 @@ impl Default for Config {
             panels: PanelsConfig::default(),
             history: HistoryConfig::default(),
             confirm_close: ConfirmClose::default(),
+            restore: Restore::default(),
             api: ApiConfig::default(),
             ai: AiConfig::default(),
             on_notification: None,
@@ -881,6 +893,18 @@ impl Reader {
                     }
                 }
             }
+        }
+        if let Some(text) = string_field(root, "restore", "restore")? {
+            config.restore = match text.as_str() {
+                "ask" => Restore::Ask,
+                "always" => Restore::Always,
+                "never" => Restore::Never,
+                other => {
+                    return Err(format!(
+                        "restore: must be \"ask\", \"always\", or \"never\", got `{other}`"
+                    ));
+                }
+            };
         }
         if let Some(text) = string_field(root, "confirm_close", "confirm_close")? {
             config.confirm_close = match text.as_str() {
@@ -2014,6 +2038,20 @@ mod tests {
             .api;
         assert!(!a.enabled && !a.ask);
         assert!(load_str("return { api = { ask = 1 } }", "t").is_err());
+    }
+
+    #[test]
+    fn restore_values() {
+        assert_eq!(load("return {}").config.restore, Restore::Ask);
+        for (text, value) in [
+            ("ask", Restore::Ask),
+            ("always", Restore::Always),
+            ("never", Restore::Never),
+        ] {
+            let source = format!("return {{ restore = \"{text}\" }}");
+            assert_eq!(load(&source).config.restore, value);
+        }
+        assert!(load_str(r#"return { restore = "maybe" }"#, "t").is_err());
     }
 
     #[test]

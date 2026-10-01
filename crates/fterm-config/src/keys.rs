@@ -192,11 +192,13 @@ pub enum BuiltinAction {
     AskAiSelection,
     /// The task typed in the prompt becomes a command (Phase 9).
     TextToCommand,
+    /// Open the tabs of the last saved session again (Phase 9b).
+    RestoreSession,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 43] = [
+    pub const ALL: [BuiltinAction; 44] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -240,6 +242,7 @@ impl BuiltinAction {
         Self::ExplainError,
         Self::AskAiSelection,
         Self::TextToCommand,
+        Self::RestoreSession,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -288,6 +291,7 @@ impl BuiltinAction {
             Self::ExplainError => "explain_error",
             Self::AskAiSelection => "ask_ai_selection",
             Self::TextToCommand => "text_to_command",
+            Self::RestoreSession => "restore_session",
         };
         name.to_owned()
     }
@@ -324,6 +328,7 @@ impl BuiltinAction {
             Self::ExplainError => "Explain the last error (AI)".to_owned(),
             Self::AskAiSelection => "Ask AI about the selection".to_owned(),
             Self::TextToCommand => "Text to command (AI)".to_owned(),
+            Self::RestoreSession => "Restore the last session".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
