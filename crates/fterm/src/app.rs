@@ -1094,7 +1094,9 @@ impl App {
                 self.profiles = profiles_for(&self.config);
                 self.apply_notification_config();
                 self.apply_config();
-                self.title_message("Config reloaded");
+                // Say which file it read: with FTERM_CONFIG it is not always the one you think.
+                let path = self.config_path.display().to_string();
+                self.notify(None, "Config reloaded", &path, Level::Info, Source::App);
             }
             Err(err) => {
                 tracing::warn!("config error: {err}");

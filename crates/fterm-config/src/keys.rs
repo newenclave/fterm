@@ -400,6 +400,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("shift+end", "scroll_bottom"),
     ("ctrl+shift+p", "command_palette"),
     ("ctrl+shift+,", "open_config"),
+    ("ctrl+shift+f5", "reload_config"),
     ("ctrl+shift+b", "toggle_dock"),
     ("ctrl+shift+e", "panel_events"),
     ("ctrl+shift+a", "panel_agents"),
@@ -455,6 +456,19 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_keys() {
+        let keys = Keymap::with_defaults();
+        assert_eq!(
+            keys.get(&chord("ctrl+shift+f5")),
+            Some(&Action::Builtin(BuiltinAction::ReloadConfig))
+        );
+        assert_eq!(
+            keys.get(&chord("ctrl+shift+,")),
+            Some(&Action::Builtin(BuiltinAction::OpenConfig))
+        );
+    }
 
     #[test]
     fn ai_context_actions() {

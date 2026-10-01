@@ -119,7 +119,7 @@ also work on other layouts (for example, Russian).
 | `resize_left`, `resize_right`, `resize_up`, `resize_down` | Move the line between panes. |
 | `copy`, `paste`, `copy_mode` | Copy and paste. |
 | `scroll_page_up`, `scroll_page_down`, `scroll_top`, `scroll_bottom` | Scroll. |
-| `command_palette`, `reload_config`, `open_config` | fterm itself. |
+| `command_palette` (Ctrl+Shift+P), `reload_config` (Ctrl+Shift+F5), `open_config` (Ctrl+Shift+,) | fterm itself. |
 | `copy_claude_hooks` | Copy the Claude Code hooks for tab dots (see [CLAUDE.md](CLAUDE.md)). |
 | `toggle_dock`, `panel_events`, `panel_agents`, `focus_dock` | The dock and its panels (see [KEYS.md](KEYS.md)). |
 | `history_commands`, `history_dirs` | The command and folder history (Alt+F8, Alt+F12). |

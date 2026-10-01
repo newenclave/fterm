@@ -1,7 +1,7 @@
 # Keys and mouse
 
 These are the default keys. You can change them in the config (see [CONFIG.md](CONFIG.md)).
-**Ctrl + Shift + P** opens the command palette. **Ctrl + Shift + ,** opens the config file.
+**Ctrl + Shift + P** opens the command palette. **Ctrl + Shift + ,** opens the config file. **Ctrl + Shift + F5** reads the config again (fterm also does it by itself when you save the file).
 
 ## Command palette
 Ctrl + Shift + P shows all actions, all profiles ("New tab: Claude", "Split right: Claude", …),
