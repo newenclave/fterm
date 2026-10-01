@@ -15,6 +15,22 @@ __fterm_escape() {
   printf '%s' "$s"
 }
 
+# The folder for OSC 7. Git Bash (MSYS) says `/c/work`; fterm needs `C:/work`, so ask cygpath,
+# only when the folder changes (a new process is slow there).
+__fterm_cwd_for=
+__fterm_cwd_was=
+__fterm_cwd() {
+  if command -v cygpath >/dev/null 2>&1; then
+    if [ "$PWD" != "$__fterm_cwd_for" ]; then
+      __fterm_cwd_for=$PWD
+      __fterm_cwd_was=$(cygpath -m "$PWD")
+    fi
+    printf '%s' "$__fterm_cwd_was"
+  else
+    printf '%s' "$PWD"
+  fi
+}
+
 __fterm_preexec() {
   # The DEBUG trap runs for every command; only the first one after the prompt counts.
   [ -n "$COMP_LINE" ] && return
@@ -36,7 +52,10 @@ __fterm_precmd() {
     printf '\033]133;D;%s\007' "$code"
     __fterm_running=
   fi
-  printf '\033]7;file://%s%s\007' "$HOSTNAME" "$PWD"
+  # `file://host/C:/work` (Git Bash) or `file://host/home/me`: one `/` after the host.
+  local cwd
+  cwd=$(__fterm_cwd)
+  printf '\033]7;file://%s/%s\007' "$HOSTNAME" "${cwd#/}"
   printf '\033]133;A\007'
 }
 

@@ -178,12 +178,70 @@ pub fn wsl_cwd(distro: &str, cwd: Option<&str>) -> String {
     "~".to_owned()
 }
 
+/// The program is bash (`bash`, `/bin/bash`, `C:\\...\\bash.exe`).
+pub fn is_bash(program: &str) -> bool {
+    program_name(program) == "bash"
+}
+
+/// `C:\\Git\\bin\\bash.exe` -> `bash`.
+fn program_name(program: &str) -> String {
+    let file = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let lower = file.to_ascii_lowercase();
+    lower.strip_suffix(".exe").unwrap_or(&lower).to_owned()
+}
+
+/// The program is zsh.
+pub fn is_zsh(program: &str) -> bool {
+    program_name(program) == "zsh"
+}
+
+/// The arguments that start bash with the fterm shell integration (`scripts` = the folder of the scripts).
+/// `None` = leave the arguments as they are (bash runs a command or a script, or has its own rc file).
+pub fn bash_args(args: &[String], scripts: &std::path::Path) -> Option<Vec<String>> {
+    let mut login = false;
+    for arg in args {
+        match arg.as_str() {
+            "-i" => {}
+            "--login" | "-l" | "-il" | "-li" => login = true,
+            // A command, a script, its own rc file, or another mode: bash does its own work.
+            _ => return None,
+        }
+    }
+    let name = if login {
+        "fterm-login.bash"
+    } else {
+        "fterm-rc.bash"
+    };
+    // Git Bash takes `C:/...`; `\` would be an escape there.
+    let rc = scripts.join(name).display().to_string().replace('\\', "/");
+    Some(vec!["--rcfile".to_owned(), rc, "-i".to_owned()])
+}
+
+/// The env vars that start zsh with the fterm shell integration: `ZDOTDIR` goes to the fterm zsh folder,
+/// and `FTERM_USER_ZDOTDIR` keeps the user's own one (`zdotdir`, or empty).
+pub fn zsh_env(zdotdir: Option<&str>, scripts: &std::path::Path) -> Vec<(String, String)> {
+    let ours = scripts.join("zsh").display().to_string().replace('\\', "/");
+    vec![
+        ("ZDOTDIR".to_owned(), ours),
+        (
+            "FTERM_USER_ZDOTDIR".to_owned(),
+            zdotdir.unwrap_or_default().to_owned(),
+        ),
+    ]
+}
+
 /// The shell integration scripts that come with fterm.
 pub const POWERSHELL_SCRIPT: &str = include_str!("../../../assets/shell/fterm.ps1");
 pub const BASH_SCRIPT: &str = include_str!("../../../assets/shell/fterm.bash");
 pub const ZSH_SCRIPT: &str = include_str!("../../../assets/shell/fterm.zsh");
-/// The `--rcfile` of bash in WSL: what a login bash reads, and then `fterm.bash`.
-pub const WSL_BASH_SCRIPT: &str = include_str!("../../../assets/shell/fterm-wsl.bash");
+/// The `--rcfile` of a login bash (WSL, Git Bash): what a login bash reads, and then `fterm.bash`.
+pub const LOGIN_BASH_SCRIPT: &str = include_str!("../../../assets/shell/fterm-login.bash");
+/// The `--rcfile` of a normal bash (Linux): what bash reads, and then `fterm.bash`.
+pub const RC_BASH_SCRIPT: &str = include_str!("../../../assets/shell/fterm-rc.bash");
+/// The zsh files for `ZDOTDIR`: they load the user's own files, and `.zshrc` loads `fterm.zsh` too.
+pub const ZSH_ZSHENV: &str = include_str!("../../../assets/shell/zsh/.zshenv");
+pub const ZSH_ZPROFILE: &str = include_str!("../../../assets/shell/zsh/.zprofile");
+pub const ZSH_ZSHRC: &str = include_str!("../../../assets/shell/zsh/.zshrc");
 
 /// Writes the scripts into `dir` (if they changed) and returns the path of the PowerShell script.
 pub fn install_scripts(dir: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
@@ -192,9 +250,16 @@ pub fn install_scripts(dir: &std::path::Path) -> std::io::Result<std::path::Path
         ("fterm.ps1", POWERSHELL_SCRIPT),
         ("fterm.bash", BASH_SCRIPT),
         ("fterm.zsh", ZSH_SCRIPT),
-        ("fterm-wsl.bash", WSL_BASH_SCRIPT),
+        ("fterm-login.bash", LOGIN_BASH_SCRIPT),
+        ("fterm-rc.bash", RC_BASH_SCRIPT),
+        ("zsh/.zshenv", ZSH_ZSHENV),
+        ("zsh/.zprofile", ZSH_ZPROFILE),
+        ("zsh/.zshrc", ZSH_ZSHRC),
     ] {
         let path = dir.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         if std::fs::read_to_string(&path).ok().as_deref() != Some(text) {
             std::fs::write(&path, text)?;
         }
@@ -341,6 +406,95 @@ mod tests {
             panic!("a command ended");
         };
         assert_eq!(command, None);
+    }
+
+    #[test]
+    fn bash_and_zsh_by_name() {
+        for bash in [
+            "bash",
+            "/bin/bash",
+            r"C:\Program Files\Git\bin\bash.exe",
+            "BASH.EXE",
+        ] {
+            assert!(is_bash(bash), "{bash}");
+        }
+        for zsh in ["zsh", "/usr/bin/zsh", "/bin/zsh"] {
+            assert!(is_zsh(zsh), "{zsh}");
+        }
+        assert!(!is_bash("bashful") && !is_bash("zsh") && !is_zsh("bash"));
+    }
+
+    fn strings(args: &[&str]) -> Vec<String> {
+        args.iter().map(|a| (*a).to_owned()).collect()
+    }
+
+    #[test]
+    fn bash_gets_the_rc_file() {
+        let dir = std::path::Path::new("/home/me/.local/share/fterm/shell");
+        assert_eq!(
+            bash_args(&[], dir),
+            Some(strings(&[
+                "--rcfile",
+                "/home/me/.local/share/fterm/shell/fterm-rc.bash",
+                "-i"
+            ]))
+        );
+        assert_eq!(bash_args(&strings(&["-i"]), dir), bash_args(&[], dir));
+        // A login shell (Git Bash: `--login -i`) reads the profile files: bash does not take
+        // --rcfile with --login, so the login script does that.
+        for login in [&["--login", "-i"][..], &["-l"][..], &["-il"][..]] {
+            assert_eq!(
+                bash_args(&strings(login), dir),
+                Some(strings(&[
+                    "--rcfile",
+                    "/home/me/.local/share/fterm/shell/fterm-login.bash",
+                    "-i"
+                ])),
+                "{login:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bash_keeps_its_own_work() {
+        let dir = std::path::Path::new("/s");
+        for args in [
+            &["-c", "make"][..],
+            &["script.sh"][..],
+            &["--rcfile", "my.rc"][..],
+            &["--norc"][..],
+            &["--posix"][..],
+        ] {
+            assert_eq!(bash_args(&strings(args), dir), None, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn a_windows_folder_has_forward_slashes_for_bash() {
+        let dir = std::path::Path::new(r"C:\Users\me\AppData\Local\fterm\shell");
+        assert_eq!(
+            bash_args(&[], dir).unwrap()[1],
+            "C:/Users/me/AppData/Local/fterm/shell/fterm-rc.bash"
+        );
+    }
+
+    #[test]
+    fn zsh_starts_in_the_fterm_folder() {
+        let dir = std::path::Path::new("/home/me/.local/share/fterm/shell");
+        assert_eq!(
+            zsh_env(None, dir),
+            [
+                (
+                    "ZDOTDIR".to_owned(),
+                    "/home/me/.local/share/fterm/shell/zsh".to_owned()
+                ),
+                ("FTERM_USER_ZDOTDIR".to_owned(), String::new()),
+            ]
+        );
+        assert_eq!(
+            zsh_env(Some("/home/me/.config/zsh"), dir)[1].1,
+            "/home/me/.config/zsh"
+        );
     }
 
     #[test]

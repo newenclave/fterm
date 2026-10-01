@@ -386,21 +386,26 @@ With shell integration, the shell tells fterm:
 - the text of each command (OSC 633;E, the same as VS Code), for the command history.
 
 **PowerShell** (5.1 and 7): fterm loads its script by itself (after your profile). Your prompt does not change.
-Turn it off with `shell_integration = false`.
 
-**WSL:** when the default shell of the distro is bash, fterm starts it with its script (`fterm-wsl.bash`).
-The script reads your profile files and `~/.bashrc` first, like a normal login. Other shells (zsh, fish)
-start as they are; for zsh add the line below to `~/.zshrc` (the path is `/mnt/c/Users/<you>/AppData/Local/fterm/shell/`).
+**bash** (Linux, macOS, Git Bash on Windows): fterm starts it as `bash --rcfile <fterm script> -i`.
+The script reads what bash reads by itself (`/etc/bash.bashrc` and `~/.bashrc`; for a login shell such as
+Git Bash, `/etc/profile` and your profile files), and then the fterm script. Git Bash tells fterm the Windows
+folder (`C:/work`, not `/c/work`). A bash that runs a command (`-c`), a script, or has its own `--rcfile`
+starts as it is.
 
-**bash and zsh:** fterm writes the scripts to `%LOCALAPPDATA%\fterm\shell\` (Windows) or
-`~/.local/share/fterm/shell/`. Add one line to your rc file:
+**zsh** (Linux, macOS): fterm sets `ZDOTDIR` to its own folder. The files there load your `.zshenv`,
+`.zprofile`, and `.zshrc` (from your `ZDOTDIR` or your home folder), then the fterm script, and then give
+`ZDOTDIR` back, so your `.zlogin` and your history file are the same as before.
+
+**WSL:** when the default shell of the distro is bash, it works in the same way (see "WSL"). For zsh in WSL
+add this line to `~/.zshrc` (the scripts are in `/mnt/c/Users/<you>/AppData/Local/fterm/shell/`):
 
 ```sh
-# ~/.bashrc
-[ "$TERM_PROGRAM" = fterm ] && source ~/.local/share/fterm/shell/fterm.bash
-# ~/.zshrc
-[[ "$TERM_PROGRAM" == fterm ]] && source ~/.local/share/fterm/shell/fterm.zsh
+[[ "$TERM_PROGRAM" == fterm ]] && source /mnt/c/Users/<you>/AppData/Local/fterm/shell/fterm.zsh
 ```
+
+Other shells (fish, nu) start as they are. Turn all of this off with `shell_integration = false`.
+The scripts are in `%LOCALAPPDATA%\fterm\shell\` (Windows) or `~/.local/share/fterm/shell/`.
 
 Every pane gets `TERM_PROGRAM=fterm`.
 

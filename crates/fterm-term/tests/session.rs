@@ -8,7 +8,15 @@ use fterm_term::osc::{OscEvent, PromptMark};
 use fterm_term::session::{Session, SessionOptions, TermEvent};
 use fterm_term::size::GridSize;
 
-const TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a test waits for a shell. A cold PowerShell 5.1 or a first MSYS start is slow,
+/// and on a CI runner even slower.
+fn timeout() -> Duration {
+    if std::env::var_os("CI").is_some() {
+        Duration::from_secs(90)
+    } else {
+        Duration::from_secs(40)
+    }
+}
 
 fn spawn(options: SessionOptions) -> (Session, mpsc::Receiver<TermEvent>) {
     let (tx, rx) = mpsc::channel();
@@ -20,7 +28,7 @@ fn spawn(options: SessionOptions) -> (Session, mpsc::Receiver<TermEvent>) {
 }
 
 fn wait_for_exit(session: &Session, rx: &mpsc::Receiver<TermEvent>) {
-    let deadline = std::time::Instant::now() + TIMEOUT;
+    let deadline = std::time::Instant::now() + timeout();
     loop {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         match rx.recv_timeout(left) {
@@ -149,7 +157,7 @@ fn fast_commands_do_not_lose_their_output() {
 
 /// All events until Exit.
 fn events_until_exit(session: &Session, rx: &mpsc::Receiver<TermEvent>) -> Vec<TermEvent> {
-    let deadline = std::time::Instant::now() + TIMEOUT;
+    let deadline = std::time::Instant::now() + timeout();
     let mut events = Vec::new();
     loop {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
@@ -313,4 +321,62 @@ fn the_intro_text_stays_above_the_output() {
         "the text was:\n{text}"
     );
     assert!(text.contains("old line 1\nold line 2"), "{text}");
+}
+
+#[test]
+fn bash_integration_sends_cwd_and_exit_codes() {
+    use fterm_term::shell::{bash_args, install_scripts};
+    let bash = if cfg!(windows) {
+        r"C:\Program Files\Git\bin\bash.exe"
+    } else {
+        "bash"
+    };
+    if cfg!(windows) && !std::path::Path::new(bash).exists() {
+        eprintln!("no Git Bash: skipped");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("fterm-bash-test-{}", std::process::id()));
+    install_scripts(&dir).unwrap();
+    let args = bash_args(&["--login".to_owned(), "-i".to_owned()], &dir).unwrap();
+    let mut options = SessionOptions::command(bash, args);
+    // No user files: the test must not depend on this computer.
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    options
+        .env
+        .push(("HOME".into(), home.display().to_string()));
+    let (session, rx) = spawn(options);
+    session.write(b"false\r".to_vec());
+    session.write(b"echo 'a;b'\r".to_vec());
+    session.write(b"exit\r".to_vec());
+    let osc: Vec<OscEvent> = events_until_exit(&session, &rx)
+        .into_iter()
+        .filter_map(|e| match e {
+            TermEvent::Osc(osc) => Some(osc),
+            _ => None,
+        })
+        .collect();
+    let _ = std::fs::remove_dir_all(&dir);
+    let cwd = osc.iter().find_map(|e| match e {
+        OscEvent::Cwd(dir) => Some(dir.clone()),
+        _ => None,
+    });
+    assert!(cwd.is_some(), "{osc:?}");
+    if cfg!(windows) {
+        // Git Bash says `/c/Users/...`; fterm needs the Windows folder.
+        let cwd = cwd.unwrap();
+        let bytes = cwd.as_bytes();
+        assert!(
+            bytes.len() > 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':',
+            "{cwd}"
+        );
+    }
+    assert!(
+        osc.contains(&OscEvent::Prompt(PromptMark::CommandFinished(Some(1)))),
+        "`false` ends with 1: {osc:?}"
+    );
+    assert!(
+        osc.contains(&OscEvent::CommandLine("echo 'a;b'".into())),
+        "{osc:?}"
+    );
 }

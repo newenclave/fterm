@@ -34,7 +34,8 @@ use fterm_term::osc::OscEvent;
 use fterm_term::process::{display_name, is_shell, running_children};
 use fterm_term::session::{Session, SessionOptions, TermEvent};
 use fterm_term::shell::{
-    ShellEvent, ShellState, install_scripts, is_powershell, powershell_args, wsl_args, wsl_cwd,
+    ShellEvent, ShellState, bash_args, install_scripts, is_bash, is_powershell, is_zsh,
+    powershell_args, wsl_args, wsl_cwd, zsh_env,
 };
 use fterm_term::size::GridSize;
 use winit::application::ApplicationHandler;
@@ -1266,6 +1267,26 @@ impl App {
                 {
                     args = powershell_args(&args, script);
                 }
+                // bash and zsh (Linux, macOS, Git Bash) get the shell integration too.
+                let mut env = profile.env.clone();
+                if self.config.config.shell_integration
+                    && profile.wsl.is_none()
+                    && let Some(dir) = self.shell_script.as_deref().and_then(|s| s.parent())
+                {
+                    if is_bash(&program) && native_bash(&program) {
+                        if let Some(new) = bash_args(&args, dir) {
+                            args = new;
+                        }
+                    } else if is_zsh(&program) {
+                        let user = env
+                            .iter()
+                            .find(|(k, _)| k == "ZDOTDIR")
+                            .map(|(_, v)| v.clone())
+                            .or_else(|| std::env::var("ZDOTDIR").ok());
+                        env.retain(|(k, _)| k != "ZDOTDIR");
+                        env.extend(zsh_env(user.as_deref(), dir));
+                    }
+                }
                 // A WSL distro with the args that fterm made: bash with the shell integration.
                 if let Some(distro) = &profile.wsl
                     && args == wsl_args(distro, "~", None)
@@ -1274,7 +1295,7 @@ impl App {
                         .shell_script
                         .as_ref()
                         .filter(|_| self.config.config.shell_integration)
-                        .map(|ps1| ps1.with_file_name("fterm-wsl.bash").display().to_string());
+                        .map(|ps1| ps1.with_file_name("fterm-login.bash").display().to_string());
                     let cwd = wsl_cwd(distro, raw_cwd.as_deref());
                     args = wsl_args(distro, &cwd, script.as_deref());
                 }
@@ -1286,7 +1307,7 @@ impl App {
                         .clone()
                         .filter(|dir| dir.is_dir())
                         .or(active_cwd),
-                    env: profile.env.clone(),
+                    env,
                     scrollback: self.config.config.scrollback,
                     intro: Vec::new(),
                 }
@@ -3792,6 +3813,13 @@ fn shell_script_path() -> Option<std::path::PathBuf> {
             None
         }
     }
+}
+
+/// bash that reads Windows paths. On Windows `bash.exe` from PATH can be `System32\bash.exe`
+/// (that is WSL), so only a bash with its full path (Git Bash, MSYS2) counts there.
+fn native_bash(program: &str) -> bool {
+    !cfg!(windows)
+        || (program.contains(['\\', '/']) && !program.to_ascii_lowercase().contains("system32"))
 }
 
 /// The profiles from the config, or the ones found on this computer.
