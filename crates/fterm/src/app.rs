@@ -73,6 +73,19 @@ pub enum UserEvent {
     Term(PaneId, TermEvent),
     /// The config file changed on disk.
     ConfigChanged,
+    /// A request from an API client (`ftermctl`, `ftermctl mcp`, a script).
+    Api(crate::api::ApiRequest),
+    /// An API client closed its connection.
+    ApiGone(fterm_api::server::ClientId),
+}
+
+mod api_calls;
+
+/// The last command of a pane (for the API).
+struct LastCommand {
+    command: Option<String>,
+    exit: Option<i32>,
+    took_ms: u64,
 }
 
 /// One terminal pane: a session and the title that its app set.
@@ -83,6 +96,8 @@ struct Pane {
     shell: ShellState,
     /// What the agent in this pane (for example Claude Code) does now.
     agent: Option<AgentState>,
+    /// The last command that ended (from shell integration).
+    last_command: Option<LastCommand>,
 }
 
 /// Everything that exists only while the window is open.
@@ -321,6 +336,10 @@ pub struct App {
     history_changes: u64,
     /// When `on_close_window` last stopped the close. A second × soon after it asks instead.
     close_stopped_at: Option<Instant>,
+    /// The API server of this window, its instance file, and who its clients are.
+    api_server: Option<fterm_api::server::Server>,
+    api_registration: Option<fterm_api::discovery::Registration>,
+    api_clients: HashMap<fterm_api::server::ClientId, api_calls::ApiClient>,
     /// The Events panel was on the screen (and fterm in front) in the last frame.
     /// When it goes away, its events count as read.
     events_seen: bool,
@@ -364,6 +383,9 @@ impl App {
             hint_cache: RefCell::new(None),
             history_changes: 0,
             close_stopped_at: None,
+            api_server: None,
+            api_registration: None,
+            api_clients: HashMap::new(),
             center: Center::new(4, true),
             shell_script: shell_script_path(),
             palette: None,
@@ -514,6 +536,14 @@ impl App {
             return;
         }
         tracing::debug!(pane = pane.0, ?previous, ?kind, "agent state");
+        self.api_event(
+            "agent_state",
+            serde_json::json!({
+                "pane": pane.0,
+                "state": kind.map_or("idle", AgentKind::name),
+                "message": message,
+            }),
+        );
         let input = AgentIn {
             pane: pane.0,
             state: kind.map_or("idle", AgentKind::name).to_owned(),
@@ -1145,6 +1175,7 @@ impl App {
                 ..SessionOptions::default()
             },
         };
+        let socket = self.api_socket();
         if let Some(dir) = self.spawn_cwd.take() {
             options.cwd = Some(std::path::PathBuf::from(dir)).filter(|dir| dir.is_dir());
         }
@@ -1154,6 +1185,9 @@ impl App {
         options
             .env
             .push(("FTERM_PANE_ID".to_owned(), id.0.to_string()));
+        if let Some(socket) = socket {
+            options.env.push(("FTERM_SOCKET".to_owned(), socket));
+        }
         let proxy = self.proxy.clone();
         let session = Session::spawn(options, size, cell_px(&running.renderer), move |event| {
             // The window may be closed already. Then nobody needs the event.
@@ -1165,6 +1199,9 @@ impl App {
             rows = size.rows,
             "new pane"
         );
+        if let Some(server) = &self.api_server {
+            server.broadcast("pane_opened", serde_json::json!({ "pane": id.0 }));
+        }
         running.panes.insert(
             id,
             Pane {
@@ -1172,6 +1209,7 @@ impl App {
                 app_title: None,
                 shell: ShellState::default(),
                 agent: None,
+                last_command: None,
             },
         );
         Ok(id)
@@ -1206,6 +1244,7 @@ impl App {
 
     /// Closes one pane now (no question). Returns false when it was the last pane of the last tab.
     fn close_pane_now(&mut self, pane: PaneId) -> bool {
+        self.api_event("pane_closed", serde_json::json!({ "pane": pane.0 }));
         let Some(running) = &mut self.running else {
             return false;
         };
@@ -2984,6 +3023,7 @@ impl ApplicationHandler<UserEvent> for App {
                 // winit sends `Focused` only on a change, so read the first state here.
                 self.focused = running.window.has_focus();
                 self.running = Some(running);
+                self.start_api();
             }
             Err(err) => {
                 tracing::error!("cannot start: {err:#}");
@@ -3042,6 +3082,14 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        let event = match event {
+            UserEvent::Api(request) => return self.api_call(event_loop, request),
+            UserEvent::ApiGone(client) => {
+                self.api_clients.remove(&client);
+                return;
+            }
+            other => other,
+        };
         let Some(running) = &mut self.running else {
             return;
         };
@@ -3051,6 +3099,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.reload_at = Some(Instant::now() + CONFIG_DEBOUNCE);
                 return;
             }
+            UserEvent::Api(_) | UserEvent::ApiGone(_) => return,
         };
         match event {
             TermEvent::Redraw => {
@@ -3059,6 +3108,12 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             TermEvent::Title(title) => {
+                if let Some(server) = &self.api_server {
+                    server.broadcast(
+                        "title",
+                        serde_json::json!({ "pane": pane.0, "title": title }),
+                    );
+                }
                 if let Some(p) = running.panes.get_mut(&pane) {
                     p.app_title = (!title.is_empty()).then_some(title);
                 }
@@ -3076,6 +3131,11 @@ impl ApplicationHandler<UserEvent> for App {
                 };
                 let done = p.shell.apply(&osc, Instant::now());
                 let program = p.session.program().to_owned();
+                if let Some(dir) = &new_dir
+                    && let Some(server) = &self.api_server
+                {
+                    server.broadcast("cwd", serde_json::json!({ "pane": pane.0, "cwd": dir }));
+                }
                 if let Some(dir) = new_dir
                     && let Some(history) = &mut self.history
                     && let Err(err) = history.visit_dir(&dir, now_ms())
@@ -3095,6 +3155,23 @@ impl ApplicationHandler<UserEvent> for App {
                 }) = done
                 {
                     tracing::debug!(pane = pane.0, ?exit, ?took, ?command, "command done");
+                    if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {
+                        p.last_command = Some(LastCommand {
+                            command: command.clone(),
+                            exit,
+                            took_ms: took.as_millis() as u64,
+                        });
+                    }
+                    self.api_event(
+                        "command_done",
+                        serde_json::json!({
+                            "pane": pane.0,
+                            "command": command,
+                            "exit": exit,
+                            "took_ms": took.as_millis() as u64,
+                            "cwd": cwd,
+                        }),
+                    );
                     self.save_command(pane, command, cwd, exit, took);
                     self.command_done(pane, exit, took);
                 }
@@ -3106,6 +3183,9 @@ impl ApplicationHandler<UserEvent> for App {
             }
             TermEvent::Exit => {
                 tracing::info!(pane = pane.0, "the shell ended");
+                if let Some(server) = &self.api_server {
+                    server.broadcast("pane_closed", serde_json::json!({ "pane": pane.0 }));
+                }
                 running.panes.remove(&pane);
                 match running.mux.close_pane(pane) {
                     Closed::LastTab => {

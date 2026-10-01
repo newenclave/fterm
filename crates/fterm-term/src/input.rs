@@ -77,6 +77,45 @@ pub fn typed_input<T>(term: &Term<T>, start: (usize, usize)) -> Option<Input> {
     })
 }
 
+/// All lines of the history and the screen (line 0 = the oldest line of the history).
+pub fn total_lines<T>(term: &Term<T>) -> usize {
+    term.grid().history_size() + term.grid().screen_lines()
+}
+
+/// The text of the lines `from..to` (lines from the top of the history). Lines that the screen wrapped
+/// are one line again; spaces at the ends are gone.
+pub fn lines_text<T>(term: &Term<T>, from: usize, to: usize) -> String {
+    let grid = term.grid();
+    let history = grid.history_size() as i32;
+    let columns = grid.columns();
+    let to = to.min(total_lines(term));
+    let mut lines = Vec::new();
+    let mut line_text = String::new();
+    for abs in from..to {
+        let row = &grid[Line(abs as i32 - history)];
+        for c in 0..columns {
+            let cell = &row[Column(c)];
+            if cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                continue;
+            }
+            line_text.push(cell.c);
+            if let Some(extra) = cell.zerowidth() {
+                line_text.extend(extra);
+            }
+        }
+        // A line that the screen wrapped goes on in the next row.
+        let wrapped = row[Column(columns - 1)].flags.contains(Flags::WRAPLINE);
+        if !wrapped || abs + 1 == to {
+            lines.push(line_text.trim_end().to_owned());
+            line_text.clear();
+        }
+    }
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use alacritty_terminal::event::VoidListener;
@@ -101,6 +140,26 @@ mod tests {
             text: text.to_owned(),
             cursor_at_end,
         })
+    }
+
+    #[test]
+    fn lines_of_the_history_and_the_screen() {
+        let t = term(10, 3, "one\r\ntwo\r\nthree\r\nfour\r\nabcdefghijkl");
+        // 6 lines: one two three four abcdefghij kl -> 3 in the history.
+        assert_eq!(total_lines(&t), 6);
+        assert_eq!(lines_text(&t, 0, 2), "one\ntwo");
+        assert_eq!(lines_text(&t, 2, 4), "three\nfour");
+        assert_eq!(
+            lines_text(&t, 4, 6),
+            "abcdefghijkl",
+            "a wrapped line is one line"
+        );
+        assert_eq!(
+            lines_text(&t, 3, 100),
+            "four\nabcdefghijkl",
+            "the end is cut"
+        );
+        assert_eq!(lines_text(&t, 5, 2), "", "an empty range");
     }
 
     #[test]

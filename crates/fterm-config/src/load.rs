@@ -93,6 +93,23 @@ pub struct HistoryIn {
     pub shell: String,
 }
 
+/// `api = { enabled, ask }`: the local API for `ftermctl`, MCP, and scripts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApiConfig {
+    pub enabled: bool,
+    /// Ask before a client reads or types into a pane that is not its own.
+    pub ask: bool,
+}
+
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            ask: true,
+        }
+    }
+}
+
 /// When the window × asks first.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ConfirmClose {
@@ -228,6 +245,7 @@ pub struct Config {
     pub panels: PanelsConfig,
     pub history: HistoryConfig,
     pub confirm_close: ConfirmClose,
+    pub api: ApiConfig,
     /// The Lua function `on_notification` (its number), if there is one.
     pub on_notification: Option<usize>,
     /// The Lua function `on_agent` (its number), if there is one.
@@ -255,6 +273,7 @@ impl Default for Config {
             panels: PanelsConfig::default(),
             history: HistoryConfig::default(),
             confirm_close: ConfirmClose::default(),
+            api: ApiConfig::default(),
             on_notification: None,
             on_agent: None,
             on_history: None,
@@ -652,6 +671,24 @@ impl Reader {
         config.on_agent = self.hook(root, "on_agent")?;
         config.on_history = self.hook(root, "on_history")?;
         config.on_close_window = self.hook(root, "on_close_window")?;
+        if let Some(table) = table_field(root, "api", "api")? {
+            for key in ["enabled", "ask"] {
+                match table
+                    .get::<Value>(key)
+                    .map_err(|err| format!("api.{key}: {err}"))?
+                {
+                    Value::Nil => {}
+                    Value::Boolean(on) if key == "enabled" => config.api.enabled = on,
+                    Value::Boolean(on) => config.api.ask = on,
+                    other => {
+                        return Err(format!(
+                            "api.{key}: expected true or false, got {}",
+                            other.type_name()
+                        ));
+                    }
+                }
+            }
+        }
         if let Some(text) = string_field(root, "confirm_close", "confirm_close")? {
             config.confirm_close = match text.as_str() {
                 "running" => ConfirmClose::Running,
@@ -1511,6 +1548,20 @@ mod tests {
             message: "Allow Bash?".into(),
             name: "claude".into(),
         }
+    }
+
+    #[test]
+    fn api_config() {
+        let a = load("return {}").config.api;
+        assert!(
+            a.enabled && a.ask,
+            "on, and it asks before another pane is used"
+        );
+        let a = load("return { api = { enabled = false, ask = false } }")
+            .config
+            .api;
+        assert!(!a.enabled && !a.ask);
+        assert!(load_str("return { api = { ask = 1 } }", "t").is_err());
     }
 
     #[test]

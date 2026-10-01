@@ -892,6 +892,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "fterm-api",
  "fterm-config",
  "fterm-history",
  "fterm-mux",
@@ -901,6 +902,7 @@ dependencies = [
  "notify-rust",
  "open",
  "pollster",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "wgpu",
@@ -960,6 +962,14 @@ dependencies = [
  "polling",
  "sysinfo",
  "tracing",
+]
+
+[[package]]
+name = "ftermctl"
+version = "0.1.0"
+dependencies = [
+ "fterm-api",
+ "serde_json",
 ]
 
 [[package]]

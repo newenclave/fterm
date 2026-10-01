@@ -64,6 +64,8 @@ pub enum Source {
     Lua,
     /// fterm itself (for example, a config error).
     App,
+    /// An API client (`ftermctl notify`, an MCP tool).
+    Api,
 }
 
 impl Source {
@@ -74,6 +76,7 @@ impl Source {
             Source::Agent => "agent",
             Source::Lua => "lua",
             Source::App => "app",
+            Source::Api => "api",
         }
     }
 }

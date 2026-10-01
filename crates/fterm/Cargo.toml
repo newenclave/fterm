@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 arboard.workspace = true
+fterm-api.workspace = true
 fterm-config.workspace = true
 fterm-history.workspace = true
 fterm-mux.workspace = true
@@ -18,6 +19,7 @@ notify.workspace = true
 notify-rust.workspace = true
 open.workspace = true
 pollster.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 wgpu.workspace = true
