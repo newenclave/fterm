@@ -28,6 +28,13 @@ To use it in Claude Code that runs outside of fterm, put the folder of `fterm.ex
 claude mcp add --scope user fterm -- C:\path\to\ftermctl.exe mcp
 ```
 
+**Claude Code in WSL** (in a WSL pane of fterm): Linux cannot open the Windows pipe, but WSL can start
+`.exe` files, and fterm gives WSL panes `FTERM_SOCKET` and `FTERM_PANE_ID` (with `WSLENV`). So use the `.exe` name:
+
+```
+claude mcp add --scope user fterm -- ftermctl.exe mcp
+```
+
 Other MCP clients: the command is `ftermctl` with the argument `mcp`, transport stdio.
 
 ## The tools

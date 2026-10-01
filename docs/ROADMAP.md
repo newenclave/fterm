@@ -224,7 +224,7 @@ Now the window × (and Alt+F4) closes fterm at once, with all tabs and programs.
 - **Check:** × with only shells closes at once (with `"running"`); with `claude` running it asks; a Lua hook
   that returns `false` keeps the window open and shows the toast.
 
-### Phase 6d — WSL (an idea from the user)
+### Phase 6d — WSL (an idea from the user) ✅ (done: profiles, shell integration, folders, history by world, WSLENV; see [CONFIG.md](CONFIG.md#wsl))
 - **Profiles:** fterm finds the WSL distros (`wsl.exe -l -q`) and makes a profile for each one
   (`wsl.exe -d Ubuntu --cd ~`), like Windows Terminal.
 - **Shell integration in WSL:** fterm starts bash or zsh with its script (it still loads your `~/.bashrc`),
@@ -320,5 +320,5 @@ Like a browser: when you open fterm again, you can get back what you had before 
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
 ## Next step
-Choose the next phase: 6d (WSL) or 3b (images).
+Choose the next phase: 3b (images) or 10 (release).
 Write a detailed plan for it. Then build it.

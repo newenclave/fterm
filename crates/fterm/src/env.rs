@@ -19,9 +19,45 @@ pub fn path_with(path: Option<&str>, dir: &str, windows: bool) -> String {
     }
 }
 
+/// `WSLENV` with the fterm vars, so they go into WSL panes too (`ftermctl.exe` and the hooks need them).
+/// `/u` = only from Windows to WSL; the values are not paths, so they do not change on the way.
+pub fn wslenv_with(wslenv: Option<&str>) -> String {
+    let mut parts: Vec<String> = wslenv
+        .unwrap_or("")
+        .split(':')
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect();
+    for name in ["TERM_PROGRAM", "FTERM_PANE_ID", "FTERM_SOCKET"] {
+        let there = parts.iter().any(|p| {
+            p.split('/')
+                .next()
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        });
+        if !there {
+            parts.push(format!("{name}/u"));
+        }
+    }
+    parts.join(":")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_fterm_vars_go_into_wsl() {
+        let ours = "TERM_PROGRAM/u:FTERM_PANE_ID/u:FTERM_SOCKET/u";
+        assert_eq!(wslenv_with(None), ours);
+        assert_eq!(wslenv_with(Some("")), ours);
+        // The user's vars stay first.
+        assert_eq!(wslenv_with(Some("GOPATH/l")), format!("GOPATH/l:{ours}"));
+        // A var that is there already (with any flags, any case) is not added again.
+        assert_eq!(
+            wslenv_with(Some("fterm_socket/p:USERPROFILE/pu")),
+            "fterm_socket/p:USERPROFILE/pu:TERM_PROGRAM/u:FTERM_PANE_ID/u"
+        );
+    }
 
     #[test]
     fn the_folder_goes_to_the_end() {

@@ -404,5 +404,17 @@ start as they are; for zsh add the line below to `~/.zshrc` (the path is `/mnt/c
 
 Every pane gets `TERM_PROGRAM=fterm`.
 
+## WSL
+- fterm makes a profile for each WSL distro (see "Profiles"). The shell integration works there with no setup
+  when the distro's shell is bash (see "Shell integration").
+- A new tab or split from a WSL pane opens the same distro in the same Linux folder. A session restores
+  WSL panes in their folders.
+- A WSL pane opened from a Windows pane starts in the same folder (`C:\work` is `/mnt/c/work`).
+  `\\wsl$\Ubuntu\home\me` (or `\\wsl.localhost\...`) opens as `/home/me` in Ubuntu.
+- The history popups (Alt+F8, Alt+F12) and hints show only the folders and commands of the pane's world.
+- `FTERM_PANE_ID`, `FTERM_SOCKET`, and `TERM_PROGRAM` go into WSL (fterm adds them to `WSLENV`), so
+  `ftermctl.exe` and `ftermctl.exe mcp` work in WSL panes (see [MCP.md](MCP.md)).
+- Claude Code hooks work in WSL as they are: their escape sequences go through the terminal.
+
 ## What comes later
 Functions for events (`on_output`, `on_agent_event`, …) come with Phase 6 (events and shell integration).

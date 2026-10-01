@@ -1313,6 +1313,20 @@ impl App {
         if let Some(socket) = socket {
             options.env.push(("FTERM_SOCKET".to_owned(), socket));
         }
+        // WSL panes get the fterm vars too (Windows vars do not go into WSL by themselves).
+        if cfg!(windows) {
+            let wslenv = options
+                .env
+                .iter()
+                .rev()
+                .find(|(k, _)| k.eq_ignore_ascii_case("WSLENV"))
+                .map(|(_, v)| v.clone())
+                .or_else(|| std::env::var("WSLENV").ok());
+            options.env.push((
+                "WSLENV".to_owned(),
+                crate::env::wslenv_with(wslenv.as_deref()),
+            ));
+        }
         // The folder of fterm.exe (with ftermctl.exe) at the end of PATH, so `ftermctl mcp` works in panes.
         if let Some(dir) = std::env::current_exe()
             .ok()
