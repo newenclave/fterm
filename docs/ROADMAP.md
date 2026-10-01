@@ -130,12 +130,30 @@ Ideas (we pick the order in the Phase 3 plan):
 - `fterm cli image file.png` and an MCP tool: they send images over the local API (Phase 7), not over ConPTY.
 - **Check:** `yazi` shows image previews, `chafa`/`imgcat` work, an agent shows a picture.
 
-### Phase 4 — Tabs (and split panes)
-- Model: window → tabs → panes.
+### Phase 4 — Tabs
+- Model: window → tabs → panes. A tab has a tree of panes (from the start, so splits fit in later).
 - Tab bar with `egui`. Hot keys. Tab title from the app (OSC 0/2). Rename tabs.
 - Ask before closing a tab with a running app.
-- Split panes come in Phase 4b.
 - **Check:** open 5+ tabs with different shells. Switch and close them. No processes stay alive.
+
+### Phase 4b — Split panes
+- Split a pane **right** or **down**, many times: each tab is a tree of panes (like tmux and WezTerm).
+  Each pane has its own shell or app, its own scroll history, selection, and copy mode.
+- **Focus:** click a pane, or Alt + arrows. The pane with focus has a colored border;
+  the others are a bit darker (optional).
+- **Resize:** drag the line between panes with the mouse, or Alt + Shift + arrows.
+  Each pane sends its own new size to its pty.
+- **Zoom:** one key makes the current pane full size in the tab, the same key brings the layout back.
+- **Move and swap** panes; move a pane to a new tab, or join a tab into a pane.
+- **Close** a pane: the space goes to its neighbor. The last pane closes the tab.
+- Drawing: one GPU frame for the whole window. Each pane is a rect with its own grid quads
+  (a scissor rect per pane), so splits do not cost more draw calls than needed.
+- **Broadcast input** (optional): type into many panes at once.
+- Later (with Phases 5–7): save layouts in the config (`fterm.lua`), open a layout from a profile
+  (for example: Claude on the left, the shell and `cargo watch` on the right),
+  and control panes from the API and MCP (`split`, `focus`, `resize`, `send-text` to a pane).
+- **Check:** split 2×2, run `claude`, `vim`, `htop`-like output, and a shell. Resize with the mouse,
+  zoom one pane, close panes in any order. Every pane gets the right size, and no processes stay alive.
 
 ### Phase 5 — Config and profiles
 - The config is a **script**, not only a list of values: it has functions and tables,
