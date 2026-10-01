@@ -8,6 +8,17 @@ use fterm_ai::{AiError, Chat, Event, Kind, Provider, keys, stream};
 
 use super::*;
 use crate::ai_chat::{ContextItem, InputBox, build_message, last_code_block, system_prompt};
+use crate::text_command::clean_command;
+
+/// "Text to command" that waits for its answer.
+pub(super) struct PendingCommand {
+    id: u64,
+    pane: PaneId,
+    /// The task as it was typed (the prompt must still show it when the command comes).
+    typed: String,
+    answer: String,
+    stop: Arc<AtomicBool>,
+}
 
 impl App {
     /// The provider from the config, as `fterm_ai` wants it.
@@ -402,6 +413,207 @@ impl App {
         if let Some(text) = text.filter(|t| !t.is_empty()) {
             self.copy_text(text);
         }
+    }
+
+    /// `text_to_command`: the task typed in the prompt goes to the AI; the command comes in its place.
+    pub(super) fn text_to_command(&mut self) {
+        let Some(running) = &self.running else {
+            return;
+        };
+        let Some(pane_id) = running.mux.active_pane() else {
+            return;
+        };
+        let pane = &running.panes[&pane_id];
+        if pane.shell.is_running() {
+            return self.notify(
+                None,
+                "A program runs in this pane",
+                "Text to command works at the prompt of a shell.",
+                Level::Info,
+                Source::App,
+            );
+        }
+        let typed = pane
+            .shell
+            .input_start()
+            .and_then(|start| pane.session.with_term(|term| typed_input(term, start)))
+            .map(|i| i.text)
+            .unwrap_or_default();
+        if typed.trim().is_empty() {
+            return self.notify(
+                None,
+                "Type a task first",
+                "Write what you want in the prompt (for example: find the 10 biggest files), then press Ctrl+Shift+G.",
+                Level::Info,
+                Source::App,
+            );
+        }
+        if self.pending_command.is_some() {
+            return;
+        }
+        let shell = display_name(pane.session.program()).to_owned();
+        let cwd = pane.shell.cwd.clone();
+        let mut provider = match self.ai_provider() {
+            Ok(provider) => provider,
+            Err(err) => {
+                return self.notify(None, "Text to command", &err, Level::Error, Source::App);
+            }
+        };
+        if let Some(model) = &self.config.config.ai.command_model {
+            provider.model = model.clone();
+        }
+        let os = match std::env::consts::OS {
+            "windows" => "Windows",
+            "macos" => "macOS",
+            "linux" => "Linux",
+            other => other,
+        };
+        let chat = Chat {
+            system: crate::text_command::system_prompt(os, &shell, cwd.as_deref()),
+            messages: vec![fterm_ai::Message {
+                role: fterm_ai::Role::User,
+                content: typed.trim().to_owned(),
+            }],
+            max_tokens: 400,
+        };
+        self.command_next_id += 1;
+        let id = self.command_next_id;
+        let stop = Arc::new(AtomicBool::new(false));
+        self.pending_command = Some(PendingCommand {
+            id,
+            pane: pane_id,
+            typed,
+            answer: String::new(),
+            stop: stop.clone(),
+        });
+        let proxy = self.proxy.clone();
+        tracing::info!(provider = %provider.name, model = %provider.model, "text to command");
+        let _ = std::thread::Builder::new()
+            .name("fterm-ai-command".into())
+            .spawn(move || {
+                let key = if provider.needs_key {
+                    keys::get(&provider)
+                } else {
+                    None
+                };
+                stream::run(&provider, key.as_deref(), &chat, &stop, &mut |event| {
+                    let _ = proxy.send_event(UserEvent::AiCommand(id, event));
+                });
+            });
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// Stops a waiting "text to command". `true` when there was one.
+    pub(super) fn stop_command(&mut self) -> bool {
+        match self.pending_command.take() {
+            Some(pending) => {
+                pending.stop.store(true, Ordering::SeqCst);
+                if let Some(running) = &self.running {
+                    running.window.request_redraw();
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub(super) fn command_event(&mut self, id: u64, event: Event) {
+        let Some(pending) = self.pending_command.as_mut().filter(|p| p.id == id) else {
+            return;
+        };
+        match event {
+            Event::Delta(text) => {
+                pending.answer.push_str(&text);
+                return;
+            }
+            Event::Failed(AiError::Stopped) => {
+                self.pending_command = None;
+            }
+            Event::Failed(err) => {
+                self.pending_command = None;
+                self.notify(
+                    None,
+                    "Text to command failed",
+                    &err.to_string(),
+                    Level::Error,
+                    Source::App,
+                );
+            }
+            Event::Done { .. } => {
+                let Some(pending) = self.pending_command.take() else {
+                    return;
+                };
+                let command = clean_command(&pending.answer);
+                if command.is_empty() {
+                    self.notify(
+                        None,
+                        "No command came back",
+                        &pending.answer,
+                        Level::Warning,
+                        Source::App,
+                    );
+                } else {
+                    self.put_command(pending.pane, &pending.typed, &command);
+                }
+            }
+        }
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// Puts the command in place of the task, when the prompt still shows the task. Else it is copied.
+    fn put_command(&mut self, pane_id: PaneId, task: &str, command: &str) {
+        let now = self
+            .running
+            .as_ref()
+            .and_then(|r| r.panes.get(&pane_id))
+            .and_then(|pane| {
+                if pane.shell.is_running() {
+                    return None;
+                }
+                pane.shell
+                    .input_start()
+                    .and_then(|start| pane.session.with_term(|term| typed_input(term, start)))
+                    .map(|i| i.text)
+            });
+        if now.as_deref() != Some(task) {
+            self.copy_text(command.to_owned());
+            return self.notify(
+                None,
+                "The command is ready (copied)",
+                command,
+                Level::Info,
+                Source::App,
+            );
+        }
+        if let Some(session) = self
+            .running
+            .as_ref()
+            .and_then(|r| r.panes.get(&pane_id))
+            .map(|p| &p.session)
+        {
+            session.write(crate::history_popup::replace_input(task, command, false));
+        }
+    }
+
+    /// The grey text after the cursor while "text to command" waits.
+    pub(super) fn pending_hint(&self) -> Option<(String, usize, usize)> {
+        let pending = self.pending_command.as_ref()?;
+        let running = self.running.as_ref()?;
+        if running.mux.active_pane() != Some(pending.pane) {
+            return None;
+        }
+        let pane = running.panes.get(&pending.pane)?;
+        let (column, line) = pane.session.with_term(|term| {
+            let point = term.grid().cursor.point;
+            usize::try_from(point.line.0)
+                .ok()
+                .map(|l| (point.column.0, l))
+        })?;
+        Some(("  ⏳ asking AI… (Esc = stop)".to_owned(), column, line))
     }
 
     /// How many chat lines fit now.

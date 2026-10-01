@@ -124,7 +124,7 @@ also work on other layouts (for example, Russian).
 | `toggle_dock`, `panel_events`, `panel_agents`, `focus_dock` | The dock and its panels (see [KEYS.md](KEYS.md)). |
 | `history_commands`, `history_dirs` | The command and folder history (Alt+F8, Alt+F12). |
 | `toggle_remote_control` | API clients may (or may not) read and type into this pane (see [API.md](API.md)). |
-| `panel_ai`, `explain_error`, `ask_ai_selection`, `set_ai_key` | The AI panel (see [AI.md](AI.md)). |
+| `panel_ai`, `explain_error`, `ask_ai_selection`, `set_ai_key`, `text_to_command` | The AI panel and text to command (see [AI.md](AI.md)). |
 
 ### Lua functions
 A function gets an object `fterm` with these functions:

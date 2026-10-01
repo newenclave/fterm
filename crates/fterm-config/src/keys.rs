@@ -190,11 +190,13 @@ pub enum BuiltinAction {
     ExplainError,
     /// Open the AI panel with the selected text as context.
     AskAiSelection,
+    /// The task typed in the prompt becomes a command (Phase 9).
+    TextToCommand,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 42] = [
+    pub const ALL: [BuiltinAction; 43] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -237,6 +239,7 @@ impl BuiltinAction {
         Self::SetAiKey,
         Self::ExplainError,
         Self::AskAiSelection,
+        Self::TextToCommand,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -284,6 +287,7 @@ impl BuiltinAction {
             Self::SetAiKey => "set_ai_key",
             Self::ExplainError => "explain_error",
             Self::AskAiSelection => "ask_ai_selection",
+            Self::TextToCommand => "text_to_command",
         };
         name.to_owned()
     }
@@ -319,6 +323,7 @@ impl BuiltinAction {
             Self::SetAiKey => "Set the AI key".to_owned(),
             Self::ExplainError => "Explain the last error (AI)".to_owned(),
             Self::AskAiSelection => "Ask AI about the selection".to_owned(),
+            Self::TextToCommand => "Text to command (AI)".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -407,6 +412,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+shift+o", "focus_dock"),
     ("ctrl+shift+i", "panel_ai"),
     ("ctrl+shift+x", "explain_error"),
+    ("ctrl+shift+g", "text_to_command"),
     ("alt+f8", "history_commands"),
     ("alt+f12", "history_dirs"),
 ];
@@ -456,6 +462,17 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_to_command_action() {
+        let keys = Keymap::with_defaults();
+        assert_eq!(
+            keys.get(&chord("ctrl+shift+g")),
+            Some(&Action::Builtin(BuiltinAction::TextToCommand))
+        );
+        assert_eq!(BuiltinAction::TextToCommand.name(), "text_to_command");
+        assert_eq!(BuiltinAction::TextToCommand.label(), "Text to command (AI)");
+    }
 
     #[test]
     fn config_keys() {

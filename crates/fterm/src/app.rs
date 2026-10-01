@@ -79,6 +79,8 @@ pub enum UserEvent {
     ApiGone(fterm_api::server::ClientId),
     /// A piece of an AI answer (request id, event).
     Ai(u64, fterm_ai::Event),
+    /// A piece of a "text to command" answer.
+    AiCommand(u64, fterm_ai::Event),
 }
 
 mod ai_calls;
@@ -359,6 +361,9 @@ pub struct App {
     ai: crate::ai_chat::Session,
     ai_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     key_prompt: Option<crate::ai_chat::InputBox>,
+    /// "Text to command" that waits for its answer.
+    pending_command: Option<ai_calls::PendingCommand>,
+    command_next_id: u64,
     /// The Events panel was on the screen (and fterm in front) in the last frame.
     /// When it goes away, its events count as read.
     events_seen: bool,
@@ -412,6 +417,8 @@ impl App {
             ai: crate::ai_chat::Session::default(),
             ai_stop: None,
             key_prompt: None,
+            pending_command: None,
+            command_next_id: 0,
             center: Center::new(4, true),
             shell_script: shell_script_path(),
             palette: None,
@@ -1669,6 +1676,9 @@ impl App {
         if action == A::ExplainError {
             return self.explain_error();
         }
+        if action == A::TextToCommand {
+            return self.text_to_command();
+        }
         if action == A::AskAiSelection {
             return self.ask_ai_selection();
         }
@@ -1804,7 +1814,7 @@ impl App {
             A::OpenConfig => return self.open_config(),
             A::ToggleDock | A::PanelEvents | A::PanelAgents | A::FocusDock => {}
             A::HistoryCommands | A::HistoryDirs => {}
-            A::PanelAi | A::SetAiKey | A::ExplainError | A::AskAiSelection => {}
+            A::PanelAi | A::SetAiKey | A::ExplainError | A::AskAiSelection | A::TextToCommand => {}
             A::ToggleRemoteControl => {
                 let Some(pane) = running.mux.active_pane() else {
                     return;
@@ -3042,7 +3052,7 @@ impl App {
                     }
                 })
             });
-        let hint = self.current_hint();
+        let hint = self.pending_hint().or_else(|| self.current_hint());
         let tabs_width = self.running.as_ref().map_or(0.0, |r| {
             self.tabs_width(r.window.inner_size().width as f32, r.renderer.cell())
         });
@@ -3280,6 +3290,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Api(request) => return self.api_call(event_loop, request),
             UserEvent::ApiGone(client) => return self.api_client_gone(client),
             UserEvent::Ai(id, event) => return self.ai_event(id, event),
+            UserEvent::AiCommand(id, event) => return self.command_event(id, event),
             other => other,
         };
         let Some(running) = &mut self.running else {
@@ -3291,7 +3302,12 @@ impl ApplicationHandler<UserEvent> for App {
                 self.reload_at = Some(Instant::now() + CONFIG_DEBOUNCE);
                 return;
             }
-            UserEvent::Api(_) | UserEvent::ApiGone(_) | UserEvent::Ai(..) => return,
+            UserEvent::Api(_)
+            | UserEvent::ApiGone(_)
+            | UserEvent::Ai(..)
+            | UserEvent::AiCommand(..) => {
+                return;
+            }
         };
         match event {
             TermEvent::Redraw => {
@@ -3544,6 +3560,9 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if let Some(action) = action {
                     self.run_action(event_loop, action);
+                    return;
+                }
+                if event.logical_key == Key::Named(NamedKey::Escape) && self.stop_command() {
                     return;
                 }
                 let plain =

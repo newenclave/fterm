@@ -271,11 +271,30 @@ that want a URL, and saved "always allow" answers.
 - Side panel with chat. You can add context: selected text, last command output, current folder, error.
 - **Check:** ask about a failed command with local Ollama and with the Claude API.
 
-### Phase 9 — Text to command
+### Phase 9 — Text to command ✅ (done: the task in the prompt + Ctrl+Shift+G; see [AI.md](AI.md#text-to-command))
 - A small window (for example Ctrl+Shift+Space).
 - You write a task in normal words. AI gives a command for your shell and OS.
 - You see the command first. Then it goes into the terminal without Enter (or runs after you say yes).
 - **Check:** "find the 10 biggest files in this folder" gives a good command for PowerShell and for bash.
+
+### Phase 9b — Restore the session (an idea from the user)
+Like a browser: when you open fterm again, you can get back what you had before you closed it.
+- **What is saved:** the window size and place; all tabs (their titles, the active tab); the split layout of each tab
+  (the tree and the sizes); for each pane its profile, its folder (OSC 7), and its title; the dock (open, the panel, the size);
+  and the AI chat.
+- **When:** when fterm closes, and every 30 seconds (so a crash or a reboot does not lose it).
+  The file is `%LOCALAPPDATA%\fterm\session.json` (one per window when there are many).
+- **Restore:** `restore = "ask"` (the default: at start, a small box "Restore the last session? 4 tabs, 7 panes"),
+  `"always"`, or `"never"`. Also the command palette: **Restore the last session**.
+- **Programs cannot come back**, only shells: each pane starts its profile in its old folder. Panes where a program ran
+  (for example `cargo watch`, `npm run dev`) show a line "This pane ran: npm run dev" and a key to run it again.
+- **Agents:** a pane where Claude Code ran can start `claude --continue` in its folder (it brings back the conversation),
+  with a question first (`restore_agents = "ask" | "always" | "never"`).
+- **The old text (optional):** the last screen of each pane (and N lines of history) is drawn above the new prompt in grey,
+  so you see where you were. `restore_history = 200` lines; `0` = off. Secrets: it uses the `on_history` filter.
+- Lua: `on_restore = function(session) … end` can change or drop tabs before they open.
+- **Check:** open 3 tabs with splits in different folders, close fterm, open it again: the box asks, Enter brings back
+  the same tabs, layouts, and folders; a crash (kill the process) still restores the state from the last 30 seconds.
 
 ### Phase 10 — All systems and release
 - Finish Linux and macOS support (pty, fonts, IME, macOS menu).
@@ -293,5 +312,5 @@ that want a URL, and saved "always allow" answers.
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
 ## Next step
-Choose the next phase: 9 (text to command), 6d (WSL), or 3b (images).
+Choose the next phase: 9b (restore the session), 6d (WSL), or 3b (images).
 Write a detailed plan for it. Then build it.

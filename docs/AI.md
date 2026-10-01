@@ -14,6 +14,21 @@ next to Events and Agents.
 With every question fterm sends: your OS, the shell of the active pane, and its folder.
 Nothing else from your terminal goes out, unless you add it (see Context).
 
+## Text to command
+Write what you want in the prompt of your shell, in normal words, and press **Ctrl+Shift+G**:
+
+```
+PS C:\work> find the 10 biggest files here        <- you type this, then Ctrl+Shift+G
+PS C:\work> Get-ChildItem -File | Sort-Object Length -Descending | Select-Object -First 10
+```
+
+- The AI gets your task, the shell of the pane, the OS, and the folder, and gives one command for that shell.
+- The command takes the place of your text. **It does not run**: read it, change it, and press Enter yourself.
+  (In PowerShell, `Ctrl+Z` brings back your text.)
+- While it waits, grey text after the cursor says "asking AI…". **Esc** stops it.
+- When you change the prompt while it waits, fterm does not touch it: the command goes to the clipboard.
+- Use another (for example a bigger) model only for this: `ai = { command_model = "claude-sonnet-5" }`.
+
 ## Context
 Chips over the input show what goes with the next question. Only what you see there goes out.
 

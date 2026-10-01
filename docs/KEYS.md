@@ -146,6 +146,7 @@ New events have a bright title. They count as read when the Events panel goes aw
 |---|---|
 | Ctrl + Shift + I | Open the AI panel (press again to close the dock). |
 | Ctrl + Shift + X | Explain the last error: the last command and its output go to the AI. |
+| Ctrl + Shift + G | Text to command: the task typed in the prompt becomes a command (it does not run). |
 | Enter / Shift + Enter | Send / a new line. |
 | Esc | Stop the answer; again = back to the terminal. |
 | Ctrl + Shift + Enter | Put the last command of the answer into the prompt (it does not run). |

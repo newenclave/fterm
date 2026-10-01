@@ -137,6 +137,8 @@ pub struct AiConfig {
     /// Extra instructions from the user.
     pub system: String,
     pub max_tokens: u32,
+    /// The model for "text to command" (`None` = the model of the provider).
+    pub command_model: Option<String>,
 }
 
 impl AiConfig {
@@ -199,6 +201,7 @@ impl Default for AiConfig {
             ],
             system: String::new(),
             max_tokens: 2048,
+            command_model: None,
         }
     }
 }
@@ -1020,6 +1023,8 @@ fn ai(table: &Table) -> Result<AiConfig, String> {
     if let Some(system) = string_field(table, "system", "ai.system")? {
         ai.system = system;
     }
+    ai.command_model =
+        string_field(table, "command_model", "ai.command_model")?.filter(|m| !m.trim().is_empty());
     if let Some(n) = number_field(table, "max_tokens", "ai.max_tokens")? {
         if !(1.0..=200_000.0).contains(&n) {
             return Err(format!(
@@ -1966,6 +1971,15 @@ mod tests {
             (lm.kind, lm.url.as_str(), lm.needs_key),
             (AiKind::OpenAi, "http://localhost:1234/v1", false)
         );
+    }
+
+    #[test]
+    fn a_model_for_commands() {
+        assert_eq!(load("return {}").config.ai.command_model, None);
+        let ai = load(r#"return { ai = { command_model = "claude-sonnet-5" } }"#)
+            .config
+            .ai;
+        assert_eq!(ai.command_model.as_deref(), Some("claude-sonnet-5"));
     }
 
     #[test]
