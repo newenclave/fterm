@@ -52,6 +52,31 @@ pub struct Fonts {
     cache: SwashCache,
     size_px: f32,
     cell: CellMetrics,
+    /// The color emoji font of this system (for chars with VS16), if there is one.
+    emoji_family: Option<String>,
+}
+
+/// The color emoji fonts of macOS, Windows, and Linux, in this order of choice.
+const EMOJI_FAMILIES: [&str; 5] = [
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Noto Color Emoji",
+    "Twemoji Mozilla",
+    "JoyPixels",
+];
+
+/// The best color emoji font among `families`.
+fn pick_emoji_family<'a>(families: impl Iterator<Item = &'a str>) -> Option<String> {
+    let found: Vec<&str> = families.collect();
+    EMOJI_FAMILIES
+        .iter()
+        .find(|want| found.iter().any(|f| f.eq_ignore_ascii_case(want)))
+        .map(|f| (*f).to_owned())
+}
+
+/// The cluster asks for an emoji picture: it has VS16 (U+FE0F). A char like `❤` alone may be text.
+fn wants_emoji(text: &str) -> bool {
+    text.contains('\u{fe0f}')
 }
 
 impl Fonts {
@@ -104,7 +129,15 @@ impl Fonts {
                 height,
                 baseline,
             },
+            emoji_family: None,
         };
+        fonts.emoji_family = pick_emoji_family(
+            fonts
+                .system
+                .db()
+                .faces()
+                .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str())),
+        );
         // Whole pixels, so the backgrounds of cells meet with no gaps.
         fonts.cell.width = fonts.advance('M').round();
         Ok(fonts)
@@ -272,8 +305,14 @@ impl Fonts {
     fn shape(&mut self, text: &str, bold: bool, italic: bool, size_px: f32) -> Vec<LayoutGlyph> {
         let metrics = Metrics::new(size_px, self.cell.height.max(size_px));
         let mut buffer = Buffer::new(&mut self.system, metrics);
+        // VS16 asks for a color emoji. The fallback of cosmic-text can take a text font for it
+        // (macOS draws `❤️` with a text heart), so ask the emoji font by name.
+        let family = match &self.emoji_family {
+            Some(emoji) if wants_emoji(text) => emoji.clone(),
+            _ => FAMILY.to_owned(),
+        };
         let attrs = Attrs::new()
-            .family(Family::Name(FAMILY))
+            .family(Family::Name(&family))
             .weight(if bold { Weight::BOLD } else { Weight::NORMAL })
             .style(if italic { Style::Italic } else { Style::Normal });
         let mut buffer = buffer.borrow_with(&mut self.system);
@@ -460,6 +499,50 @@ mod tests {
                 None
             }
         }
+    }
+
+    #[test]
+    fn the_emoji_font_of_each_system() {
+        let families = ["Arial", "Noto Color Emoji", "Segoe UI Emoji"];
+        assert_eq!(
+            pick_emoji_family(families.iter().copied()).as_deref(),
+            Some("Segoe UI Emoji")
+        );
+        assert_eq!(
+            pick_emoji_family(["Noto Color Emoji", "DejaVu Sans"].iter().copied()).as_deref(),
+            Some("Noto Color Emoji")
+        );
+        assert_eq!(
+            pick_emoji_family(["Apple Color Emoji"].iter().copied()).as_deref(),
+            Some("Apple Color Emoji")
+        );
+        assert_eq!(pick_emoji_family(["Arial"].iter().copied()), None);
+    }
+
+    #[test]
+    fn vs16_asks_for_an_emoji() {
+        assert!(wants_emoji("❤\u{fe0f}"));
+        assert!(wants_emoji("✔\u{fe0f}"));
+        assert!(!wants_emoji("❤"), "a heart alone may be text");
+        assert!(!wants_emoji("a"));
+    }
+
+    #[test]
+    fn a_char_with_vs16_uses_the_emoji_font() {
+        let mut fonts = Fonts::new(16.0).unwrap();
+        let Some(emoji) = fonts.emoji_family.clone() else {
+            eprintln!("skipped: no emoji font here");
+            return;
+        };
+        for text in ["❤\u{fe0f}", "✔\u{fe0f}", "☀\u{fe0f}"] {
+            assert_eq!(
+                fonts.font_family(text).as_deref(),
+                Some(emoji.as_str()),
+                "{text:?}"
+            );
+        }
+        // Without VS16 a plain char keeps its text font.
+        assert_eq!(fonts.font_family("a").as_deref(), Some(FAMILY));
     }
 
     #[test]

@@ -19,7 +19,7 @@ jobs:
 
       - name: Install Linux packages
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev fonts-noto-color-emoji
 
       - uses: dtolnay/rust-toolchain@stable
         with:
