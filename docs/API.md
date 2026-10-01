@@ -29,17 +29,29 @@ Agents (Claude Code, OpenCode), scripts, and `ftermctl` use it. MCP is in [MCP.m
 - `api = { ask = false }` in the config: no questions (only "remote control off" still stops clients).
 
 ## ftermctl
-`ftermctl` is a small console program next to `fterm.exe`. It finds the window by `FTERM_SOCKET`,
-by `--window <pid>`, or it takes the newest fterm window.
+`ftermctl` is a small console program next to `fterm.exe` (fterm.exe is a window program, so a shell does not
+wait for it and does not see its output). It finds the window by `FTERM_SOCKET`, by `--window <pid>`,
+or it takes the newest fterm window. Without `--pane`, a command uses your own pane (inside fterm),
+else the active pane.
 
 ```
-ftermctl call list
-ftermctl call spawn '{"place": "right"}'
-ftermctl call send_text '{"pane": 3, "text": "cargo test", "enter": true}'
-ftermctl call get_text '{"pane": 3, "what": "history", "lines": 50}'
+ftermctl list                                  # all tabs and panes
+ftermctl spawn --right                         # a split on the right; prints the new pane id
+ftermctl run --pane 3 --wait cargo test        # type it, wait for the end, print the output,
+                                               # and exit with the exit code of cargo
+ftermctl get-text --pane 3 --last-output       # the output of the last command
+ftermctl send-text --pane 3 --enter git status
+ftermctl wait-for --pane 3 text --pattern "ready" --timeout 60
+ftermctl notify "Deploy is done" --level success
+ftermctl send-message 3 "please review the diff"
+ftermctl read-messages                         # the messages of your own pane
+ftermctl subscribe command_done agent_state    # events as JSON lines
+ftermctl call list                             # any method with JSON params
+ftermctl --json list                           # JSON for scripts
 ```
 
-More commands (without JSON) come in the next step.
+`ftermctl help` shows all commands. Exit codes: 0 = good, 1 = an error from fterm, 2 = bad arguments;
+`run --wait` gives the exit code of the command.
 
 ## Methods
 A missing `pane` means: the pane of the client (from `hello`), else the active pane.
