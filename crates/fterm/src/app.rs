@@ -10,7 +10,7 @@ use fterm_config::load::{
     SAMPLE_CONFIG, ToastPosition, config_path, load_file,
 };
 use fterm_config::profiles::{Profile, detect_profiles, launch_command, path_extension, which};
-use fterm_history::{CommandRecord, History, Limits, now_ms, should_save};
+use fterm_history::{CommandFilter, CommandRecord, History, Limits, now_ms, should_save};
 use fterm_mux::{Closed, Direction, Edge, Mux, PaneId, Rect, TabId};
 use fterm_render::Renderer;
 use fterm_render::builtin::BrailleStyle;
@@ -27,6 +27,7 @@ use fterm_term::alacritty_terminal::selection::{Selection, SelectionType};
 use fterm_term::alacritty_terminal::term::TermMode;
 use fterm_term::colors::{ColorOverrides, Palette};
 use fterm_term::copy_mode::{self, CopyAction, CopyResult};
+use fterm_term::input::typed_input;
 use fterm_term::links::url_at;
 use fterm_term::osc::OscEvent;
 use fterm_term::process::{display_name, running_children};
@@ -43,7 +44,10 @@ use winit::window::{CursorIcon, Window, WindowId};
 use crate::agent::{AgentKind, AgentState, badge_color, notification_for, tab_badge};
 use crate::clipboard::{Clipboard, paste_bytes};
 use crate::gpu::Gpu;
-use crate::input::{KeyInput, copy_mode_action, encode_key, key_chord};
+use crate::history_popup::{
+    HistoryPopup, PopupKind, PopupRow, cd_command, command_rows, dir_rows, replace_input,
+};
+use crate::input::{KeyInput, copy_mode_action, encode_key, key_chord, physical_letter};
 use crate::mouse::{
     ClickCounter, GridGeometry, ReportButton, ReportKind, ReportMods, Wheel, autoscroll_lines,
     encode_mouse,
@@ -255,6 +259,15 @@ enum CloseTarget {
 /// One line of the command palette to draw: (label, key, is it selected).
 type PaletteRow = (String, String, bool);
 
+/// A list to draw like the palette: the command palette, or a history popup.
+struct ListView {
+    query: String,
+    rows: Vec<PaletteRow>,
+    title: String,
+    footer: &'static str,
+    bad: Vec<bool>,
+}
+
 /// "Close the tab? A program is running."
 struct CloseQuestion {
     target: CloseTarget,
@@ -291,6 +304,10 @@ pub struct App {
     center: Center,
     /// The folder and command history (`None` when it is off, or its folder cannot be made).
     history: Option<History>,
+    /// The history popup (Alt+F8 / Alt+F12), when it is open.
+    history_popup: Option<HistoryPopup>,
+    /// The next new pane starts in this folder (a choice in the folder popup).
+    spawn_cwd: Option<String>,
     /// The Events panel was on the screen (and fterm in front) in the last frame.
     /// When it goes away, its events count as read.
     events_seen: bool,
@@ -329,6 +346,8 @@ impl App {
             reload_at: None,
             events_seen: false,
             history: None,
+            history_popup: None,
+            spawn_cwd: None,
             center: Center::new(4, true),
             shell_script: shell_script_path(),
             palette: None,
@@ -1109,6 +1128,9 @@ impl App {
                 ..SessionOptions::default()
             },
         };
+        if let Some(dir) = self.spawn_cwd.take() {
+            options.cwd = Some(std::path::PathBuf::from(dir)).filter(|dir| dir.is_dir());
+        }
         let running = self.running.as_mut().expect("the window is open");
         let id = running.mux.new_pane_id();
         // Hooks of tools in the pane (for example Claude Code) can use it.
@@ -1373,6 +1395,14 @@ impl App {
             action,
             A::ToggleDock | A::PanelEvents | A::PanelAgents | A::FocusDock
         );
+        if matches!(action, A::HistoryCommands | A::HistoryDirs) {
+            let kind = if action == A::HistoryCommands {
+                PopupKind::Commands
+            } else {
+                PopupKind::Dirs
+            };
+            return self.open_history_popup(kind);
+        }
         if dock_action {
             if let Some(running) = &mut self.running {
                 match action {
@@ -1473,6 +1503,7 @@ impl App {
             A::ReloadConfig => return self.reload_config(),
             A::OpenConfig => return self.open_config(),
             A::ToggleDock | A::PanelEvents | A::PanelAgents | A::FocusDock => {}
+            A::HistoryCommands | A::HistoryDirs => {}
             A::CopyClaudeHooks => {
                 self.copy_text(crate::agent::CLAUDE_HOOKS.to_owned());
                 self.notify(
@@ -1532,6 +1563,230 @@ impl App {
     }
 
     /// Keys while the command palette is open. All keys go to the palette.
+    /// The rows of a history popup, with its filters.
+    fn history_rows(
+        &self,
+        kind: PopupKind,
+        only_here: bool,
+        only_ok: bool,
+        here: Option<&str>,
+    ) -> Vec<PopupRow> {
+        let Some(history) = &self.history else {
+            return Vec::new();
+        };
+        let now = now_ms();
+        match kind {
+            PopupKind::Commands => {
+                let filter = CommandFilter {
+                    cwd: if only_here {
+                        here.map(str::to_owned)
+                    } else {
+                        None
+                    },
+                    only_ok,
+                };
+                command_rows(&history.commands(&filter), now)
+            }
+            PopupKind::Dirs => dir_rows(&history.dirs(now), now, |dir| {
+                std::path::Path::new(dir).is_dir()
+            }),
+        }
+    }
+
+    /// Opens the command or folder popup. The query starts with the typed text of the active pane.
+    fn open_history_popup(&mut self, kind: PopupKind) {
+        let Some(history) = &mut self.history else {
+            self.notify(
+                None,
+                "The history is off",
+                "Turn it on with history = { enabled = true } in the config.",
+                Level::Info,
+                Source::App,
+            );
+            return;
+        };
+        for problem in history.refresh() {
+            tracing::warn!("history: {problem}");
+        }
+        let (typed, here) = self
+            .running
+            .as_ref()
+            .and_then(Running::active_pane)
+            .map(|pane| {
+                let typed = pane
+                    .shell
+                    .input_start()
+                    .and_then(|start| pane.session.with_term(|term| typed_input(term, start)))
+                    .map(|input| input.text)
+                    .unwrap_or_default();
+                (typed, pane.shell.cwd.clone())
+            })
+            .unwrap_or_default();
+        let rows = self.history_rows(kind, false, false, here.as_deref());
+        // Folders: the typed text is not a folder name, so it does not filter them.
+        let query = if kind == PopupKind::Commands {
+            typed.clone()
+        } else {
+            String::new()
+        };
+        let mut popup = HistoryPopup::new(kind, rows, query, here);
+        popup.typed = typed;
+        self.palette = None;
+        self.history_popup = Some(popup);
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// Builds the rows again (after a filter, a pin, or a forget). The query stays.
+    fn refresh_history_popup(&mut self) {
+        let Some(popup) = &self.history_popup else {
+            return;
+        };
+        let rows = self.history_rows(
+            popup.kind,
+            popup.only_here,
+            popup.only_ok,
+            popup.here.as_deref(),
+        );
+        if let Some(popup) = &mut self.history_popup {
+            popup.set_rows(rows);
+        }
+    }
+
+    /// Enter in a history popup. `run` = Shift+Enter, `split` = Ctrl+Enter.
+    fn accept_history_popup(&mut self, run: bool, split: bool) {
+        let Some(popup) = self.history_popup.take() else {
+            return;
+        };
+        let Some(row) = popup.selected().cloned() else {
+            return;
+        };
+        let busy = self
+            .running
+            .as_ref()
+            .and_then(Running::active_pane)
+            .is_some_and(|pane| pane.shell.is_running());
+        match popup.kind {
+            PopupKind::Dirs if run || split => {
+                self.spawn_cwd = Some(row.text.clone());
+                let place = if split {
+                    SpawnWhere::SplitRight
+                } else {
+                    SpawnWhere::Tab
+                };
+                self.spawn(None, place);
+                return;
+            }
+            _ if busy => {
+                // Never type into a running program: copy instead.
+                self.copy_text(row.text.clone());
+                self.notify(
+                    None,
+                    "A program runs in this pane",
+                    "The text is copied. Paste it where you need it.",
+                    Level::Info,
+                    Source::App,
+                );
+            }
+            PopupKind::Commands => self.type_into_prompt(&popup.typed, &row.text, run),
+            PopupKind::Dirs => {
+                let program = self
+                    .running
+                    .as_ref()
+                    .and_then(Running::active_pane)
+                    .map(|pane| pane.session.program().to_owned())
+                    .unwrap_or_default();
+                let command = cd_command(&program, &row.text);
+                self.type_into_prompt(&popup.typed, &command, true);
+            }
+        }
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// Puts `text` into the prompt of the active pane in place of `typed`.
+    fn type_into_prompt(&self, typed: &str, text: &str, run: bool) {
+        if let Some(session) = self.running.as_ref().and_then(Running::session) {
+            session.with_term_mut(|term, _| term.scroll_display(Scroll::Bottom));
+            session.write(replace_input(typed, text, run));
+        }
+    }
+
+    fn history_key(&mut self, event: &KeyEvent) {
+        let Some(popup) = &mut self.history_popup else {
+            return;
+        };
+        let ctrl = self.mods.control_key();
+        let shift = self.mods.shift_key();
+        let letter = if ctrl {
+            physical_letter(event.physical_key)
+        } else {
+            None
+        };
+        let kind = popup.kind;
+        match (&event.logical_key, letter) {
+            (Key::Named(NamedKey::Escape), _) => self.history_popup = None,
+            (Key::Named(NamedKey::Enter), _) => return self.accept_history_popup(shift, ctrl),
+            (Key::Named(NamedKey::ArrowUp), _) => popup.move_selection(-1),
+            (Key::Named(NamedKey::ArrowDown), _) => popup.move_selection(1),
+            (Key::Named(NamedKey::PageUp), _) => popup.move_selection(-(VISIBLE_ROWS as i32)),
+            (Key::Named(NamedKey::PageDown), _) => popup.move_selection(VISIBLE_ROWS as i32),
+            (Key::Named(NamedKey::Backspace), _) => popup.backspace(),
+            (Key::Named(NamedKey::Delete), _) => {
+                if let Some(row) = popup.selected().cloned()
+                    && let Some(history) = &mut self.history
+                {
+                    let result = match kind {
+                        PopupKind::Commands => history.forget_command(&row.text),
+                        PopupKind::Dirs => history.forget_dir(&row.text, now_ms()),
+                    };
+                    if let Err(err) = result {
+                        tracing::warn!("cannot change the history: {err}");
+                    }
+                    self.refresh_history_popup();
+                }
+            }
+            (_, Some('d')) if kind == PopupKind::Commands => {
+                popup.only_here = !popup.only_here;
+                self.refresh_history_popup();
+            }
+            (_, Some('g')) if kind == PopupKind::Commands => {
+                popup.only_ok = !popup.only_ok;
+                self.refresh_history_popup();
+            }
+            (_, Some('p')) if kind == PopupKind::Dirs => {
+                if let Some(row) = popup.selected().cloned()
+                    && let Some(history) = &mut self.history
+                {
+                    let pinned = row.hint.starts_with('★');
+                    if let Err(err) = history.pin_dir(&row.text, !pinned, now_ms()) {
+                        tracing::warn!("cannot change the history: {err}");
+                    }
+                    self.refresh_history_popup();
+                }
+            }
+            (_, Some('c')) => {
+                if let Some(row) = popup.selected().cloned() {
+                    self.history_popup = None;
+                    self.copy_text(row.text);
+                }
+            }
+            _ => {
+                if let Some(text) = event.text.as_deref()
+                    && !ctrl
+                    && !self.mods.alt_key()
+                {
+                    popup.type_text(text);
+                }
+            }
+        }
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
     fn palette_key(&mut self, event_loop: &ActiveEventLoop, event: &KeyEvent) {
         let Some(palette) = &mut self.palette else {
             return;
@@ -1906,6 +2161,7 @@ impl App {
         // A click on a toast: × closes it, the rest goes to its pane.
         if state == ElementState::Pressed
             && self.palette.is_none()
+            && self.history_popup.is_none()
             && let Some((id, close)) = self.toast_under_mouse()
         {
             let pane = self.center.get(id).and_then(|n| n.pane);
@@ -1918,10 +2174,11 @@ impl App {
             }
             return;
         }
-        if self.close_question.is_some() || self.palette.is_some() {
-            if self.palette.is_some() && state == ElementState::Pressed {
-                // A click outside of the list closes the palette.
+        if self.close_question.is_some() || self.palette.is_some() || self.history_popup.is_some() {
+            if state == ElementState::Pressed {
+                // A click closes the palette (and the history popup).
                 self.palette = None;
+                self.history_popup = None;
                 if let Some(running) = &self.running {
                     running.window.request_redraw();
                 }
@@ -2141,6 +2398,17 @@ impl App {
     }
 
     fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        if let Some(popup) = &mut self.history_popup {
+            let step = match delta {
+                MouseScrollDelta::LineDelta(_, y) => -y.signum() as i32,
+                MouseScrollDelta::PixelDelta(p) => -(p.y.signum() as i32),
+            };
+            popup.move_selection(step);
+            if let Some(running) = &self.running {
+                running.window.request_redraw();
+            }
+            return;
+        }
         if let Some(palette) = &mut self.palette {
             let step = match delta {
                 MouseScrollDelta::LineDelta(_, y) => -y.signum() as i32,
@@ -2351,14 +2619,38 @@ impl App {
                 Some((n.title.clone(), n.body.clone(), level, hovered == Some(*id)))
             })
             .collect();
-        let palette_rows: Option<(String, Vec<PaletteRow>)> = self.palette.as_ref().map(|p| {
-            let rows = p
-                .visible()
-                .into_iter()
-                .map(|(item, selected)| (item.label.clone(), item.key.clone(), selected))
-                .collect();
-            (p.query().to_owned(), rows)
-        });
+        let palette_rows: Option<ListView> = self
+            .palette
+            .as_ref()
+            .map(|p| {
+                let rows = p
+                    .visible()
+                    .into_iter()
+                    .map(|(item, selected)| (item.label.clone(), item.key.clone(), selected))
+                    .collect();
+                ListView {
+                    query: p.query().to_owned(),
+                    rows,
+                    title: String::new(),
+                    footer: "",
+                    bad: Vec::new(),
+                }
+            })
+            .or_else(|| {
+                self.history_popup.as_ref().map(|p| {
+                    let visible = p.visible();
+                    ListView {
+                        query: p.query().to_owned(),
+                        bad: visible.iter().map(|(row, _)| row.bad).collect(),
+                        rows: visible
+                            .into_iter()
+                            .map(|(row, selected)| (row.text.clone(), row.hint.clone(), selected))
+                            .collect(),
+                        title: p.title(),
+                        footer: p.footer(),
+                    }
+                })
+            });
         let tabs_width = self.running.as_ref().map_or(0.0, |r| {
             self.tabs_width(r.window.inner_size().width as f32, r.renderer.cell())
         });
@@ -2473,8 +2765,17 @@ impl App {
                     })
                     .collect();
                 parts.toasts(&views, &toast_rects)?;
-                if let Some((query, rows)) = &palette_rows {
-                    parts.palette(&fterm_render::overlay::PaletteView { query, rows }, view)?;
+                if let Some(list) = &palette_rows {
+                    parts.palette(
+                        &fterm_render::overlay::PaletteView {
+                            query: &list.query,
+                            rows: &list.rows,
+                            title: &list.title,
+                            footer: list.footer,
+                            bad: &list.bad,
+                        },
+                        view,
+                    )?;
                 }
                 if let Some(lines) = &question {
                     parts.message_box(lines, view)?;
@@ -2726,6 +3027,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if self.palette.is_some() {
                     self.palette_key(event_loop, &event);
+                    return;
+                }
+                if self.history_popup.is_some() {
+                    self.history_key(&event);
                     return;
                 }
                 if self.renaming.is_some() {

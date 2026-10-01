@@ -122,7 +122,7 @@ fn ctrl_code(key: &KeyInput) -> Option<u8> {
 }
 
 /// The Latin letter (or bracket) on a key, the same on every layout.
-fn physical_letter(physical: PhysicalKey) -> Option<char> {
+pub fn physical_letter(physical: PhysicalKey) -> Option<char> {
     let PhysicalKey::Code(code) = physical else {
         return None;
     };

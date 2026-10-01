@@ -79,6 +79,38 @@ Some apps ask for the mouse (vim with `set mouse=a`, htop, mc). Then clicks, dra
 Copied text has no spaces at the ends of lines, and lines that were only wrapped by the screen are joined again.
 The window title shows "Copied N lines" for a short time.
 
+## History (like Far Manager)
+fterm keeps the commands that you ran and the folders where you were (with shell integration).
+
+**Alt + F8: commands.** The filter starts with the text that you already typed, so `git` + Alt+F8 shows git commands.
+
+| Key | What it does |
+|---|---|
+| Type, Backspace | Filter the list (the chars must come in this order, like in the palette). |
+| Up / Down, PageUp / PageDown, mouse wheel | Choose a command. |
+| Enter | Put the command into the prompt **in place of** the text you typed. It does not run yet. |
+| Shift + Enter | Put it there and run it. |
+| Ctrl + D | Only commands from this folder (press again: all). |
+| Ctrl + G | Only commands that ended well (exit code 0). |
+| Ctrl + C | Copy the command. |
+| Delete | Forget the command (all its runs). |
+| Esc, click | Close the list. |
+
+A failed command shows its exit code in red.
+
+**Alt + F12: folders.** Often and recently used folders are at the top. Pinned folders (★) are always first.
+A folder that is not there any more says "not found".
+
+| Key | What it does |
+|---|---|
+| Enter | Go there (`cd`) in the active pane. |
+| Shift + Enter | Open a new tab there. |
+| Ctrl + Enter | Split the pane: the new pane starts there. |
+| Ctrl + P | Pin or unpin the folder. |
+| Delete | Forget the folder. |
+
+When a program runs in the pane (not the prompt), Enter does not type into it: the text is copied, and a toast says so.
+
 ## The dock and its panels
 The dock is an area at the right side of the window (or left, or bottom; see `panels` in [CONFIG.md](CONFIG.md)).
 It has service panels: **Events** (all notifications) and **Agents** (every pane with Claude Code or another agent).

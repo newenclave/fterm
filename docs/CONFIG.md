@@ -122,6 +122,7 @@ also work on other layouts (for example, Russian).
 | `command_palette`, `reload_config`, `open_config` | fterm itself. |
 | `copy_claude_hooks` | Copy the Claude Code hooks for tab dots (see [CLAUDE.md](CLAUDE.md)). |
 | `toggle_dock`, `panel_events`, `panel_agents`, `focus_dock` | The dock and its panels (see [KEYS.md](KEYS.md)). |
+| `history_commands`, `history_dirs` | The command and folder history (Alt+F8, Alt+F12). |
 
 ### Lua functions
 A function gets an object `fterm` with these functions:
@@ -238,7 +239,7 @@ end,
 
 ## History
 fterm saves the commands that you run and the folders where you were (it needs shell integration, see below).
-The lists for them come in the next steps (Alt+F8 and Alt+F12, see [ROADMAP.md](ROADMAP.md), Phase 6b).
+Alt+F8 shows the commands and Alt+F12 the folders (see [KEYS.md](KEYS.md)).
 
 ```lua
 history = {

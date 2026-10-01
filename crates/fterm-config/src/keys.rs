@@ -176,11 +176,15 @@ pub enum BuiltinAction {
     PanelAgents,
     /// Move the keyboard between the terminal and the dock.
     FocusDock,
+    /// The command history popup (like Alt+F8 in Far).
+    HistoryCommands,
+    /// The folder history popup (like Alt+F12 in Far).
+    HistoryDirs,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 35] = [
+    pub const ALL: [BuiltinAction; 37] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -216,6 +220,8 @@ impl BuiltinAction {
         Self::PanelEvents,
         Self::PanelAgents,
         Self::FocusDock,
+        Self::HistoryCommands,
+        Self::HistoryDirs,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -256,6 +262,8 @@ impl BuiltinAction {
             Self::PanelEvents => "panel_events",
             Self::PanelAgents => "panel_agents",
             Self::FocusDock => "focus_dock",
+            Self::HistoryCommands => "history_commands",
+            Self::HistoryDirs => "history_dirs",
         };
         name.to_owned()
     }
@@ -284,6 +292,8 @@ impl BuiltinAction {
             Self::PanelEvents => "Events panel".to_owned(),
             Self::PanelAgents => "Agents panel".to_owned(),
             Self::FocusDock => "Focus the dock or the terminal".to_owned(),
+            Self::HistoryCommands => "Command history".to_owned(),
+            Self::HistoryDirs => "Folder history".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -369,6 +379,8 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+shift+e", "panel_events"),
     ("ctrl+shift+a", "panel_agents"),
     ("ctrl+shift+o", "focus_dock"),
+    ("alt+f8", "history_commands"),
+    ("alt+f12", "history_dirs"),
 ];
 
 impl Keymap {
@@ -416,6 +428,21 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_actions_and_keys() {
+        let keys = Keymap::with_defaults();
+        assert_eq!(
+            keys.get(&chord("alt+f8")),
+            Some(&Action::Builtin(BuiltinAction::HistoryCommands))
+        );
+        assert_eq!(
+            keys.get(&chord("alt+f12")),
+            Some(&Action::Builtin(BuiltinAction::HistoryDirs))
+        );
+        assert_eq!(BuiltinAction::HistoryCommands.name(), "history_commands");
+        assert_eq!(BuiltinAction::HistoryDirs.label(), "Folder history");
+    }
 
     #[test]
     fn dock_actions_and_keys() {

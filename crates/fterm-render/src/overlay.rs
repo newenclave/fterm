@@ -36,6 +36,12 @@ pub const HINT_TEXT: Rgb = Rgb {
     g: 0x99,
     b: 0xb2,
 };
+/// A hint that is bad news (for example a failed command).
+pub const BAD_TEXT: Rgb = Rgb {
+    r: 0xf3,
+    g: 0x8b,
+    b: 0xa8,
+};
 /// The widest palette, in cells.
 pub const PALETTE_CELLS: usize = 80;
 
@@ -44,6 +50,12 @@ pub struct PaletteView<'a> {
     pub query: &'a str,
     /// (label, key hint, is it selected).
     pub rows: &'a [(String, String, bool)],
+    /// Short text on the right of the input line (for example "Commands · this folder").
+    pub title: &'a str,
+    /// Key hints under the rows. Empty = no line.
+    pub footer: &'a str,
+    /// Rows whose hint is red (by the row number). Empty = none.
+    pub bad: &'a [bool],
 }
 
 /// The quads of the command palette, at the top of `view`.
@@ -66,8 +78,9 @@ pub fn build_palette(
     let width = cells as f32 * cell.width;
     let x = (view.x + (view.width - width) / 2.0).round();
     let y = (view.y + 2.0 * cell.height).round();
-    // The input line, a line of space, the rows, and half a line at the bottom.
-    let height = (2.5 + palette.rows.len() as f32) * cell.height;
+    // The input line, a line of space, the rows, the footer, and half a line at the bottom.
+    let footer_lines = if palette.footer.is_empty() { 0.0 } else { 1.0 };
+    let height = (2.5 + palette.rows.len() as f32 + footer_lines) * cell.height;
     quads.push(solid(Rect::new(x, y, width, height), BOX_BG));
     for border in [
         Rect::new(x, y, width, 1.0),
@@ -99,6 +112,19 @@ pub fn build_palette(
         ),
         BOX_TEXT,
     ));
+    if !palette.title.is_empty() {
+        let title_cells: usize = palette.title.chars().map(char_cells).sum();
+        let title_x = x + width - (1 + title_cells) as f32 * cell.width;
+        push_text(
+            &mut quads,
+            palette.title,
+            title_x,
+            input_y,
+            cell,
+            HINT_TEXT,
+            glyph,
+        )?;
+    }
     quads.push(solid(
         Rect::new(x + 1.0, y + cell.height * 1.75, width - 2.0, 1.0),
         BOX_BORDER,
@@ -126,8 +152,26 @@ pub fn build_palette(
         )?;
         if key_cells > 0 {
             let key_x = x + width - (1 + key_cells) as f32 * cell.width;
-            push_text(&mut quads, key, key_x, row_y, cell, HINT_TEXT, glyph)?;
+            let color = if palette.bad.get(i).copied().unwrap_or(false) {
+                BAD_TEXT
+            } else {
+                HINT_TEXT
+            };
+            push_text(&mut quads, key, key_x, row_y, cell, color, glyph)?;
         }
+    }
+    if !palette.footer.is_empty() {
+        let footer_y = y + (2.0 + palette.rows.len() as f32) * cell.height + cell.height * 0.25;
+        let shown = fit_title(palette.footer, cells.saturating_sub(2));
+        push_text(
+            &mut quads,
+            &shown,
+            x + cell.width,
+            footer_y,
+            cell,
+            HINT_TEXT,
+            glyph,
+        )?;
     }
     Ok(quads)
 }
@@ -261,8 +305,62 @@ mod tests {
             .iter()
             .map(|(l, k, s)| (l.to_string(), k.to_string(), *s))
             .collect();
-        let view = PaletteView { query, rows: &rows };
+        let view = PaletteView {
+            query,
+            rows: &rows,
+            title: "",
+            footer: "",
+            bad: &[],
+        };
         build_palette(&view, VIEW, CELL, &mut |_| Ok(Some(GLYPH))).unwrap()
+    }
+
+    fn box_height(quads: &[Instance]) -> f32 {
+        quads
+            .iter()
+            .find(|q| q.kind == KIND_SOLID && q.color == linear(BOX_BG))
+            .expect("no box")
+            .rect[3]
+    }
+
+    #[test]
+    fn palette_title_footer_and_bad_hints() {
+        let rows = vec![
+            ("make".to_owned(), "exit 2".to_owned(), true),
+            ("ls".to_owned(), "now".to_owned(), false),
+        ];
+        let plain = PaletteView {
+            query: "",
+            rows: &rows,
+            title: "",
+            footer: "",
+            bad: &[],
+        };
+        let full = PaletteView {
+            query: "",
+            rows: &rows,
+            title: "Commands",
+            footer: "Enter put",
+            bad: &[true, false],
+        };
+        let build =
+            |v: &PaletteView| build_palette(v, VIEW, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let (a, b) = (build(&plain), build(&full));
+        assert_eq!(
+            box_height(&b),
+            box_height(&a) + CELL.height,
+            "one more line for the footer"
+        );
+        let glyphs = |q: &[Instance]| q.iter().filter(|q| q.kind == KIND_GLYPH).count();
+        // "Commands" (8) + "Enter put" (8, the space is not drawn).
+        assert_eq!(glyphs(&b), glyphs(&a) + 8 + 8);
+        let red = linear(BAD_TEXT);
+        let red_glyphs = b
+            .iter()
+            .filter(|q| q.kind == KIND_GLYPH && q.color == red)
+            .count();
+        assert_eq!(red_glyphs, 5, "`exit 2` is red (5 glyphs, no space)");
+        assert!(!a.iter().any(|q| q.kind == KIND_GLYPH && q.color == red));
     }
 
     #[test]
