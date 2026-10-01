@@ -83,10 +83,10 @@ Before each phase we write a detailed plan for it.
   Fix later with grapheme support (for example, mode 2027) in our own parser layer.
 - **Check:** test files with Unicode and emoji look right. Claude Code looks right.
 
-### Phase 3 — Easy to use, Claude works well
+### Phase 3 — Easy to use, Claude works well ✅ (done)
 - Scroll back with the mouse wheel.
 - Paste (bracketed paste). Mouse support for apps, focus events, IME, click on links.
-- Shift+Enter and Alt keys. Maybe the kitty keyboard protocol.
+- Shift+Enter and Alt keys. The kitty keyboard protocol comes later (after Phase 5).
 - Selection and copy: see the next section. This is a main goal, not a small thing.
 - **Check:** `claude` works fully: many lines of input, big paste, Esc, Ctrl+C, scroll.
 
@@ -203,4 +203,4 @@ Ideas (we pick the order in the Phase 3 plan):
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
 ## Next step
-Write a detailed plan for Phase 3. Then build it.
+Write a detailed plan for Phase 3b (images) or Phase 4 (tabs). Then build it.

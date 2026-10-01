@@ -103,6 +103,86 @@ impl Wheel {
     }
 }
 
+/// A mouse event for an app that asked for the mouse (vim, htop, ...).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReportKind {
+    Press(ReportButton),
+    Release(ReportButton),
+    /// The mouse moved. `Some` = with this button down.
+    Motion(Option<ReportButton>),
+    WheelUp,
+    WheelDown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReportButton {
+    Left,
+    Middle,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ReportMods {
+    pub shift: bool,
+    pub alt: bool,
+    pub ctrl: bool,
+}
+
+/// Bytes for a mouse event. `column` and `row` start at 0 (screen cells).
+/// `sgr` = the app asked for SGR mode (1006): `ESC [ < b ; x ; y M/m`.
+/// Without SGR, the old X10 form `ESC [ M b x y` is used; it cannot show cells after 223.
+pub fn encode_mouse(
+    kind: ReportKind,
+    column: usize,
+    row: usize,
+    mods: ReportMods,
+    sgr: bool,
+) -> Option<Vec<u8>> {
+    let button = |b: ReportButton| match b {
+        ReportButton::Left => 0,
+        ReportButton::Middle => 1,
+        ReportButton::Right => 2,
+    };
+    let mut code: u32 = match kind {
+        ReportKind::Press(b) => button(b),
+        // X10 has no button for release: it is always 3.
+        ReportKind::Release(b) if sgr => button(b),
+        ReportKind::Release(_) => 3,
+        ReportKind::Motion(Some(b)) => 32 + button(b),
+        ReportKind::Motion(None) => 32 + 3,
+        ReportKind::WheelUp => 64,
+        ReportKind::WheelDown => 65,
+    };
+    if mods.shift {
+        code += 4;
+    }
+    if mods.alt {
+        code += 8;
+    }
+    if mods.ctrl {
+        code += 16;
+    }
+    let (x, y) = (column + 1, row + 1);
+    if sgr {
+        let end = if matches!(kind, ReportKind::Release(_)) {
+            'm'
+        } else {
+            'M'
+        };
+        return Some(format!("[<{code};{x};{y}{end}").into_bytes());
+    }
+    // X10: each value is one byte plus 32.
+    let byte = |v: usize| u8::try_from(v + 32).ok().filter(|&b| b < 255);
+    Some(vec![
+        0x1b,
+        b'[',
+        b'M',
+        byte(code as usize)?,
+        byte(x)?,
+        byte(y)?,
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use winit::dpi::PhysicalPosition;
@@ -205,5 +285,84 @@ mod tests {
         assert_eq!(clicks.click(t, point(1, 1)), 1);
         assert_eq!(clicks.click(t + Duration::from_millis(900), point(1, 1)), 1);
         assert_eq!(clicks.click(t + Duration::from_millis(950), point(1, 2)), 1);
+    }
+
+    const NO_MODS: ReportMods = ReportMods {
+        shift: false,
+        alt: false,
+        ctrl: false,
+    };
+
+    fn sgr(kind: ReportKind, col: usize, row: usize, mods: ReportMods) -> String {
+        String::from_utf8(encode_mouse(kind, col, row, mods, true).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn sgr_press_and_release() {
+        use ReportButton::*;
+        // Columns and rows start at 1 in the protocol.
+        assert_eq!(sgr(ReportKind::Press(Left), 0, 0, NO_MODS), "\x1b[<0;1;1M");
+        assert_eq!(
+            sgr(ReportKind::Press(Middle), 4, 9, NO_MODS),
+            "\x1b[<1;5;10M"
+        );
+        assert_eq!(
+            sgr(ReportKind::Press(Right), 4, 9, NO_MODS),
+            "\x1b[<2;5;10M"
+        );
+        assert_eq!(
+            sgr(ReportKind::Release(Left), 4, 9, NO_MODS),
+            "\x1b[<0;5;10m"
+        );
+    }
+
+    #[test]
+    fn sgr_motion_wheel_and_modifiers() {
+        assert_eq!(
+            sgr(ReportKind::Motion(Some(ReportButton::Left)), 2, 3, NO_MODS),
+            "\x1b[<32;3;4M"
+        );
+        assert_eq!(
+            sgr(ReportKind::Motion(None), 2, 3, NO_MODS),
+            "\x1b[<35;3;4M"
+        );
+        assert_eq!(sgr(ReportKind::WheelUp, 0, 0, NO_MODS), "\x1b[<64;1;1M");
+        assert_eq!(sgr(ReportKind::WheelDown, 0, 0, NO_MODS), "\x1b[<65;1;1M");
+        let all = ReportMods {
+            shift: true,
+            alt: true,
+            ctrl: true,
+        };
+        // shift +4, alt +8, ctrl +16.
+        assert_eq!(
+            sgr(ReportKind::Press(ReportButton::Left), 0, 0, all),
+            "\x1b[<28;1;1M"
+        );
+    }
+
+    #[test]
+    fn x10_form_without_sgr() {
+        let bytes = encode_mouse(ReportKind::Press(ReportButton::Left), 0, 0, NO_MODS, false);
+        assert_eq!(bytes, Some(vec![0x1b, b'[', b'M', 32, 33, 33]));
+        // Release in X10 is button 3.
+        let bytes = encode_mouse(
+            ReportKind::Release(ReportButton::Right),
+            1,
+            1,
+            NO_MODS,
+            false,
+        );
+        assert_eq!(bytes, Some(vec![0x1b, b'[', b'M', 32 + 3, 34, 34]));
+        // X10 cannot send cells after 223.
+        assert_eq!(
+            encode_mouse(
+                ReportKind::Press(ReportButton::Left),
+                300,
+                0,
+                NO_MODS,
+                false
+            ),
+            None
+        );
     }
 }

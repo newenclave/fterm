@@ -9,11 +9,13 @@ use fterm_term::alacritty_terminal::index::{Point, Side};
 use fterm_term::alacritty_terminal::selection::{Selection, SelectionType};
 use fterm_term::alacritty_terminal::term::TermMode;
 use fterm_term::copy_mode::{self, CopyAction, CopyResult};
+use fterm_term::links::url_at;
 use fterm_term::session::{Session, SessionOptions, TermEvent};
 use fterm_term::size::GridSize;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
+use winit::dpi::PhysicalPosition;
+use winit::event::{ElementState, Ime, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -21,7 +23,10 @@ use winit::window::{Window, WindowId};
 use crate::clipboard::{Clipboard, paste_bytes};
 use crate::gpu::Gpu;
 use crate::input::{KeyInput, copy_mode_action, encode_key};
-use crate::mouse::{ClickCounter, GridGeometry, Wheel, autoscroll_lines};
+use crate::mouse::{
+    ClickCounter, GridGeometry, ReportButton, ReportKind, ReportMods, Wheel, autoscroll_lines,
+    encode_mouse,
+};
 
 /// Font size in logical pixels. It is multiplied by the scale factor (DPI).
 const FONT_SIZE: f32 = 14.0;
@@ -57,6 +62,10 @@ struct MouseState {
     dragged: bool,
     clicks: ClickCounter,
     wheel: Wheel,
+    /// The button that the app knows is down (when the app gets the mouse).
+    reported_button: Option<ReportButton>,
+    /// The last cell sent to the app, so we send motion only when the cell changes.
+    reported_cell: Option<(usize, usize)>,
 }
 
 pub struct App {
@@ -91,6 +100,8 @@ impl App {
             .with_title("fterm")
             .with_inner_size(LogicalSize::new(1024.0, 640.0));
         let window = Arc::new(event_loop.create_window(attributes)?);
+        // IME: input methods for Chinese, Japanese, Korean, and others.
+        window.set_ime_allowed(true);
         let gpu = pollster::block_on(Gpu::new(window.clone(), event_loop.owned_display_handle()))?;
         let scale = window.scale_factor() as f32;
         let renderer = Renderer::new(
@@ -246,6 +257,123 @@ impl App {
         false
     }
 
+    /// True when the app wants the mouse and Shift is not held (Shift always selects).
+    fn app_wants_mouse(&self) -> bool {
+        let Some(running) = &self.running else {
+            return false;
+        };
+        !self.mods.shift_key()
+            && running
+                .session
+                .with_term(|term| term.mode().intersects(TermMode::MOUSE_MODE))
+    }
+
+    /// Sends a mouse event to the app at the current mouse cell.
+    fn report_mouse(&mut self, kind: ReportKind) {
+        let Some(running) = &self.running else {
+            return;
+        };
+        let (point, _) =
+            Self::geometry(running).cell_at(self.mouse.position.0, self.mouse.position.1, 0);
+        let cell = (point.column.0, point.line.0.max(0) as usize);
+        let sgr = running
+            .session
+            .with_term(|term| term.mode().contains(TermMode::SGR_MOUSE));
+        let mods = ReportMods {
+            shift: self.mods.shift_key(),
+            alt: self.mods.alt_key(),
+            ctrl: self.mods.control_key(),
+        };
+        if let Some(bytes) = encode_mouse(kind, cell.0, cell.1, mods, sgr) {
+            running.session.write(bytes);
+        }
+        self.mouse.reported_cell = Some(cell);
+    }
+
+    fn mouse_button(&mut self, state: ElementState, button: MouseButton) {
+        let report_button = match button {
+            MouseButton::Left => Some(ReportButton::Left),
+            MouseButton::Middle => Some(ReportButton::Middle),
+            MouseButton::Right => Some(ReportButton::Right),
+            _ => None,
+        };
+        if let Some(b) = report_button
+            && self.app_wants_mouse()
+        {
+            match state {
+                ElementState::Pressed => {
+                    self.mouse.reported_button = Some(b);
+                    self.report_mouse(ReportKind::Press(b));
+                }
+                ElementState::Released => {
+                    self.mouse.reported_button = None;
+                    self.report_mouse(ReportKind::Release(b));
+                }
+            }
+            return;
+        }
+        match (button, state) {
+            (MouseButton::Left, ElementState::Pressed) => {
+                if self.mods.control_key() && self.open_link_under_mouse() {
+                    return;
+                }
+                self.mouse_press();
+            }
+            (MouseButton::Left, ElementState::Released) => self.mouse_release(),
+            (MouseButton::Right, ElementState::Pressed) => self.paste(),
+            _ => {}
+        }
+    }
+
+    /// Ctrl + click on a URL opens it. Returns true when there was a URL.
+    fn open_link_under_mouse(&self) -> bool {
+        let Some(running) = &self.running else {
+            return false;
+        };
+        let (point, _) = self.mouse_cell(running);
+        let Some(url) = running.session.with_term(|term| url_at(term, point)) else {
+            return false;
+        };
+        tracing::info!(%url, "open link");
+        if let Err(err) = open::that_detached(&url) {
+            tracing::warn!("cannot open {url}: {err}");
+        }
+        true
+    }
+
+    /// IME text is ready: send it like typed text.
+    fn ime_commit(&self, text: &str) {
+        let Some(running) = &self.running else {
+            return;
+        };
+        running.session.with_term_mut(|term, sticky| {
+            term.scroll_display(Scroll::Bottom);
+            if sticky.is_active() {
+                sticky.set(term, None);
+            }
+        });
+        running.session.write(text.as_bytes().to_vec());
+    }
+
+    /// Tells the IME where the cursor is, so its window opens next to the cursor.
+    fn update_ime_area(running: &Running) {
+        let cell = running.renderer.cell();
+        let padding = running.renderer.padding();
+        let (line, column) = running.session.with_term(|term| {
+            let point = term.grid().cursor.point;
+            (
+                point.line.0 + term.grid().display_offset() as i32,
+                point.column.0,
+            )
+        });
+        let x = padding + column as f32 * cell.width;
+        let y = padding + line.max(0) as f32 * cell.height;
+        running.window.set_ime_cursor_area(
+            PhysicalPosition::new(x as f64, y as f64),
+            winit::dpi::PhysicalSize::new(cell.width as f64, cell.height as f64),
+        );
+    }
+
     fn geometry(running: &Running) -> GridGeometry {
         let cell = running.renderer.cell();
         GridGeometry {
@@ -325,6 +453,25 @@ impl App {
     fn mouse_moved(&mut self, x: f64, y: f64) {
         let old = self.mouse.position;
         self.mouse.position = (x, y);
+        if self.app_wants_mouse() {
+            let Some(running) = &self.running else {
+                return;
+            };
+            let (motion, drag) = running.session.with_term(|term| {
+                let mode = term.mode();
+                (
+                    mode.contains(TermMode::MOUSE_MOTION),
+                    mode.contains(TermMode::MOUSE_DRAG),
+                )
+            });
+            let button = self.mouse.reported_button;
+            let (point, _) = Self::geometry(running).cell_at(x, y, 0);
+            let cell = (point.column.0, point.line.0.max(0) as usize);
+            if (motion || (drag && button.is_some())) && self.mouse.reported_cell != Some(cell) {
+                self.report_mouse(ReportKind::Motion(button));
+            }
+            return;
+        }
         let Some(running) = &self.running else {
             return;
         };
@@ -349,6 +496,17 @@ impl App {
             .wheel
             .lines(delta, running.renderer.cell().height);
         if lines == 0 {
+            return;
+        }
+        if self.app_wants_mouse() {
+            let kind = if lines > 0 {
+                ReportKind::WheelUp
+            } else {
+                ReportKind::WheelDown
+            };
+            for _ in 0..lines.unsigned_abs().min(10) {
+                self.report_mouse(kind);
+            }
             return;
         }
         let alt_screen = running
@@ -485,8 +643,17 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
-                self.running.as_ref().unwrap().window.request_redraw();
+                let running = self.running.as_ref().unwrap();
+                let report = running
+                    .session
+                    .with_term(|term| term.mode().contains(TermMode::FOCUS_IN_OUT));
+                if report {
+                    let bytes: &[u8] = if focused { b"\x1b[I" } else { b"\x1b[O" };
+                    running.session.write(bytes.to_vec());
+                }
+                running.window.request_redraw();
             }
+            WindowEvent::Ime(Ime::Commit(text)) => self.ime_commit(&text),
             WindowEvent::ModifiersChanged(mods) => self.mods = mods.state(),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if self.handle_app_key(&event) {
@@ -514,19 +681,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => self.mouse_moved(position.x, position.y),
-            WindowEvent::MouseInput {
-                state,
-                button: MouseButton::Left,
-                ..
-            } => match state {
-                ElementState::Pressed => self.mouse_press(),
-                ElementState::Released => self.mouse_release(),
-            },
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Right,
-                ..
-            } => self.paste(),
+            WindowEvent::MouseInput { state, button, .. } => self.mouse_button(state, button),
             WindowEvent::MouseWheel { delta, .. } => self.mouse_wheel(delta),
             WindowEvent::RedrawRequested => {
                 let Running {
@@ -544,7 +699,9 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Err(err) = result {
                     tracing::error!("cannot draw: {err:#}");
                     event_loop.exit();
+                    return;
                 }
+                Self::update_ime_area(self.running.as_ref().unwrap());
             }
             _ => {}
         }

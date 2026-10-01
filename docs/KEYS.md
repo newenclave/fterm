@@ -22,9 +22,14 @@ New output does not move the view while you are scrolled up. A thin bar on the r
 | Alt + drag | Select a block (a rectangle). |
 | Click without a drag | Remove the selection. |
 | Right click | Paste. |
+| Ctrl + click on a URL | Open the link in the browser. |
 
 The selection stays until you remove it. New output, also from apps that redraw the screen
 (like Claude Code), does not remove it.
+
+## Apps that use the mouse
+Some apps ask for the mouse (vim with `set mouse=a`, htop, mc). Then clicks, drags, and the wheel go to the app.
+**Hold Shift** to select text with the mouse anyway.
 
 ## Copy and paste
 | Key | What it does |
@@ -35,6 +40,14 @@ The selection stays until you remove it. New output, also from apps that redraw 
 
 Copied text has no spaces at the ends of lines, and lines that were only wrapped by the screen are joined again.
 The window title shows "Copied N lines" for a short time.
+
+## Typing
+| Key | What it does |
+|---|---|
+| Shift + Enter | A new line without sending (for example, in Claude Code). It sends `ESC` + `Enter`. |
+| IME (Chinese, Japanese, Korean, ...) | The text from the input method goes to the shell. The IME window opens at the cursor. |
+
+When the window gets or loses focus, fterm tells the app (if the app asks for it).
 
 ## Copy mode (keyboard)
 Press **Ctrl + Shift + Space** to start or stop copy mode. A yellow cursor shows.

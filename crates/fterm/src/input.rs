@@ -51,6 +51,8 @@ pub fn encode_key(key: &KeyInput, app_cursor: bool) -> Option<Vec<u8>> {
 
     if let Key::Named(named) = key.logical {
         let bytes = match named {
+            // Shift+Enter = ESC CR: Claude Code and other TUI apps read it as "new line".
+            NamedKey::Enter if mods.shift_key() => b"\x1b\r".to_vec(),
             NamedKey::Enter => with_alt(b"\r"),
             NamedKey::Backspace if ctrl => with_alt(b"\x08"),
             NamedKey::Backspace => with_alt(b"\x7f"),
@@ -504,5 +506,15 @@ mod tests {
             mods: NONE,
         };
         assert_eq!(copy_mode_action(&key), Some(CopyAction::Move(ViMotion::Up)));
+    }
+
+    #[test]
+    fn shift_enter_is_a_new_line_for_claude() {
+        // Claude Code (and many TUI apps) read ESC + CR as "new line, do not send".
+        assert_eq!(
+            press(named(NamedKey::Enter), SHIFT),
+            Some(b"\x1b\r".to_vec())
+        );
+        assert_eq!(press(named(NamedKey::Enter), NONE), Some(b"\r".to_vec()));
     }
 }
