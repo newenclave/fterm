@@ -9,9 +9,11 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 arboard.workspace = true
+fterm-config.workspace = true
 fterm-mux.workspace = true
 fterm-render.workspace = true
 fterm-term.workspace = true
+notify.workspace = true
 open.workspace = true
 pollster.workspace = true
 tracing.workspace = true

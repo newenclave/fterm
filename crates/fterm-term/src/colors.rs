@@ -9,6 +9,19 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 #[derive(Clone, Debug)]
 pub struct Palette {
     colors: [Rgb; COUNT],
+    /// Background of selected cells.
+    pub selection: Rgb,
+}
+
+/// Colors from the user config. `None` = keep the built-in color.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ColorOverrides {
+    pub background: Option<Rgb>,
+    pub foreground: Option<Rgb>,
+    pub cursor: Option<Rgb>,
+    pub selection: Option<Rgb>,
+    pub ansi: [Option<Rgb>; 8],
+    pub bright: [Option<Rgb>; 8],
 }
 
 /// Catppuccin Mocha: 8 normal and 8 bright colors.
@@ -19,6 +32,7 @@ const ANSI: [u32; 16] = [
 const FOREGROUND: u32 = 0xcdd6f4;
 const BACKGROUND: u32 = 0x1e1e2e;
 const CURSOR: u32 = 0xf5e0dc;
+const SELECTION: u32 = 0x585b70;
 
 /// How much darker a DIM color is.
 const DIM_FACTOR: f32 = 0.66;
@@ -63,11 +77,45 @@ impl Default for Palette {
         }
         colors[NamedColor::BrightForeground as usize] = hex(FOREGROUND);
         colors[NamedColor::DimForeground as usize] = dim(hex(FOREGROUND));
-        Self { colors }
+        Self {
+            colors,
+            selection: hex(SELECTION),
+        }
     }
 }
 
 impl Palette {
+    /// The built-in palette with the user's colors on top. Dim colors follow their base colors.
+    pub fn with_colors(colors: &ColorOverrides) -> Self {
+        let mut palette = Self::default();
+        for (i, color) in colors.ansi.iter().enumerate() {
+            if let Some(c) = color {
+                palette.colors[i] = *c;
+                palette.colors[NamedColor::DimBlack as usize + i] = dim(*c);
+            }
+        }
+        for (i, color) in colors.bright.iter().enumerate() {
+            if let Some(c) = color {
+                palette.colors[8 + i] = *c;
+            }
+        }
+        if let Some(fg) = colors.foreground {
+            palette.colors[NamedColor::Foreground as usize] = fg;
+            palette.colors[NamedColor::BrightForeground as usize] = fg;
+            palette.colors[NamedColor::DimForeground as usize] = dim(fg);
+        }
+        if let Some(bg) = colors.background {
+            palette.colors[NamedColor::Background as usize] = bg;
+        }
+        if let Some(cursor) = colors.cursor {
+            palette.colors[NamedColor::Cursor as usize] = cursor;
+        }
+        if let Some(selection) = colors.selection {
+            palette.selection = selection;
+        }
+        palette
+    }
+
     /// Returns the color in `index`. A color set by the app (OSC 4/10/11) wins.
     pub fn get(&self, index: usize, overrides: &Colors) -> Rgb {
         overrides[index].unwrap_or(self.colors[index])
@@ -226,5 +274,60 @@ mod tests {
         );
         assert_eq!(fg, rgb(9, 9, 9));
         assert_eq!(bg, rgb(7, 7, 7));
+    }
+
+    #[test]
+    fn user_colors_replace_the_built_in_ones() {
+        let o = Colors::default();
+        let red = rgb(200, 10, 10);
+        let user = ColorOverrides {
+            background: Some(rgb(1, 2, 3)),
+            foreground: Some(rgb(250, 250, 250)),
+            cursor: Some(rgb(9, 9, 9)),
+            selection: Some(rgb(7, 7, 7)),
+            ansi: [None, Some(red), None, None, None, None, None, None],
+            bright: [
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(rgb(255, 255, 254)),
+            ],
+        };
+        let p = Palette::with_colors(&user);
+        assert_eq!(p.get(NamedColor::Background as usize, &o), rgb(1, 2, 3));
+        assert_eq!(
+            p.get(NamedColor::Foreground as usize, &o),
+            rgb(250, 250, 250)
+        );
+        assert_eq!(
+            p.get(NamedColor::BrightForeground as usize, &o),
+            rgb(250, 250, 250)
+        );
+        assert_eq!(p.get(NamedColor::Cursor as usize, &o), rgb(9, 9, 9));
+        assert_eq!(p.selection, rgb(7, 7, 7));
+        assert_eq!(p.get(1, &o), red);
+        assert_eq!(p.get(15, &o), rgb(255, 255, 254));
+        // The dim red and the dim foreground follow the new colors.
+        assert!(p.get(NamedColor::DimRed as usize, &o).r < red.r);
+        assert!(p.get(NamedColor::DimRed as usize, &o).r > 100);
+        assert!(p.get(NamedColor::DimForeground as usize, &o).r < 250);
+        // Colors that the user did not set stay.
+        let built_in = Palette::default();
+        assert_eq!(p.get(2, &o), built_in.get(2, &o));
+    }
+
+    #[test]
+    fn no_user_colors_is_the_default_palette() {
+        let o = Colors::default();
+        let p = Palette::with_colors(&ColorOverrides::default());
+        let d = Palette::default();
+        for i in 0..COUNT {
+            assert_eq!(p.get(i, &o), d.get(i, &o), "slot {i}");
+        }
+        assert_eq!(p.selection, d.selection);
     }
 }

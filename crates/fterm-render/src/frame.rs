@@ -138,7 +138,10 @@ pub fn build_frame<T: EventListener>(
         }
 
         if selection.is_some_and(|range| range.contains(indexed.point)) {
-            backgrounds.push(solid([x, y, width, cell.height], linear(SELECTION_BG)));
+            backgrounds.push(solid(
+                [x, y, width, cell.height],
+                linear(input.palette.selection),
+            ));
         } else if bg != default_bg {
             backgrounds.push(solid([x, y, width, cell.height], linear(bg)));
         }

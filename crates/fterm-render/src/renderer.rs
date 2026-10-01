@@ -221,6 +221,26 @@ impl Renderer {
         self.fonts.cell()
     }
 
+    /// New colors (from the config). They show on the next frame.
+    pub fn set_palette(&mut self, palette: Palette) {
+        self.palette = palette;
+    }
+
+    /// A new Braille style. The atlases are made again, so all Braille chars are drawn again.
+    pub fn set_braille_style(&mut self, device: &wgpu::Device, style: BrailleStyle) {
+        if self.braille != style {
+            self.braille = style;
+            self.mask = AtlasTexture::new(device, ATLAS_START_SIZE, self.mask.format);
+            self.color = AtlasTexture::new(device, COLOR_ATLAS_START_SIZE, self.color.format);
+            self.update_bind_group(device);
+        }
+    }
+
+    /// The font size in physical pixels.
+    pub fn font_size(&self) -> f32 {
+        self.fonts.size_px()
+    }
+
     pub fn padding(&self) -> f32 {
         self.padding
     }

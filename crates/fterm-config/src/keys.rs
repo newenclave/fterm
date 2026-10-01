@@ -1,0 +1,531 @@
+//! Key bindings: "ctrl+shift+t" → an action.
+
+use std::collections::HashMap;
+
+/// Modifier keys.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Mods {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+    /// The Windows key (Command on macOS).
+    pub logo: bool,
+}
+
+/// A key by its place on the keyboard (US names), so bindings work on every layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Key {
+    /// A letter (`a`..`z`), a digit, or a symbol key (`=` `-` `[` `]` `;` `'` `,` `.` `/` `\` `` ` ``).
+    Char(char),
+    Tab,
+    Enter,
+    Escape,
+    Space,
+    Backspace,
+    Delete,
+    Insert,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Up,
+    Down,
+    Left,
+    Right,
+    F(u8),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct KeyChord {
+    pub mods: Mods,
+    pub key: Key,
+}
+
+impl KeyChord {
+    /// Reads `ctrl+shift+t`, `alt+shift+=`, `ctrl+tab`, `f11`, `shift+pageup`, ...
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let clean: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        let clean = clean.to_lowercase();
+        if clean.is_empty() {
+            return Err("empty key".to_owned());
+        }
+        // The last part is the key. `+` itself is written as `plus`, so "ctrl++" is an error.
+        let parts: Vec<&str> = clean.split('+').collect();
+        let (key_name, mod_names) = parts.split_last().expect("split gives at least one part");
+        let mut mods = Mods::default();
+        for name in mod_names {
+            match *name {
+                "ctrl" | "control" => mods.ctrl = true,
+                "shift" => mods.shift = true,
+                "alt" | "option" => mods.alt = true,
+                "win" | "super" | "cmd" | "logo" => mods.logo = true,
+                "" => return Err(format!("`{text}`: a `+` without a key (write `plus`)")),
+                other => return Err(format!("`{text}`: unknown modifier `{other}`")),
+            }
+        }
+        let key = parse_key(key_name).ok_or_else(|| {
+            if key_name.is_empty() {
+                format!("`{text}`: no key after the modifiers")
+            } else {
+                format!("`{text}`: unknown key `{key_name}`")
+            }
+        })?;
+        Ok(Self { mods, key })
+    }
+
+    /// For people: "Ctrl+Shift+T".
+    pub fn display(&self) -> String {
+        let mut out = String::new();
+        for (on, name) in [
+            (self.mods.ctrl, "Ctrl+"),
+            (self.mods.alt, "Alt+"),
+            (self.mods.shift, "Shift+"),
+            (self.mods.logo, "Win+"),
+        ] {
+            if on {
+                out.push_str(name);
+            }
+        }
+        let key = match self.key {
+            Key::Char(c) => c.to_ascii_uppercase().to_string(),
+            Key::F(n) => format!("F{n}"),
+            Key::PageUp => "PageUp".into(),
+            Key::PageDown => "PageDown".into(),
+            other => format!("{other:?}"),
+        };
+        out.push_str(&key);
+        out
+    }
+}
+
+fn parse_key(name: &str) -> Option<Key> {
+    let key = match name {
+        "tab" => Key::Tab,
+        "enter" | "return" => Key::Enter,
+        "esc" | "escape" => Key::Escape,
+        "space" => Key::Space,
+        "backspace" => Key::Backspace,
+        "delete" | "del" => Key::Delete,
+        "insert" | "ins" => Key::Insert,
+        "home" => Key::Home,
+        "end" => Key::End,
+        "pageup" | "pgup" => Key::PageUp,
+        "pagedown" | "pgdn" => Key::PageDown,
+        "up" => Key::Up,
+        "down" => Key::Down,
+        "left" => Key::Left,
+        "right" => Key::Right,
+        "plus" => Key::Char('='),
+        "minus" => Key::Char('-'),
+        _ => {
+            if let Some(number) = name.strip_prefix('f')
+                && let Ok(n) = number.parse::<u8>()
+            {
+                return (1..=24).contains(&n).then_some(Key::F(n));
+            }
+            let mut chars = name.chars();
+            let (Some(c), None) = (chars.next(), chars.next()) else {
+                return None;
+            };
+            let ok = c.is_ascii_lowercase() || c.is_ascii_digit() || "=-[];',./\\`".contains(c);
+            return ok.then_some(Key::Char(c));
+        }
+    };
+    Some(key)
+}
+
+/// Actions of fterm itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BuiltinAction {
+    NewTab,
+    ClosePane,
+    NextTab,
+    PrevTab,
+    /// Tab number, from 0.
+    SelectTab(usize),
+    LastTab,
+    MoveTabLeft,
+    MoveTabRight,
+    RenameTab,
+    SplitRight,
+    SplitDown,
+    FocusLeft,
+    FocusRight,
+    FocusUp,
+    FocusDown,
+    ResizeLeft,
+    ResizeRight,
+    ResizeUp,
+    ResizeDown,
+    Zoom,
+    Copy,
+    Paste,
+    CopyMode,
+    ScrollPageUp,
+    ScrollPageDown,
+    ScrollTop,
+    ScrollBottom,
+    CommandPalette,
+    ReloadConfig,
+    OpenConfig,
+}
+
+impl BuiltinAction {
+    /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
+    pub const ALL: [BuiltinAction; 30] = [
+        Self::NewTab,
+        Self::ClosePane,
+        Self::NextTab,
+        Self::PrevTab,
+        Self::SelectTab(0),
+        Self::LastTab,
+        Self::MoveTabLeft,
+        Self::MoveTabRight,
+        Self::RenameTab,
+        Self::SplitRight,
+        Self::SplitDown,
+        Self::FocusLeft,
+        Self::FocusRight,
+        Self::FocusUp,
+        Self::FocusDown,
+        Self::ResizeLeft,
+        Self::ResizeRight,
+        Self::ResizeUp,
+        Self::ResizeDown,
+        Self::Zoom,
+        Self::Copy,
+        Self::Paste,
+        Self::CopyMode,
+        Self::ScrollPageUp,
+        Self::ScrollPageDown,
+        Self::ScrollTop,
+        Self::ScrollBottom,
+        Self::CommandPalette,
+        Self::ReloadConfig,
+        Self::OpenConfig,
+    ];
+
+    /// The name in the config, for example `new_tab` or `select_tab_3`.
+    pub fn name(self) -> String {
+        let name = match self {
+            Self::NewTab => "new_tab",
+            Self::ClosePane => "close_pane",
+            Self::NextTab => "next_tab",
+            Self::PrevTab => "prev_tab",
+            Self::SelectTab(i) => return format!("select_tab_{}", i + 1),
+            Self::LastTab => "last_tab",
+            Self::MoveTabLeft => "move_tab_left",
+            Self::MoveTabRight => "move_tab_right",
+            Self::RenameTab => "rename_tab",
+            Self::SplitRight => "split_right",
+            Self::SplitDown => "split_down",
+            Self::FocusLeft => "focus_left",
+            Self::FocusRight => "focus_right",
+            Self::FocusUp => "focus_up",
+            Self::FocusDown => "focus_down",
+            Self::ResizeLeft => "resize_left",
+            Self::ResizeRight => "resize_right",
+            Self::ResizeUp => "resize_up",
+            Self::ResizeDown => "resize_down",
+            Self::Zoom => "zoom",
+            Self::Copy => "copy",
+            Self::Paste => "paste",
+            Self::CopyMode => "copy_mode",
+            Self::ScrollPageUp => "scroll_page_up",
+            Self::ScrollPageDown => "scroll_page_down",
+            Self::ScrollTop => "scroll_top",
+            Self::ScrollBottom => "scroll_bottom",
+            Self::CommandPalette => "command_palette",
+            Self::ReloadConfig => "reload_config",
+            Self::OpenConfig => "open_config",
+        };
+        name.to_owned()
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        if let Some(number) = name.strip_prefix("select_tab_") {
+            let n: usize = number.parse().ok()?;
+            return (n >= 1).then(|| Self::SelectTab(n - 1));
+        }
+        Self::ALL
+            .into_iter()
+            .find(|action| !matches!(action, Self::SelectTab(_)) && action.name() == name)
+    }
+
+    /// Words for people, for the palette: "New tab", "Split right".
+    pub fn label(self) -> String {
+        match self {
+            Self::SelectTab(i) => format!("Go to tab {}", i + 1),
+            Self::ClosePane => "Close pane".to_owned(),
+            Self::PrevTab => "Previous tab".to_owned(),
+            Self::Zoom => "Zoom pane".to_owned(),
+            Self::CommandPalette => "Command palette".to_owned(),
+            Self::OpenConfig => "Open config file".to_owned(),
+            other => {
+                let name = other.name().replace('_', " ");
+                let mut chars = name.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().chain(chars).collect(),
+                    None => name,
+                }
+            }
+        }
+    }
+}
+
+/// Where a spawned profile goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpawnWhere {
+    Tab,
+    SplitRight,
+    SplitDown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Action {
+    Builtin(BuiltinAction),
+    /// Start a profile (`None` = the default profile).
+    Spawn {
+        profile: Option<String>,
+        place: SpawnWhere,
+    },
+    /// A Lua function from the config (its number in the config).
+    Lua(usize),
+}
+
+/// Keys and their actions: the defaults, then the user's bindings.
+#[derive(Clone, Debug)]
+pub struct Keymap {
+    map: HashMap<KeyChord, Action>,
+    /// The order of the keys, so `key_for` always gives the same answer.
+    order: Vec<KeyChord>,
+}
+
+/// The default keys (the same as in `docs/KEYS.md`).
+pub const DEFAULT_KEYS: &[(&str, &str)] = &[
+    ("ctrl+shift+t", "new_tab"),
+    ("ctrl+shift+w", "close_pane"),
+    ("ctrl+tab", "next_tab"),
+    ("ctrl+pagedown", "next_tab"),
+    ("ctrl+shift+tab", "prev_tab"),
+    ("ctrl+pageup", "prev_tab"),
+    ("ctrl+shift+1", "select_tab_1"),
+    ("ctrl+shift+2", "select_tab_2"),
+    ("ctrl+shift+3", "select_tab_3"),
+    ("ctrl+shift+4", "select_tab_4"),
+    ("ctrl+shift+5", "select_tab_5"),
+    ("ctrl+shift+6", "select_tab_6"),
+    ("ctrl+shift+7", "select_tab_7"),
+    ("ctrl+shift+8", "select_tab_8"),
+    ("ctrl+shift+9", "last_tab"),
+    ("ctrl+shift+pageup", "move_tab_left"),
+    ("ctrl+shift+pagedown", "move_tab_right"),
+    ("ctrl+shift+r", "rename_tab"),
+    ("alt+shift+=", "split_right"),
+    ("alt+shift+-", "split_down"),
+    ("alt+left", "focus_left"),
+    ("alt+right", "focus_right"),
+    ("alt+up", "focus_up"),
+    ("alt+down", "focus_down"),
+    ("alt+shift+left", "resize_left"),
+    ("alt+shift+right", "resize_right"),
+    ("alt+shift+up", "resize_up"),
+    ("alt+shift+down", "resize_down"),
+    ("ctrl+shift+z", "zoom"),
+    ("ctrl+shift+c", "copy"),
+    ("ctrl+shift+v", "paste"),
+    ("shift+insert", "paste"),
+    ("ctrl+shift+space", "copy_mode"),
+    ("shift+pageup", "scroll_page_up"),
+    ("shift+pagedown", "scroll_page_down"),
+    ("shift+home", "scroll_top"),
+    ("shift+end", "scroll_bottom"),
+    ("ctrl+shift+p", "command_palette"),
+    ("ctrl+shift+,", "open_config"),
+];
+
+impl Keymap {
+    pub fn with_defaults() -> Self {
+        let mut keys = Self {
+            map: HashMap::new(),
+            order: Vec::new(),
+        };
+        for (chord, name) in DEFAULT_KEYS {
+            let chord = KeyChord::parse(chord).expect("default keys are valid");
+            let action = BuiltinAction::from_name(name).expect("default actions are valid");
+            keys.bind(chord, Some(Action::Builtin(action)));
+        }
+        keys
+    }
+
+    /// Adds or changes a binding. `None` removes the key.
+    pub fn bind(&mut self, chord: KeyChord, action: Option<Action>) {
+        match action {
+            Some(action) => {
+                if self.map.insert(chord, action).is_none() {
+                    self.order.push(chord);
+                }
+            }
+            None => {
+                self.map.remove(&chord);
+                self.order.retain(|c| *c != chord);
+            }
+        }
+    }
+
+    pub fn get(&self, chord: &KeyChord) -> Option<&Action> {
+        self.map.get(chord)
+    }
+
+    /// The first key for an action (to show it in the palette), like "Ctrl+Shift+T".
+    pub fn key_for(&self, action: &Action) -> Option<String> {
+        self.order
+            .iter()
+            .find(|chord| self.map.get(chord) == Some(action))
+            .map(KeyChord::display)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chord(text: &str) -> KeyChord {
+        KeyChord::parse(text).unwrap()
+    }
+
+    const CTRL_SHIFT: Mods = Mods {
+        ctrl: true,
+        shift: true,
+        alt: false,
+        logo: false,
+    };
+
+    #[test]
+    fn parse_letters_and_mods() {
+        assert_eq!(
+            chord("ctrl+shift+t"),
+            KeyChord {
+                mods: CTRL_SHIFT,
+                key: Key::Char('t')
+            }
+        );
+        // Case and spaces do not matter, and the order of mods does not matter.
+        assert_eq!(chord("Shift + Ctrl + T"), chord("ctrl+shift+t"));
+        assert_eq!(chord("control+shift+t"), chord("ctrl+shift+t"));
+        assert!(chord("win+e").mods.logo);
+    }
+
+    #[test]
+    fn parse_named_keys() {
+        assert_eq!(chord("ctrl+tab").key, Key::Tab);
+        assert_eq!(chord("shift+pageup").key, Key::PageUp);
+        assert_eq!(chord("shift+pgdn").key, Key::PageDown);
+        assert_eq!(chord("alt+left").key, Key::Left);
+        assert_eq!(chord("f11").key, Key::F(11));
+        assert_eq!(chord("ctrl+shift+space").key, Key::Space);
+        assert_eq!(chord("esc").key, Key::Escape);
+    }
+
+    #[test]
+    fn parse_symbols_and_digits() {
+        assert_eq!(chord("alt+shift+=").key, Key::Char('='));
+        assert_eq!(chord("alt+shift+plus").key, Key::Char('='));
+        assert_eq!(chord("alt+shift+-").key, Key::Char('-'));
+        assert_eq!(chord("alt+shift+minus").key, Key::Char('-'));
+        assert_eq!(chord("ctrl+shift+1").key, Key::Char('1'));
+        assert_eq!(chord("ctrl+,").key, Key::Char(','));
+    }
+
+    #[test]
+    fn parse_errors() {
+        for bad in ["", "ctrl+shift", "ctrl+foo", "f99", "hyper+t", "ctrl++"] {
+            assert!(KeyChord::parse(bad).is_err(), "{bad} should fail");
+        }
+    }
+
+    #[test]
+    fn action_names_go_both_ways() {
+        for action in BuiltinAction::ALL {
+            assert_eq!(
+                BuiltinAction::from_name(&action.name()),
+                Some(action),
+                "{action:?}"
+            );
+            assert!(!action.label().is_empty());
+        }
+        assert_eq!(
+            BuiltinAction::from_name("select_tab_3"),
+            Some(BuiltinAction::SelectTab(2))
+        );
+        assert_eq!(BuiltinAction::from_name("select_tab_0"), None);
+        assert_eq!(BuiltinAction::from_name("fly"), None);
+        assert_eq!(BuiltinAction::NewTab.name(), "new_tab");
+        assert_eq!(BuiltinAction::SplitRight.label(), "Split right");
+    }
+
+    #[test]
+    fn defaults_have_the_known_keys() {
+        let keys = Keymap::with_defaults();
+        let get = |text: &str| keys.get(&chord(text)).cloned();
+        assert_eq!(
+            get("ctrl+shift+t"),
+            Some(Action::Builtin(BuiltinAction::NewTab))
+        );
+        assert_eq!(
+            get("ctrl+shift+w"),
+            Some(Action::Builtin(BuiltinAction::ClosePane))
+        );
+        assert_eq!(
+            get("alt+shift+="),
+            Some(Action::Builtin(BuiltinAction::SplitRight))
+        );
+        assert_eq!(
+            get("ctrl+shift+3"),
+            Some(Action::Builtin(BuiltinAction::SelectTab(2)))
+        );
+        assert_eq!(
+            get("ctrl+shift+p"),
+            Some(Action::Builtin(BuiltinAction::CommandPalette))
+        );
+        assert_eq!(
+            get("shift+insert"),
+            Some(Action::Builtin(BuiltinAction::Paste))
+        );
+        assert_eq!(get("ctrl+t"), None);
+        // Every default key string is valid.
+        for (key, action) in DEFAULT_KEYS {
+            assert!(KeyChord::parse(key).is_ok(), "{key}");
+            assert!(BuiltinAction::from_name(action).is_some(), "{action}");
+        }
+    }
+
+    #[test]
+    fn user_binding_wins_and_none_removes() {
+        let mut keys = Keymap::with_defaults();
+        let spawn = Action::Spawn {
+            profile: Some("Claude".into()),
+            place: SpawnWhere::Tab,
+        };
+        keys.bind(chord("ctrl+shift+t"), Some(spawn.clone()));
+        assert_eq!(keys.get(&chord("ctrl+shift+t")), Some(&spawn));
+        keys.bind(chord("ctrl+shift+w"), None);
+        assert_eq!(keys.get(&chord("ctrl+shift+w")), None);
+    }
+
+    #[test]
+    fn key_for_shows_a_readable_key() {
+        let keys = Keymap::with_defaults();
+        assert_eq!(
+            keys.key_for(&Action::Builtin(BuiltinAction::NewTab))
+                .as_deref(),
+            Some("Ctrl+Shift+T")
+        );
+        assert_eq!(
+            keys.key_for(&Action::Builtin(BuiltinAction::SplitRight))
+                .as_deref(),
+            Some("Alt+Shift+=")
+        );
+        assert_eq!(keys.key_for(&Action::Lua(7)), None);
+    }
+}

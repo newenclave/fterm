@@ -1,0 +1,760 @@
+//! Loading `fterm.lua`: run the Luau script and read the table it returns.
+
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+
+use mlua::{Function, Lua, Table, Value};
+
+use crate::colors::{ColorConfig, Rgb, parse_color};
+use crate::keys::{Action, BuiltinAction, KeyChord, Keymap, SpawnWhere};
+use crate::profiles::{Profile, expand_home, home_dir};
+
+/// How Braille chars are drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BrailleStyle {
+    #[default]
+    Pixels,
+    Dots,
+}
+
+/// A line in the command palette from the config.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UserCommand {
+    pub name: String,
+    pub action: Action,
+}
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub font_size: f32,
+    pub padding: f32,
+    pub scrollback: usize,
+    pub braille_style: BrailleStyle,
+    pub colors: ColorConfig,
+    /// The profile for new tabs and splits. `None` = the first profile.
+    pub default_profile: Option<String>,
+    /// Profiles from the config. Empty = fterm finds them itself.
+    pub profiles: Vec<Profile>,
+    pub keys: Keymap,
+    pub commands: Vec<UserCommand>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            font_size: 14.0,
+            padding: 6.0,
+            scrollback: 10_000,
+            braille_style: BrailleStyle::Pixels,
+            colors: ColorConfig::default(),
+            default_profile: None,
+            profiles: Vec::new(),
+            keys: Keymap::with_defaults(),
+            commands: Vec::new(),
+        }
+    }
+}
+
+/// A call from a Lua function to fterm. The app runs them after the function ends.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApiCall {
+    Spawn {
+        profile: Option<String>,
+        place: SpawnWhere,
+    },
+    SendText(String),
+    Notify(String),
+    Copy(String),
+    Action(BuiltinAction),
+}
+
+/// A loaded config and its Lua state (Lua functions in the config need it).
+pub struct LoadedConfig {
+    pub config: Config,
+    /// Lua functions from the config. `Action::Lua(i)` is `functions[i]`.
+    functions: Vec<Function>,
+    /// The `fterm` object that Lua functions get.
+    api: Option<Table>,
+    /// Calls from Lua functions, collected while a function runs.
+    queue: Rc<RefCell<Vec<ApiCall>>>,
+    /// Keeps the Lua state alive.
+    _lua: Option<Lua>,
+}
+
+impl LoadedConfig {
+    /// The config with no file.
+    pub fn defaults() -> Self {
+        Self {
+            config: Config::default(),
+            functions: Vec::new(),
+            api: None,
+            queue: Rc::default(),
+            _lua: None,
+        }
+    }
+
+    /// Runs the Lua function `index` (from `Action::Lua`) and returns what it asked fterm to do.
+    pub fn call(&self, index: usize) -> Result<Vec<ApiCall>, String> {
+        let (Some(function), Some(api)) = (self.functions.get(index), &self.api) else {
+            return Err(format!("no Lua function number {index}"));
+        };
+        self.queue.borrow_mut().clear();
+        function
+            .call::<()>(api.clone())
+            .map_err(|err| err.to_string())?;
+        Ok(std::mem::take(&mut *self.queue.borrow_mut()))
+    }
+}
+
+/// Runs a config script. `name` is shown in error messages (for example the file path).
+pub fn load_str(source: &str, name: &str) -> Result<LoadedConfig, String> {
+    let lua = Lua::new();
+    // Luau sandbox: no files, no programs, and the built-in tables cannot be changed.
+    lua.sandbox(true).map_err(|err| err.to_string())?;
+    let value: Value = lua
+        .load(source)
+        .set_name(format!("={name}"))
+        .eval()
+        .map_err(|err| err.to_string())?;
+    let Value::Table(root) = value else {
+        return Err(format!(
+            "{name}: the config must return a table, got {}",
+            value.type_name()
+        ));
+    };
+
+    let queue: Rc<RefCell<Vec<ApiCall>>> = Rc::default();
+    let api = make_api(&lua, &queue).map_err(|err| err.to_string())?;
+    let mut reader = Reader {
+        functions: Vec::new(),
+    };
+    let config = reader.config(&root)?;
+    Ok(LoadedConfig {
+        config,
+        functions: reader.functions,
+        api: Some(api),
+        queue,
+        _lua: Some(lua),
+    })
+}
+
+/// The `fterm` object for Lua functions. Each call is put into `queue`.
+fn make_api(lua: &Lua, queue: &Rc<RefCell<Vec<ApiCall>>>) -> mlua::Result<Table> {
+    let api = lua.create_table()?;
+
+    let q = queue.clone();
+    api.set(
+        "spawn",
+        lua.create_function(
+            move |_, (profile, options): (Option<String>, Option<Table>)| {
+                let split = match &options {
+                    Some(options) => options.get::<Option<String>>("split")?,
+                    None => None,
+                };
+                let place = spawn_place(split.as_deref()).map_err(mlua::Error::runtime)?;
+                q.borrow_mut().push(ApiCall::Spawn { profile, place });
+                Ok(())
+            },
+        )?,
+    )?;
+    let q = queue.clone();
+    api.set(
+        "send_text",
+        lua.create_function(move |_, text: String| {
+            q.borrow_mut().push(ApiCall::SendText(text));
+            Ok(())
+        })?,
+    )?;
+    let q = queue.clone();
+    api.set(
+        "notify",
+        lua.create_function(move |_, text: String| {
+            q.borrow_mut().push(ApiCall::Notify(text));
+            Ok(())
+        })?,
+    )?;
+    let q = queue.clone();
+    api.set(
+        "copy",
+        lua.create_function(move |_, text: String| {
+            q.borrow_mut().push(ApiCall::Copy(text));
+            Ok(())
+        })?,
+    )?;
+    let q = queue.clone();
+    api.set(
+        "action",
+        lua.create_function(move |_, name: String| {
+            let action = BuiltinAction::from_name(&name)
+                .ok_or_else(|| mlua::Error::runtime(format!("unknown action `{name}`")))?;
+            q.borrow_mut().push(ApiCall::Action(action));
+            Ok(())
+        })?,
+    )?;
+    Ok(api)
+}
+
+fn spawn_place(split: Option<&str>) -> Result<SpawnWhere, String> {
+    match split {
+        None | Some("tab") => Ok(SpawnWhere::Tab),
+        Some("right") => Ok(SpawnWhere::SplitRight),
+        Some("down") => Ok(SpawnWhere::SplitDown),
+        Some(other) => Err(format!(
+            "split must be \"right\", \"down\", or \"tab\", got `{other}`"
+        )),
+    }
+}
+
+/// Reads the config table. Error messages have the path to the bad field.
+struct Reader {
+    functions: Vec<Function>,
+}
+
+impl Reader {
+    fn config(&mut self, root: &Table) -> Result<Config, String> {
+        let mut config = Config::default();
+        if let Some(font) = table_field(root, "font", "font")? {
+            if let Some(size) = number_field(&font, "size", "font.size")? {
+                if !(4.0..=200.0).contains(&size) {
+                    return Err(format!("font.size: must be between 4 and 200, got {size}"));
+                }
+                config.font_size = size as f32;
+            }
+        }
+        if let Some(padding) = number_field(root, "padding", "padding")? {
+            config.padding = padding.max(0.0) as f32;
+        }
+        if let Some(lines) = number_field(root, "scrollback", "scrollback")? {
+            config.scrollback = lines.max(0.0) as usize;
+        }
+        if let Some(style) = string_field(root, "braille_style", "braille_style")? {
+            config.braille_style = match style.as_str() {
+                "pixels" => BrailleStyle::Pixels,
+                "dots" => BrailleStyle::Dots,
+                other => {
+                    return Err(format!(
+                        "braille_style: must be \"pixels\" or \"dots\", got `{other}`"
+                    ));
+                }
+            };
+        }
+        if let Some(colors) = table_field(root, "colors", "colors")? {
+            config.colors = self.colors(&colors)?;
+        }
+        config.default_profile = string_field(root, "default_profile", "default_profile")?;
+        if let Some(profiles) = table_field(root, "profiles", "profiles")? {
+            for (i, value) in list(&profiles) {
+                let path = format!("profiles[{i}]");
+                let Value::Table(table) = value else {
+                    return Err(format!(
+                        "{path}: expected a table, got {}",
+                        value.type_name()
+                    ));
+                };
+                config.profiles.push(profile(&table, &path)?);
+            }
+        }
+        if let Some(keys) = table_field(root, "keys", "keys")? {
+            for (i, value) in list(&keys) {
+                let path = format!("keys[{i}]");
+                let Value::Table(table) = value else {
+                    return Err(format!(
+                        "{path}: expected a table, got {}",
+                        value.type_name()
+                    ));
+                };
+                let key = string_field(&table, "key", &format!("{path}.key"))?
+                    .ok_or_else(|| format!("{path}.key: missing"))?;
+                let chord = KeyChord::parse(&key).map_err(|err| format!("{path}.key: {err}"))?;
+                let action = self.action(&table, &format!("{path}.action"))?;
+                config.keys.bind(chord, action);
+            }
+        }
+        if let Some(commands) = table_field(root, "commands", "commands")? {
+            for (i, value) in list(&commands) {
+                let path = format!("commands[{i}]");
+                let Value::Table(table) = value else {
+                    return Err(format!(
+                        "{path}: expected a table, got {}",
+                        value.type_name()
+                    ));
+                };
+                let name = string_field(&table, "name", &format!("{path}.name"))?
+                    .ok_or_else(|| format!("{path}.name: missing"))?;
+                let action = self
+                    .action(&table, &format!("{path}.action"))?
+                    .ok_or_else(|| format!("{path}.action: \"none\" is not a command"))?;
+                config.commands.push(UserCommand { name, action });
+            }
+        }
+        Ok(config)
+    }
+
+    fn colors(&mut self, table: &Table) -> Result<ColorConfig, String> {
+        let mut colors = ColorConfig::default();
+        let one = |field: &str| -> Result<Option<Rgb>, String> {
+            let path = format!("colors.{field}");
+            string_field(table, field, &path)?
+                .map(|text| parse_color(&text).map_err(|err| format!("{path}: {err}")))
+                .transpose()
+        };
+        colors.background = one("background")?;
+        colors.foreground = one("foreground")?;
+        colors.cursor = one("cursor")?;
+        colors.selection = one("selection")?;
+        for (field, target) in [("ansi", &mut colors.ansi), ("bright", &mut colors.bright)] {
+            let Some(list_table) = table_field(table, field, &format!("colors.{field}"))? else {
+                continue;
+            };
+            for i in 1..=8 {
+                let path = format!("colors.{field}[{i}]");
+                let value: Value = list_table.get(i).map_err(|err| format!("{path}: {err}"))?;
+                match value {
+                    Value::Nil => {}
+                    Value::String(text) => {
+                        let text = text.to_string_lossy();
+                        target[i - 1] =
+                            Some(parse_color(&text).map_err(|err| format!("{path}: {err}"))?);
+                    }
+                    other => {
+                        return Err(format!(
+                            "{path}: expected a color string, got {}",
+                            other.type_name()
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(colors)
+    }
+
+    /// `action` in a key or a command. `Ok(None)` = "none".
+    fn action(&mut self, table: &Table, path: &str) -> Result<Option<Action>, String> {
+        let value: Value = table
+            .get("action")
+            .map_err(|err| format!("{path}: {err}"))?;
+        match value {
+            Value::Nil => Err(format!("{path}: missing")),
+            Value::String(name) => {
+                let name = name.to_string_lossy();
+                if name == "none" {
+                    return Ok(None);
+                }
+                BuiltinAction::from_name(&name)
+                    .map(|a| Some(Action::Builtin(a)))
+                    .ok_or_else(|| format!("{path}: unknown action `{name}`"))
+            }
+            Value::Table(spawn) => {
+                let profile = string_field(&spawn, "spawn", &format!("{path}.spawn"))?;
+                let split = string_field(&spawn, "split", &format!("{path}.split"))?;
+                let place =
+                    spawn_place(split.as_deref()).map_err(|err| format!("{path}.split: {err}"))?;
+                Ok(Some(Action::Spawn { profile, place }))
+            }
+            Value::Function(function) => {
+                self.functions.push(function);
+                Ok(Some(Action::Lua(self.functions.len() - 1)))
+            }
+            other => Err(format!(
+                "{path}: expected an action name, a table, or a function, got {}",
+                other.type_name()
+            )),
+        }
+    }
+}
+
+fn profile(table: &Table, path: &str) -> Result<Profile, String> {
+    let name = string_field(table, "name", &format!("{path}.name"))?
+        .ok_or_else(|| format!("{path}.name: missing"))?;
+    let command = string_field(table, "command", &format!("{path}.command"))?
+        .ok_or_else(|| format!("{path}.command: missing"))?;
+    let mut args = Vec::new();
+    if let Some(list_table) = table_field(table, "args", &format!("{path}.args"))? {
+        for (i, value) in list(&list_table) {
+            match value {
+                Value::String(text) => args.push(text.to_string_lossy()),
+                Value::Integer(n) => args.push(n.to_string()),
+                Value::Number(n) => args.push(n.to_string()),
+                other => {
+                    return Err(format!(
+                        "{path}.args[{i}]: expected a string, got {}",
+                        other.type_name()
+                    ));
+                }
+            }
+        }
+    }
+    let cwd = string_field(table, "cwd", &format!("{path}.cwd"))?
+        .map(|dir| expand_home(&dir, home_dir().as_deref()));
+    let mut env = Vec::new();
+    if let Some(env_table) = table_field(table, "env", &format!("{path}.env"))? {
+        for pair in env_table.pairs::<String, Value>() {
+            let (key, value) = pair.map_err(|err| format!("{path}.env: {err}"))?;
+            let value = match value {
+                Value::String(text) => text.to_string_lossy(),
+                Value::Integer(n) => n.to_string(),
+                Value::Number(n) => n.to_string(),
+                Value::Boolean(b) => b.to_string(),
+                other => {
+                    return Err(format!(
+                        "{path}.env.{key}: expected a string, got {}",
+                        other.type_name()
+                    ));
+                }
+            };
+            env.push((key, value));
+        }
+        env.sort();
+    }
+    Ok(Profile {
+        name,
+        command,
+        args,
+        cwd,
+        env,
+    })
+}
+
+/// The items of a Lua list, with their 1-based index.
+fn list(table: &Table) -> Vec<(usize, Value)> {
+    table
+        .clone()
+        .sequence_values::<Value>()
+        .filter_map(Result::ok)
+        .enumerate()
+        .map(|(i, v)| (i + 1, v))
+        .collect()
+}
+
+fn table_field(table: &Table, key: &str, path: &str) -> Result<Option<Table>, String> {
+    match table
+        .get::<Value>(key)
+        .map_err(|err| format!("{path}: {err}"))?
+    {
+        Value::Nil => Ok(None),
+        Value::Table(t) => Ok(Some(t)),
+        other => Err(format!(
+            "{path}: expected a table, got {}",
+            other.type_name()
+        )),
+    }
+}
+
+fn number_field(table: &Table, key: &str, path: &str) -> Result<Option<f64>, String> {
+    match table
+        .get::<Value>(key)
+        .map_err(|err| format!("{path}: {err}"))?
+    {
+        Value::Nil => Ok(None),
+        Value::Integer(n) => Ok(Some(n as f64)),
+        Value::Number(n) => Ok(Some(n)),
+        other => Err(format!(
+            "{path}: expected a number, got {}",
+            other.type_name()
+        )),
+    }
+}
+
+fn string_field(table: &Table, key: &str, path: &str) -> Result<Option<String>, String> {
+    match table
+        .get::<Value>(key)
+        .map_err(|err| format!("{path}: {err}"))?
+    {
+        Value::Nil => Ok(None),
+        Value::String(text) => Ok(Some(text.to_string_lossy())),
+        other => Err(format!(
+            "{path}: expected a string, got {}",
+            other.type_name()
+        )),
+    }
+}
+
+pub fn load_file(path: &Path) -> Result<LoadedConfig, String> {
+    let source =
+        std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))?;
+    load_str(&source, &path.display().to_string())
+}
+
+/// Where the config file is: `FTERM_CONFIG`, or `%APPDATA%\fterm\fterm.lua`, or `~/.config/fterm/fterm.lua`.
+pub fn config_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("FTERM_CONFIG") {
+        return PathBuf::from(path);
+    }
+    let base = if cfg!(windows) {
+        std::env::var_os("APPDATA").map(PathBuf::from)
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| crate::profiles::home_dir().map(|home| home.join(".config")))
+    };
+    base.unwrap_or_else(|| PathBuf::from("."))
+        .join("fterm")
+        .join("fterm.lua")
+}
+
+/// The file that "Open config" makes when there is no config yet.
+pub const SAMPLE_CONFIG: &str = include_str!("sample.lua");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::colors::Rgb;
+    use crate::keys::KeyChord;
+
+    fn load(source: &str) -> LoadedConfig {
+        load_str(source, "test.lua").unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn error(source: &str) -> String {
+        match load_str(source, "test.lua") {
+            Ok(_) => panic!("no error"),
+            Err(err) => err,
+        }
+    }
+
+    #[test]
+    fn an_empty_table_gives_the_defaults() {
+        let config = load("return {}").config;
+        assert_eq!(config.font_size, 14.0);
+        assert_eq!(config.padding, 6.0);
+        assert_eq!(config.scrollback, 10_000);
+        assert!(config.profiles.is_empty());
+        assert!(
+            config
+                .keys
+                .get(&KeyChord::parse("ctrl+shift+t").unwrap())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn the_sample_config_loads() {
+        let loaded = load(SAMPLE_CONFIG);
+        assert!(loaded.config.font_size > 0.0);
+    }
+
+    #[test]
+    fn full_config() {
+        let config = load(
+            r##"
+            return {
+              font = { size = 18 },
+              padding = 10,
+              scrollback = 50000,
+              braille_style = "dots",
+              colors = {
+                background = "#000000",
+                cursor = "#fff",
+                ansi = { "#010101", "#020202" },
+                bright = { [8] = "#080808" },
+              },
+              default_profile = "Claude",
+              profiles = {
+                { name = "Claude", command = "claude", args = { "--continue" }, cwd = "C:/code", env = { A = "1" } },
+                { name = "Ollama", command = "ollama", args = { "run", "llama3" } },
+              },
+            }
+            "##,
+        )
+        .config;
+        assert_eq!(config.font_size, 18.0);
+        assert_eq!(config.padding, 10.0);
+        assert_eq!(config.scrollback, 50_000);
+        assert_eq!(config.braille_style, BrailleStyle::Dots);
+        assert_eq!(config.colors.background, Some(Rgb { r: 0, g: 0, b: 0 }));
+        assert_eq!(
+            config.colors.cursor,
+            Some(Rgb {
+                r: 255,
+                g: 255,
+                b: 255
+            })
+        );
+        assert_eq!(config.colors.ansi[1], Some(Rgb { r: 2, g: 2, b: 2 }));
+        assert_eq!(config.colors.ansi[2], None);
+        assert_eq!(config.colors.bright[7], Some(Rgb { r: 8, g: 8, b: 8 }));
+        assert_eq!(config.default_profile.as_deref(), Some("Claude"));
+        assert_eq!(config.profiles.len(), 2);
+        let claude = &config.profiles[0];
+        assert_eq!(claude.args, ["--continue"]);
+        assert_eq!(claude.cwd.as_deref(), Some(Path::new("C:/code")));
+        assert_eq!(claude.env, [("A".to_owned(), "1".to_owned())]);
+    }
+
+    #[test]
+    fn keys_and_commands() {
+        let loaded = load(
+            r#"
+            return {
+              keys = {
+                { key = "ctrl+alt+c", action = { spawn = "Claude" } },
+                { key = "ctrl+alt+o", action = { spawn = "Ollama", split = "right" } },
+                { key = "ctrl+shift+w", action = "none" },
+                { key = "ctrl+shift+t", action = "split_down" },
+                { key = "ctrl+alt+h", action = function(fterm) fterm.send_text("hi") end },
+              },
+              commands = {
+                { name = "Git status", action = function(fterm) fterm.send_text("git status\r") end },
+                { name = "New Claude", action = { spawn = "Claude", split = "down" } },
+              },
+            }
+            "#,
+        );
+        let keys = &loaded.config.keys;
+        let get = |text: &str| keys.get(&KeyChord::parse(text).unwrap()).cloned();
+        assert_eq!(
+            get("ctrl+alt+c"),
+            Some(Action::Spawn {
+                profile: Some("Claude".into()),
+                place: SpawnWhere::Tab
+            })
+        );
+        assert_eq!(
+            get("ctrl+alt+o"),
+            Some(Action::Spawn {
+                profile: Some("Ollama".into()),
+                place: SpawnWhere::SplitRight
+            })
+        );
+        assert_eq!(get("ctrl+shift+w"), None);
+        assert_eq!(
+            get("ctrl+shift+t"),
+            Some(Action::Builtin(BuiltinAction::SplitDown))
+        );
+        let Some(Action::Lua(index)) = get("ctrl+alt+h") else {
+            panic!("not a Lua action");
+        };
+        assert_eq!(
+            loaded.call(index).unwrap(),
+            [ApiCall::SendText("hi".into())]
+        );
+
+        assert_eq!(loaded.config.commands.len(), 2);
+        assert_eq!(loaded.config.commands[0].name, "Git status");
+        let Action::Lua(index) = loaded.config.commands[0].action else {
+            panic!("not a Lua action");
+        };
+        assert_eq!(
+            loaded.call(index).unwrap(),
+            [ApiCall::SendText("git status\r".into())]
+        );
+    }
+
+    #[test]
+    fn lua_functions_can_use_the_whole_api() {
+        let loaded = load(
+            r#"
+            return { keys = { { key = "f5", action = function(fterm)
+              fterm.spawn("Claude", { split = "right" })
+              fterm.spawn()
+              fterm.notify("hello")
+              fterm.copy("text")
+              fterm.action("zoom")
+            end } } }
+            "#,
+        );
+        let Some(Action::Lua(index)) = loaded
+            .config
+            .keys
+            .get(&KeyChord::parse("f5").unwrap())
+            .cloned()
+        else {
+            panic!("no f5");
+        };
+        assert_eq!(
+            loaded.call(index).unwrap(),
+            [
+                ApiCall::Spawn {
+                    profile: Some("Claude".into()),
+                    place: SpawnWhere::SplitRight
+                },
+                ApiCall::Spawn {
+                    profile: None,
+                    place: SpawnWhere::Tab
+                },
+                ApiCall::Notify("hello".into()),
+                ApiCall::Copy("text".into()),
+                ApiCall::Action(BuiltinAction::Zoom),
+            ]
+        );
+        // Each call starts with an empty queue.
+        assert_eq!(loaded.call(index).unwrap().len(), 5);
+    }
+
+    #[test]
+    fn errors_in_lua_functions_are_reported() {
+        let loaded =
+            load(r#"return { keys = { { key = "f6", action = function() error("boom") end } } }"#);
+        let Some(Action::Lua(index)) = loaded
+            .config
+            .keys
+            .get(&KeyChord::parse("f6").unwrap())
+            .cloned()
+        else {
+            panic!("no f6");
+        };
+        assert!(loaded.call(index).unwrap_err().contains("boom"));
+        assert!(loaded.call(99).is_err());
+    }
+
+    #[test]
+    fn helpers_and_loops_work() {
+        // The point of a script: functions, tables, and loops.
+        let config = load(
+            r#"
+            local function tool(name, cmd) return { name = name, command = cmd } end
+            local profiles = {}
+            for _, t in ipairs({ {"A", "a"}, {"B", "b"} }) do
+              table.insert(profiles, tool(t[1], t[2]))
+            end
+            local big = true
+            return { font = { size = if big then 20 else 12 }, profiles = profiles }
+            "#,
+        )
+        .config;
+        assert_eq!(config.font_size, 20.0);
+        assert_eq!(config.profiles.len(), 2);
+    }
+
+    #[test]
+    fn type_errors_say_where() {
+        assert!(error(r#"return { font = { size = "big" } }"#).contains("font.size"));
+        assert!(error(r#"return { padding = {} }"#).contains("padding"));
+        assert!(
+            error(r#"return { colors = { background = "blue" } }"#).contains("colors.background")
+        );
+        assert!(
+            error(r#"return { profiles = { { name = "x" } } }"#).contains("profiles[1].command")
+        );
+        assert!(error(r#"return { braille_style = "round" }"#).contains("braille_style"));
+        let keys = error(r#"return { keys = { { key = "ctrl+nope", action = "new_tab" } } }"#);
+        assert!(keys.contains("keys[1]") && keys.contains("nope"), "{keys}");
+        assert!(error(r#"return { keys = { { key = "f1", action = "fly" } } }"#).contains("fly"));
+        assert!(error(r#"return { font = { size = -3 } }"#).contains("font.size"));
+    }
+
+    #[test]
+    fn syntax_errors_have_the_line() {
+        let err = error("return {\n  font = { size = 14 \n}");
+        assert!(err.contains("test.lua"), "{err}");
+        assert!(err.contains(':'), "{err}");
+        assert!(error("return 5").contains("table"));
+    }
+
+    #[test]
+    fn the_sandbox_has_no_files_or_programs() {
+        let loaded = load(
+            // `loadstring` and `require` stay: they only read Lua code, they do not run programs.
+            r#"return { padding = if io == nil and os.execute == nil and os.remove == nil then 1 else 2 }"#,
+        );
+        assert_eq!(loaded.config.padding, 1.0);
+    }
+
+    #[test]
+    fn defaults_have_no_lua_functions() {
+        let loaded = LoadedConfig::defaults();
+        assert_eq!(loaded.config.font_size, 14.0);
+        assert!(loaded.call(0).is_err());
+    }
+}

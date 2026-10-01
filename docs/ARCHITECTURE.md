@@ -6,6 +6,7 @@
 |---|---|---|
 | `fterm-term` | Runs the shell in a pty. Keeps the text grid. Colors. Grid size. | No |
 | `fterm-mux` | Tabs and the tree of panes in each tab. A pure model. | No |
+| `fterm-config` | The Luau config: settings, colors, profiles, key bindings, Lua functions. | No |
 | `fterm-render` | Font, glyph atlas, tab bar, and drawing with wgpu. | Yes |
 | `fterm` | The app: window, keys, events. It connects the other crates. | Yes |
 
@@ -80,6 +81,16 @@ processes and real escape codes, and later use it from the CLI and MCP (Phase 7)
 - The cell size is whole pixels, so the cell backgrounds have no gaps between them.
 - Tests use `Fonts::embedded_only`, so they give the same result on every machine.
   Tests that need system fonts (emoji, CJK) do nothing when the font is not there.
+
+## Config
+
+- `fterm-config` runs `fterm.lua` with Luau (`mlua`, built from source, sandbox on) and reads the table.
+  Errors have the path of the bad field (`profiles[2].command: missing`).
+- Lua functions in the config do not change the app directly. They call `fterm.spawn`, `fterm.send_text`, …,
+  these calls go into a queue (`ApiCall`), and the app runs them after the function ends.
+- The app watches the folder of the config file (`notify`), waits 150 ms after the last change, and loads it again.
+  A broken file keeps the old config and shows the error.
+- Keys: a winit key becomes a `KeyChord` by its physical key, and the `Keymap` gives the `Action`.
 
 ## Selection
 

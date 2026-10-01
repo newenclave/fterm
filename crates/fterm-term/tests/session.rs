@@ -102,3 +102,46 @@ fn session_knows_its_shell_pid_and_program() {
     );
     session.write(b"\x03exit\r".to_vec());
 }
+
+#[test]
+fn session_starts_in_its_folder_with_its_env() {
+    let dir = std::env::temp_dir();
+    let mut options = if cfg!(windows) {
+        // The ping keeps the process alive a bit, so the output is not lost (see above).
+        SessionOptions::command(
+            "cmd.exe",
+            ["/c", "cd & echo %FTERM_TEST% & ping -n 2 127.0.0.1 >nul"],
+        )
+    } else {
+        SessionOptions::command("sh", ["-c", "pwd; echo $FTERM_TEST; sleep 1"])
+    };
+    options.cwd = Some(dir.clone());
+    options.env = vec![("FTERM_TEST".to_owned(), "hello-env".to_owned())];
+    let (session, rx) = spawn(options);
+    wait_for_exit(&session, &rx);
+    let text = session.screen_text();
+    assert!(text.contains("hello-env"), "{text}");
+    let dir_name = dir.file_name().unwrap().to_string_lossy().to_lowercase();
+    assert!(text.to_lowercase().contains(&dir_name), "{text}");
+}
+
+#[test]
+fn scrollback_size_comes_from_the_options() {
+    let mut options = if cfg!(windows) {
+        SessionOptions::command(
+            "cmd.exe",
+            [
+                "/c",
+                "(for /l %i in (1,1,200) do @echo line %i) & ping -n 2 127.0.0.1 >nul",
+            ],
+        )
+    } else {
+        SessionOptions::command("sh", ["-c", "seq 200; sleep 1"])
+    };
+    options.scrollback = 50;
+    let (session, rx) = spawn(options);
+    wait_for_exit(&session, &rx);
+    // 200 lines on a 24-line screen: the history keeps only 50 of them.
+    let history = session.with_term(|term| term.history_size());
+    assert_eq!(history, 50);
+}

@@ -28,11 +28,29 @@ pub enum TermEvent {
 }
 
 /// What to run in the session.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct SessionOptions {
     /// Program to run. `None` means the default shell.
     pub program: Option<String>,
     pub args: Vec<String>,
+    /// The start folder. `None` = the folder of fterm.
+    pub cwd: Option<std::path::PathBuf>,
+    /// More environment variables for the program.
+    pub env: Vec<(String, String)>,
+    /// Lines of history.
+    pub scrollback: usize,
+}
+
+impl Default for SessionOptions {
+    fn default() -> Self {
+        Self {
+            program: None,
+            args: Vec::new(),
+            cwd: None,
+            env: Vec::new(),
+            scrollback: 10_000,
+        }
+    }
 }
 
 impl SessionOptions {
@@ -44,6 +62,7 @@ impl SessionOptions {
         Self {
             program: Some(program.to_owned()),
             args: args.into_iter().map(Into::into).collect(),
+            ..Self::default()
         }
     }
 }
@@ -101,7 +120,10 @@ impl Session {
             sender: Arc::new(OnceLock::new()),
         };
         let term = Arc::new(FairMutex::new(Term::new(
-            term_config(),
+            Config {
+                scrolling_history: options.scrollback,
+                ..term_config()
+            },
             &size,
             listener.clone(),
         )));
@@ -114,13 +136,16 @@ impl Session {
         let program_name = program_name(&program);
         let pty_options = tty::Options {
             shell: Some(tty::Shell::new(program, args)),
-            working_directory: None,
+            working_directory: options.cwd,
             drain_on_exit: true,
             env: HashMap::from([
                 ("TERM".to_owned(), "xterm-256color".to_owned()),
                 ("COLORTERM".to_owned(), "truecolor".to_owned()),
                 ("TERM_PROGRAM".to_owned(), "fterm".to_owned()),
-            ]),
+            ])
+            .into_iter()
+            .chain(options.env)
+            .collect(),
             #[cfg(windows)]
             escape_args: true,
         };

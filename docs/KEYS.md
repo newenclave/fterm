@@ -1,5 +1,8 @@
 # Keys and mouse
 
+These are the default keys. You can change them in the config (see [CONFIG.md](CONFIG.md)).
+**Ctrl + Shift + P** opens the command palette. **Ctrl + Shift + ,** opens the config file.
+
 ## Tabs
 | Key or mouse | What it does |
 |---|---|

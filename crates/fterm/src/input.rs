@@ -1,6 +1,6 @@
 //! Keyboard: turns a winit key press into bytes for the pty (xterm style).
 
-use fterm_mux::Edge;
+use fterm_config::keys::{Key as ChordKey, KeyChord, Mods};
 use fterm_term::alacritty_terminal::selection::SelectionType;
 use fterm_term::alacritty_terminal::vi_mode::ViMotion;
 use fterm_term::copy_mode::CopyAction;
@@ -237,81 +237,70 @@ pub fn copy_mode_action(key: &KeyInput) -> Option<CopyAction> {
     }
 }
 
-/// Actions of fterm itself (tabs). They do not go to the shell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AppAction {
-    NewTab,
-    NextTab,
-    PrevTab,
-    /// Tab number, from 0.
-    SelectTab(usize),
-    LastTab,
-    MoveTabLeft,
-    MoveTabRight,
-    RenameTab,
-    SplitRight,
-    SplitDown,
-    /// Focus the neighbor pane.
-    FocusPane(Edge),
-    /// Move the nearest divider of the active pane.
-    ResizePane(Edge),
-    ZoomPane,
-    /// Close the active pane (the last pane closes the tab).
-    ClosePane,
-}
-
-/// The tab keys. They use the key position, so they work on every layout.
-pub fn app_action(key: &KeyInput) -> Option<AppAction> {
-    use AppAction::*;
-    let (ctrl, shift, alt) = (
-        key.mods.control_key(),
-        key.mods.shift_key(),
-        key.mods.alt_key(),
-    );
+/// The key as a `KeyChord` for the keymap. It uses the key position, so it works on every layout.
+/// `None` for keys that are only modifiers.
+pub fn key_chord(key: &KeyInput) -> Option<KeyChord> {
     let PhysicalKey::Code(code) = key.physical else {
         return None;
     };
-    // Panes: Alt (+ Shift) and arrows, Alt+Shift+= and Alt+Shift+-.
-    if alt && !ctrl {
-        let edge = match code {
-            KeyCode::ArrowLeft => Some(Edge::Left),
-            KeyCode::ArrowRight => Some(Edge::Right),
-            KeyCode::ArrowUp => Some(Edge::Up),
-            KeyCode::ArrowDown => Some(Edge::Down),
-            _ => None,
-        };
-        return match (code, edge, shift) {
-            (_, Some(edge), false) => Some(FocusPane(edge)),
-            (_, Some(edge), true) => Some(ResizePane(edge)),
-            (KeyCode::Equal, None, true) => Some(SplitRight),
-            (KeyCode::Minus, None, true) => Some(SplitDown),
-            _ => None,
-        };
-    }
-    if !ctrl || alt {
-        return None;
-    }
-    let action = match (code, shift) {
-        (KeyCode::Tab, false) | (KeyCode::PageDown, false) => NextTab,
-        (KeyCode::Tab, true) | (KeyCode::PageUp, false) => PrevTab,
-        (KeyCode::PageUp, true) => MoveTabLeft,
-        (KeyCode::PageDown, true) => MoveTabRight,
-        (KeyCode::KeyT, true) => NewTab,
-        (KeyCode::KeyW, true) => ClosePane,
-        (KeyCode::KeyZ, true) => ZoomPane,
-        (KeyCode::KeyR, true) => RenameTab,
-        (KeyCode::Digit1, true) => SelectTab(0),
-        (KeyCode::Digit2, true) => SelectTab(1),
-        (KeyCode::Digit3, true) => SelectTab(2),
-        (KeyCode::Digit4, true) => SelectTab(3),
-        (KeyCode::Digit5, true) => SelectTab(4),
-        (KeyCode::Digit6, true) => SelectTab(5),
-        (KeyCode::Digit7, true) => SelectTab(6),
-        (KeyCode::Digit8, true) => SelectTab(7),
-        (KeyCode::Digit9, true) => LastTab,
-        _ => return None,
+    let chord_key = match code {
+        KeyCode::Tab => ChordKey::Tab,
+        KeyCode::Enter | KeyCode::NumpadEnter => ChordKey::Enter,
+        KeyCode::Escape => ChordKey::Escape,
+        KeyCode::Space => ChordKey::Space,
+        KeyCode::Backspace => ChordKey::Backspace,
+        KeyCode::Delete => ChordKey::Delete,
+        KeyCode::Insert => ChordKey::Insert,
+        KeyCode::Home => ChordKey::Home,
+        KeyCode::End => ChordKey::End,
+        KeyCode::PageUp => ChordKey::PageUp,
+        KeyCode::PageDown => ChordKey::PageDown,
+        KeyCode::ArrowUp => ChordKey::Up,
+        KeyCode::ArrowDown => ChordKey::Down,
+        KeyCode::ArrowLeft => ChordKey::Left,
+        KeyCode::ArrowRight => ChordKey::Right,
+        KeyCode::Equal => ChordKey::Char('='),
+        KeyCode::Minus => ChordKey::Char('-'),
+        KeyCode::Semicolon => ChordKey::Char(';'),
+        KeyCode::Quote => ChordKey::Char('\''),
+        KeyCode::Comma => ChordKey::Char(','),
+        KeyCode::Period => ChordKey::Char('.'),
+        KeyCode::Slash => ChordKey::Char('/'),
+        KeyCode::Backquote => ChordKey::Char('`'),
+        KeyCode::Digit0 => ChordKey::Char('0'),
+        KeyCode::Digit1 => ChordKey::Char('1'),
+        KeyCode::Digit2 => ChordKey::Char('2'),
+        KeyCode::Digit3 => ChordKey::Char('3'),
+        KeyCode::Digit4 => ChordKey::Char('4'),
+        KeyCode::Digit5 => ChordKey::Char('5'),
+        KeyCode::Digit6 => ChordKey::Char('6'),
+        KeyCode::Digit7 => ChordKey::Char('7'),
+        KeyCode::Digit8 => ChordKey::Char('8'),
+        KeyCode::Digit9 => ChordKey::Char('9'),
+        KeyCode::F1 => ChordKey::F(1),
+        KeyCode::F2 => ChordKey::F(2),
+        KeyCode::F3 => ChordKey::F(3),
+        KeyCode::F4 => ChordKey::F(4),
+        KeyCode::F5 => ChordKey::F(5),
+        KeyCode::F6 => ChordKey::F(6),
+        KeyCode::F7 => ChordKey::F(7),
+        KeyCode::F8 => ChordKey::F(8),
+        KeyCode::F9 => ChordKey::F(9),
+        KeyCode::F10 => ChordKey::F(10),
+        KeyCode::F11 => ChordKey::F(11),
+        KeyCode::F12 => ChordKey::F(12),
+        // Letters and the bracket and backslash keys.
+        _ => ChordKey::Char(physical_letter(key.physical)?),
     };
-    Some(action)
+    Some(KeyChord {
+        mods: Mods {
+            ctrl: key.mods.control_key(),
+            shift: key.mods.shift_key(),
+            alt: key.mods.alt_key(),
+            logo: key.mods.super_key(),
+        },
+        key: chord_key,
+    })
 }
 
 #[cfg(test)]
@@ -596,125 +585,116 @@ mod tests {
         assert_eq!(press(named(NamedKey::Enter), NONE), Some(b"\r".to_vec()));
     }
 
-    fn app_key(physical: KeyCode, logical: Key, mods: ModifiersState) -> Option<AppAction> {
+    fn chord_of(physical: KeyCode, logical: Key, mods: ModifiersState) -> Option<KeyChord> {
         let key = KeyInput {
             logical: &logical,
             physical: PhysicalKey::Code(physical),
             text: None,
             mods,
         };
-        app_action(&key)
+        key_chord(&key)
+    }
+
+    fn parsed(text: &str) -> Option<KeyChord> {
+        Some(KeyChord::parse(text).unwrap())
     }
 
     const CTRL_SHIFT: ModifiersState = ModifiersState::CONTROL.union(ModifiersState::SHIFT);
+    const ALT_SHIFT: ModifiersState = ModifiersState::ALT.union(ModifiersState::SHIFT);
 
     #[test]
-    fn tab_keys() {
-        use AppAction::*;
-        assert_eq!(app_key(KeyCode::KeyT, ch("T"), CTRL_SHIFT), Some(NewTab));
-        assert_eq!(app_key(KeyCode::KeyR, ch("R"), CTRL_SHIFT), Some(RenameTab));
+    fn chords_from_keys() {
         assert_eq!(
-            app_key(KeyCode::Tab, named(NamedKey::Tab), CTRL),
-            Some(NextTab)
+            chord_of(KeyCode::KeyT, ch("T"), CTRL_SHIFT),
+            parsed("ctrl+shift+t")
         );
         assert_eq!(
-            app_key(KeyCode::Tab, named(NamedKey::Tab), CTRL_SHIFT),
-            Some(PrevTab)
+            chord_of(KeyCode::Tab, named(NamedKey::Tab), CTRL),
+            parsed("ctrl+tab")
         );
         assert_eq!(
-            app_key(KeyCode::PageDown, named(NamedKey::PageDown), CTRL),
-            Some(NextTab)
+            chord_of(KeyCode::PageUp, named(NamedKey::PageUp), SHIFT),
+            parsed("shift+pageup")
         );
         assert_eq!(
-            app_key(KeyCode::PageUp, named(NamedKey::PageUp), CTRL),
-            Some(PrevTab)
+            chord_of(KeyCode::ArrowLeft, named(NamedKey::ArrowLeft), ALT),
+            parsed("alt+left")
         );
         assert_eq!(
-            app_key(KeyCode::PageUp, named(NamedKey::PageUp), CTRL_SHIFT),
-            Some(MoveTabLeft)
+            chord_of(KeyCode::F11, named(NamedKey::F11), NONE),
+            parsed("f11")
         );
         assert_eq!(
-            app_key(KeyCode::PageDown, named(NamedKey::PageDown), CTRL_SHIFT),
-            Some(MoveTabRight)
+            chord_of(KeyCode::Space, named(NamedKey::Space), CTRL_SHIFT),
+            parsed("ctrl+shift+space")
+        );
+        assert_eq!(
+            chord_of(KeyCode::Insert, named(NamedKey::Insert), SHIFT),
+            parsed("shift+insert")
         );
     }
 
     #[test]
-    fn tab_number_keys() {
-        // Shift+1 gives "!" as the char, so the key position is used.
+    fn symbols_and_digits_use_the_key_not_the_char() {
+        // Shift+= gives "+" and Shift+1 gives "!", but the key is "=" and "1".
         assert_eq!(
-            app_key(KeyCode::Digit1, ch("!"), CTRL_SHIFT),
-            Some(AppAction::SelectTab(0))
+            chord_of(KeyCode::Equal, ch("+"), ALT_SHIFT),
+            parsed("alt+shift+=")
         );
         assert_eq!(
-            app_key(KeyCode::Digit8, ch("*"), CTRL_SHIFT),
-            Some(AppAction::SelectTab(7))
+            chord_of(KeyCode::Minus, ch("_"), ALT_SHIFT),
+            parsed("alt+shift+-")
         );
         assert_eq!(
-            app_key(KeyCode::Digit9, ch("("), CTRL_SHIFT),
-            Some(AppAction::LastTab)
+            chord_of(KeyCode::Digit1, ch("!"), CTRL_SHIFT),
+            parsed("ctrl+shift+1")
         );
-    }
-
-    #[test]
-    fn tab_keys_work_on_the_russian_layout() {
-        // The "T" key gives "Е" on the Russian layout.
         assert_eq!(
-            app_key(KeyCode::KeyT, ch("Е"), CTRL_SHIFT),
-            Some(AppAction::NewTab)
+            chord_of(KeyCode::Comma, ch("<"), CTRL_SHIFT),
+            parsed("ctrl+shift+,")
         );
     }
 
     #[test]
-    fn other_keys_are_not_tab_keys() {
+    fn chords_work_on_the_russian_layout() {
         assert_eq!(
-            app_key(KeyCode::KeyT, ch("t"), CTRL),
-            None,
-            "Ctrl+T goes to the app"
+            chord_of(KeyCode::KeyT, ch("Е"), CTRL_SHIFT),
+            parsed("ctrl+shift+t")
         );
-        assert_eq!(app_key(KeyCode::KeyT, ch("T"), SHIFT), None);
-        assert_eq!(app_key(KeyCode::Tab, named(NamedKey::Tab), NONE), None);
+    }
+
+    #[test]
+    fn modifier_keys_alone_are_not_chords() {
         assert_eq!(
-            app_key(KeyCode::PageUp, named(NamedKey::PageUp), SHIFT),
+            chord_of(KeyCode::ShiftLeft, named(NamedKey::Shift), SHIFT),
+            None
+        );
+        assert_eq!(
+            chord_of(KeyCode::ControlLeft, named(NamedKey::Control), CTRL),
             None
         );
     }
 
-    const ALT_SHIFT: ModifiersState = ModifiersState::ALT.union(ModifiersState::SHIFT);
-
     #[test]
-    fn pane_keys() {
-        use AppAction::*;
+    fn default_keymap_works_with_real_keys() {
+        use fterm_config::keys::{Action, BuiltinAction, Keymap};
+        let keys = Keymap::with_defaults();
+        let action =
+            |code, logical, mods| chord_of(code, logical, mods).and_then(|c| keys.get(&c).cloned());
         assert_eq!(
-            app_key(KeyCode::Equal, ch("+"), ALT_SHIFT),
-            Some(SplitRight)
-        );
-        assert_eq!(app_key(KeyCode::Minus, ch("_"), ALT_SHIFT), Some(SplitDown));
-        assert_eq!(
-            app_key(KeyCode::ArrowLeft, named(NamedKey::ArrowLeft), ALT),
-            Some(FocusPane(Edge::Left))
+            action(KeyCode::KeyT, ch("Е"), CTRL_SHIFT),
+            Some(Action::Builtin(BuiltinAction::NewTab))
         );
         assert_eq!(
-            app_key(KeyCode::ArrowDown, named(NamedKey::ArrowDown), ALT),
-            Some(FocusPane(Edge::Down))
+            action(KeyCode::Equal, ch("+"), ALT_SHIFT),
+            Some(Action::Builtin(BuiltinAction::SplitRight))
         );
         assert_eq!(
-            app_key(KeyCode::ArrowRight, named(NamedKey::ArrowRight), ALT_SHIFT),
-            Some(ResizePane(Edge::Right))
+            action(KeyCode::Digit9, ch("("), CTRL_SHIFT),
+            Some(Action::Builtin(BuiltinAction::LastTab))
         );
-        assert_eq!(
-            app_key(KeyCode::ArrowUp, named(NamedKey::ArrowUp), ALT_SHIFT),
-            Some(ResizePane(Edge::Up))
-        );
-        assert_eq!(app_key(KeyCode::KeyZ, ch("Z"), CTRL_SHIFT), Some(ZoomPane));
-        // Ctrl+Shift+W closes the active pane now (the last pane closes the tab).
-        assert_eq!(app_key(KeyCode::KeyW, ch("W"), CTRL_SHIFT), Some(ClosePane));
-    }
-
-    #[test]
-    fn alt_alone_with_other_keys_goes_to_the_app() {
-        // Alt+B, Alt+F and others are word moves in shells: they are not fterm keys.
-        assert_eq!(app_key(KeyCode::KeyB, ch("b"), ALT), None);
-        assert_eq!(app_key(KeyCode::Equal, ch("="), ALT), None);
+        // Plain Ctrl+T and Alt+B go to the app.
+        assert_eq!(action(KeyCode::KeyT, ch("t"), CTRL), None);
+        assert_eq!(action(KeyCode::KeyB, ch("b"), ALT), None);
     }
 }

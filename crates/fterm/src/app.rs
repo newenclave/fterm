@@ -4,13 +4,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use fterm_mux::{Closed, Direction, Mux, PaneId, Rect, TabId};
+use fterm_config::keys::{Action, BuiltinAction, SpawnWhere};
+use fterm_config::load::{ApiCall, LoadedConfig, SAMPLE_CONFIG, config_path, load_file};
+use fterm_config::profiles::{Profile, detect_profiles, launch_command, path_extension, which};
+use fterm_mux::{Closed, Direction, Edge, Mux, PaneId, Rect, TabId};
 use fterm_render::Renderer;
+use fterm_render::builtin::BrailleStyle;
 use fterm_render::tabbar::{Hit, TabBarInput, bar_height, hit, layout_tabs};
 use fterm_term::alacritty_terminal::grid::Scroll;
 use fterm_term::alacritty_terminal::index::{Point, Side};
 use fterm_term::alacritty_terminal::selection::{Selection, SelectionType};
 use fterm_term::alacritty_terminal::term::TermMode;
+use fterm_term::colors::{ColorOverrides, Palette};
 use fterm_term::copy_mode::{self, CopyAction, CopyResult};
 use fterm_term::links::url_at;
 use fterm_term::process::{display_name, running_children};
@@ -25,25 +30,25 @@ use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::clipboard::{Clipboard, paste_bytes};
 use crate::gpu::Gpu;
-use crate::input::{AppAction, KeyInput, app_action, copy_mode_action, encode_key};
+use crate::input::{KeyInput, copy_mode_action, encode_key, key_chord};
 use crate::mouse::{
     ClickCounter, GridGeometry, ReportButton, ReportKind, ReportMods, Wheel, autoscroll_lines,
     encode_mouse,
 };
 
-/// Font size in logical pixels. It is multiplied by the scale factor (DPI).
-const FONT_SIZE: f32 = 14.0;
-/// Empty space around the grid, in logical pixels.
-const PADDING: f32 = 6.0;
 /// How often auto-scroll moves while the user drags a selection out of the pane.
 const AUTOSCROLL_TICK: Duration = Duration::from_millis(16);
 /// How long "Copied N lines" stays in the window title.
 const TITLE_MESSAGE: Duration = Duration::from_millis(1500);
+/// Wait this long after the last change of the config file, then load it.
+const CONFIG_DEBOUNCE: Duration = Duration::from_millis(150);
 
 /// Events from other threads to the window thread.
 #[derive(Debug)]
 pub enum UserEvent {
     Term(PaneId, TermEvent),
+    /// The config file changed on disk.
+    ConfigChanged,
 }
 
 /// One terminal pane: a session and the title that its app set.
@@ -191,10 +196,33 @@ pub struct App {
     /// The tab that is being renamed, and the text typed so far.
     renaming: Option<(TabId, String)>,
     close_question: Option<CloseQuestion>,
+    config: LoadedConfig,
+    config_path: std::path::PathBuf,
+    /// Profiles from the config, or the ones that fterm found.
+    profiles: Vec<Profile>,
+    /// Watches the config file. Kept here so it does not stop.
+    _watcher: Option<notify::RecommendedWatcher>,
+    /// A message box (for example, an error in the config). Any key closes it.
+    message: Option<Vec<String>>,
+    /// Editors save in several steps: we load the config a moment after the last change.
+    reload_at: Option<Instant>,
 }
 
 impl App {
     pub fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
+        let config_path = config_path();
+        let (config, message) = if config_path.exists() {
+            match load_file(&config_path) {
+                Ok(config) => {
+                    tracing::info!(path = %config_path.display(), "config loaded");
+                    (config, None)
+                }
+                Err(err) => (LoadedConfig::defaults(), Some(error_lines(&err))),
+            }
+        } else {
+            (LoadedConfig::defaults(), None)
+        };
+        let profiles = profiles_for(&config);
         Self {
             proxy,
             running: None,
@@ -205,7 +233,112 @@ impl App {
             title_message_until: None,
             renaming: None,
             close_question: None,
+            config,
+            config_path,
+            profiles,
+            _watcher: None,
+            message,
+            reload_at: None,
         }
+    }
+
+    /// Watches the folder of the config file (editors often write a new file, so we watch the folder).
+    fn watch_config(&mut self) {
+        let Some(dir) = self.config_path.parent().map(std::path::Path::to_path_buf) else {
+            return;
+        };
+        if !dir.exists() {
+            return;
+        }
+        let file = self.config_path.file_name().map(|f| f.to_owned());
+        let proxy = self.proxy.clone();
+        let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            let Ok(event) = event else {
+                return;
+            };
+            let ours = event
+                .paths
+                .iter()
+                .any(|path| path.file_name() == file.as_deref());
+            if ours && (event.kind.is_modify() || event.kind.is_create()) {
+                let _ = proxy.send_event(UserEvent::ConfigChanged);
+            }
+        });
+        match watcher {
+            Ok(mut watcher) => {
+                use notify::Watcher;
+                if let Err(err) = watcher.watch(&dir, notify::RecursiveMode::NonRecursive) {
+                    tracing::warn!("cannot watch the config: {err}");
+                }
+                self._watcher = Some(watcher);
+            }
+            Err(err) => tracing::warn!("cannot watch the config: {err}"),
+        }
+    }
+
+    /// Reads the config file again. An error keeps the old config and shows a message.
+    fn reload_config(&mut self) {
+        match load_file(&self.config_path) {
+            Ok(config) => {
+                tracing::info!("config reloaded");
+                self.config = config;
+                self.profiles = profiles_for(&self.config);
+                self.message = None;
+                self.apply_config();
+                self.title_message("Config reloaded");
+            }
+            Err(err) => {
+                tracing::warn!("config error: {err}");
+                self.message = Some(error_lines(&err));
+            }
+        }
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// Gives the config to the renderer: font, padding, colors, Braille.
+    fn apply_config(&mut self) {
+        let Some(running) = &mut self.running else {
+            return;
+        };
+        let config = &self.config.config;
+        let scale = running.window.scale_factor() as f32;
+        let font_px = config.font_size * scale;
+        let padding = config.padding * scale;
+        if (running.renderer.font_size() - font_px).abs() > 0.01
+            || (running.renderer.padding() - padding).abs() > 0.01
+        {
+            if let Err(err) = running
+                .renderer
+                .set_font_size(running.gpu.device(), font_px, padding)
+            {
+                tracing::error!("cannot change the font: {err:#}");
+            }
+        }
+        running.renderer.set_palette(palette_for(&self.config));
+        let braille = match config.braille_style {
+            fterm_config::load::BrailleStyle::Pixels => BrailleStyle::Pixels,
+            fterm_config::load::BrailleStyle::Dots => BrailleStyle::Dots,
+        };
+        running
+            .renderer
+            .set_braille_style(running.gpu.device(), braille);
+        running.resize_all_panes();
+        running.window.request_redraw();
+    }
+
+    /// The profile by name, else the default profile, else the first one.
+    fn profile(&self, name: Option<&str>) -> Option<Profile> {
+        let wanted = name.or(self.config.config.default_profile.as_deref());
+        wanted
+            .and_then(|n| {
+                self.profiles
+                    .iter()
+                    .find(|p| p.name.eq_ignore_ascii_case(n))
+            })
+            .or_else(|| self.profiles.first())
+            .cloned()
     }
 
     fn start(&self, event_loop: &ActiveEventLoop) -> anyhow::Result<Running> {
@@ -217,12 +350,17 @@ impl App {
         window.set_ime_allowed(true);
         let gpu = pollster::block_on(Gpu::new(window.clone(), event_loop.owned_display_handle()))?;
         let scale = window.scale_factor() as f32;
-        let renderer = Renderer::new(
+        let config = &self.config.config;
+        let mut renderer = Renderer::new(
             gpu.device(),
             gpu.format(),
-            FONT_SIZE * scale,
-            PADDING * scale,
+            config.font_size * scale,
+            config.padding * scale,
         )?;
+        renderer.set_palette(palette_for(&self.config));
+        if config.braille_style == fterm_config::load::BrailleStyle::Dots {
+            renderer.set_braille_style(gpu.device(), BrailleStyle::Dots);
+        }
         Ok(Running {
             window,
             gpu,
@@ -232,20 +370,31 @@ impl App {
         })
     }
 
-    /// Starts a shell for a new pane with this grid size.
-    fn spawn_pane(&mut self, size: GridSize) -> anyhow::Result<PaneId> {
+    /// Starts a profile (or the default profile) for a new pane with this grid size.
+    fn spawn_pane(&mut self, size: GridSize, profile: Option<&str>) -> anyhow::Result<PaneId> {
+        let options = match self.profile(profile) {
+            Some(profile) => {
+                let (program, args) = launch_command(&profile, cfg!(windows), path_extension);
+                SessionOptions {
+                    program: Some(program),
+                    args,
+                    cwd: profile.cwd.clone().filter(|dir| dir.is_dir()),
+                    env: profile.env.clone(),
+                    scrollback: self.config.config.scrollback,
+                }
+            }
+            None => SessionOptions {
+                scrollback: self.config.config.scrollback,
+                ..SessionOptions::default()
+            },
+        };
         let running = self.running.as_mut().expect("the window is open");
         let id = running.mux.new_pane_id();
         let proxy = self.proxy.clone();
-        let session = Session::spawn(
-            SessionOptions::default(),
-            size,
-            cell_px(&running.renderer),
-            move |event| {
-                // The window may be closed already. Then nobody needs the event.
-                let _ = proxy.send_event(UserEvent::Term(id, event));
-            },
-        )?;
+        let session = Session::spawn(options, size, cell_px(&running.renderer), move |event| {
+            // The window may be closed already. Then nobody needs the event.
+            let _ = proxy.send_event(UserEvent::Term(id, event));
+        })?;
         tracing::info!(
             pane = id.0,
             columns = size.columns,
@@ -262,18 +411,18 @@ impl App {
         Ok(id)
     }
 
-    /// Starts a shell in a new tab, after the active tab.
-    fn new_tab(&mut self) -> anyhow::Result<PaneId> {
+    /// Starts a profile in a new tab, after the active tab.
+    fn new_tab(&mut self, profile: Option<&str>) -> anyhow::Result<PaneId> {
         let running = self.running.as_ref().expect("the window is open");
         let size = running.grid_for(running.tab_area());
-        let id = self.spawn_pane(size)?;
+        let id = self.spawn_pane(size, profile)?;
         self.running.as_mut().unwrap().mux.new_tab(id);
         self.tab_changed();
         Ok(id)
     }
 
     /// Splits the active pane. The new pane gets the focus.
-    fn split(&mut self, direction: Direction) -> anyhow::Result<()> {
+    fn split(&mut self, direction: Direction, profile: Option<&str>) -> anyhow::Result<()> {
         let running = self.running.as_ref().expect("the window is open");
         let half = running.pane_area();
         let half = match direction {
@@ -281,7 +430,7 @@ impl App {
             Direction::Down => Rect::new(half.x, half.y, half.width, half.height / 2.0),
         };
         let size = running.grid_for(half);
-        let id = self.spawn_pane(size)?;
+        let id = self.spawn_pane(size, profile)?;
         let running = self.running.as_mut().unwrap();
         running.mux.split_active(id, direction);
         running.resize_all_panes();
@@ -435,50 +584,93 @@ impl App {
         session.write(paste_bytes(&text, bracketed));
     }
 
-    fn do_app_action(&mut self, event_loop: &ActiveEventLoop, action: AppAction) {
+    /// Runs an action from a key, the palette, or a Lua function.
+    fn run_action(&mut self, event_loop: &ActiveEventLoop, action: Action) {
+        match action {
+            Action::Builtin(builtin) => self.run_builtin(event_loop, builtin),
+            Action::Spawn { profile, place } => self.spawn(profile.as_deref(), place),
+            Action::Lua(index) => match self.config.call(index) {
+                Ok(calls) => {
+                    for call in calls {
+                        self.run_api_call(event_loop, call);
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("Lua error: {err}");
+                    self.message = Some(error_lines(&err));
+                    if let Some(running) = &self.running {
+                        running.window.request_redraw();
+                    }
+                }
+            },
+        }
+    }
+
+    fn run_api_call(&mut self, event_loop: &ActiveEventLoop, call: ApiCall) {
+        match call {
+            ApiCall::Spawn { profile, place } => self.spawn(profile.as_deref(), place),
+            ApiCall::SendText(text) => {
+                if let Some(session) = self.running.as_ref().and_then(Running::session) {
+                    session.with_term_mut(|term, _| term.scroll_display(Scroll::Bottom));
+                    session.write(text.into_bytes());
+                }
+            }
+            ApiCall::Notify(text) => self.title_message(&text),
+            ApiCall::Copy(text) => self.copy_text(text),
+            ApiCall::Action(builtin) => self.run_builtin(event_loop, builtin),
+        }
+    }
+
+    fn spawn(&mut self, profile: Option<&str>, place: SpawnWhere) {
+        let result = match place {
+            SpawnWhere::Tab => self.new_tab(profile).map(|_| ()),
+            SpawnWhere::SplitRight => self.split(Direction::Right, profile),
+            SpawnWhere::SplitDown => self.split(Direction::Down, profile),
+        };
+        if let Err(err) = result {
+            tracing::error!("cannot start: {err:#}");
+            self.message = Some(error_lines(&format!("Cannot start: {err:#}")));
+        }
+    }
+
+    fn run_builtin(&mut self, event_loop: &ActiveEventLoop, action: BuiltinAction) {
+        use BuiltinAction as A;
         let Some(running) = &mut self.running else {
             return;
         };
-        match action {
-            AppAction::NewTab => {
-                if let Err(err) = self.new_tab() {
-                    tracing::error!("cannot open a tab: {err:#}");
-                }
-                return;
+        let scroll = |running: &Running, scroll: Scroll| {
+            if let Some(session) = running.session() {
+                session.with_term_mut(|term, _| term.scroll_display(scroll));
+                running.window.request_redraw();
             }
-            AppAction::NextTab => running.mux.cycle(1),
-            AppAction::PrevTab => running.mux.cycle(-1),
-            AppAction::SelectTab(i) => running.mux.select(i),
-            AppAction::LastTab => running.mux.select_last(),
-            AppAction::MoveTabLeft => running.mux.move_active(-1),
-            AppAction::MoveTabRight => running.mux.move_active(1),
-            AppAction::RenameTab => {
+        };
+        match action {
+            A::NewTab => return self.spawn(None, SpawnWhere::Tab),
+            A::SplitRight => return self.spawn(None, SpawnWhere::SplitRight),
+            A::SplitDown => return self.spawn(None, SpawnWhere::SplitDown),
+            A::NextTab => running.mux.cycle(1),
+            A::PrevTab => running.mux.cycle(-1),
+            A::SelectTab(i) => running.mux.select(i),
+            A::LastTab => running.mux.select_last(),
+            A::MoveTabLeft => running.mux.move_active(-1),
+            A::MoveTabRight => running.mux.move_active(1),
+            A::RenameTab => {
                 if let Some(tab) = running.mux.active_tab().map(|t| t.id) {
                     self.start_rename(tab);
                 }
                 return;
             }
-            AppAction::SplitRight | AppAction::SplitDown => {
-                let direction = if action == AppAction::SplitRight {
-                    Direction::Right
-                } else {
-                    Direction::Down
-                };
-                if let Err(err) = self.split(direction) {
-                    tracing::error!("cannot split: {err:#}");
-                }
-                return;
-            }
-            AppAction::FocusPane(edge) => {
+            A::FocusLeft | A::FocusRight | A::FocusUp | A::FocusDown => {
                 let area = running.tab_area();
-                running.mux.focus_direction(edge, area);
+                running.mux.focus_direction(edge_of(action), area);
             }
-            AppAction::ResizePane(edge) => {
+            A::ResizeLeft | A::ResizeRight | A::ResizeUp | A::ResizeDown => {
+                let edge = edge_of(action);
                 let area = running.tab_area();
                 let cell = running.renderer.cell();
                 let step = match edge {
-                    fterm_mux::Edge::Left | fterm_mux::Edge::Right => cell.width,
-                    fterm_mux::Edge::Up | fterm_mux::Edge::Down => cell.height,
+                    Edge::Left | Edge::Right => cell.width,
+                    Edge::Up | Edge::Down => cell.height,
                 };
                 if let Some(pane) = running.mux.active_pane()
                     && let Some(layout) = running.mux.active_layout_mut()
@@ -486,15 +678,77 @@ impl App {
                     layout.move_divider(pane, edge, step, area);
                 }
             }
-            AppAction::ZoomPane => running.mux.toggle_zoom(),
-            AppAction::ClosePane => {
+            A::Zoom => running.mux.toggle_zoom(),
+            A::ClosePane => {
                 if let Some(pane) = running.mux.active_pane() {
                     self.close(event_loop, CloseTarget::Pane(pane));
                 }
                 return;
             }
+            A::Copy => {
+                let text = running
+                    .session()
+                    .and_then(|s| s.with_term(|term| term.selection_to_string()));
+                if let Some(text) = text.filter(|t| !t.is_empty()) {
+                    self.copy_text(text);
+                }
+                return;
+            }
+            A::Paste => return self.paste(),
+            A::CopyMode => {
+                if let Some(session) = running.session() {
+                    let active = session.with_term(copy_mode::is_active);
+                    session.with_term_mut(|term, selection| {
+                        if active {
+                            copy_mode::apply(term, selection, CopyAction::Exit);
+                        } else {
+                            copy_mode::enter(term, selection);
+                        }
+                    });
+                    running.window.request_redraw();
+                }
+                return;
+            }
+            A::ScrollPageUp => return scroll(running, Scroll::PageUp),
+            A::ScrollPageDown => return scroll(running, Scroll::PageDown),
+            A::ScrollTop => return scroll(running, Scroll::Top),
+            A::ScrollBottom => return scroll(running, Scroll::Bottom),
+            A::CommandPalette => {
+                // The command palette comes in the next step (5.2).
+                return;
+            }
+            A::ReloadConfig => return self.reload_config(),
+            A::OpenConfig => return self.open_config(),
         }
         self.tab_changed();
+    }
+
+    /// Opens the config file in the default editor. It makes a sample file first if there is none.
+    fn open_config(&mut self) {
+        let path = self.config_path.clone();
+        if !path.exists() {
+            let made = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&path, SAMPLE_CONFIG));
+            if let Err(err) = made {
+                self.message = Some(error_lines(&format!(
+                    "Cannot make {}: {err}",
+                    path.display()
+                )));
+                return;
+            }
+            // Now there is a folder to watch.
+            if self._watcher.is_none() {
+                self.watch_config();
+            }
+        }
+        if let Err(err) = open::that_detached(&path) {
+            self.message = Some(error_lines(&format!(
+                "Cannot open {}: {err}",
+                path.display()
+            )));
+        }
     }
 
     fn start_rename(&mut self, tab: TabId) {
@@ -558,42 +812,30 @@ impl App {
         }
     }
 
-    /// The keys of fterm itself (copy, paste, scroll, copy mode). Returns true when the key is used.
-    fn handle_app_key(&mut self, event: &KeyEvent) -> bool {
+    /// Copy mode keys and the Ctrl+C rule. Returns true when the key is used.
+    fn handle_copy_keys(&mut self, event: &KeyEvent, action: Option<&Action>) -> bool {
         let Some(running) = &self.running else {
             return false;
         };
         let Some(session) = running.session() else {
             return false;
         };
-        let (ctrl, shift) = (self.mods.control_key(), self.mods.shift_key());
-        let physical = event.physical_key;
         let key = KeyInput {
             logical: &event.logical_key,
-            physical,
+            physical: event.physical_key,
             text: event.text.as_deref(),
             mods: self.mods,
         };
 
-        // Ctrl+Shift+Space: copy mode on or off.
-        if ctrl && shift && physical == PhysicalKey::Code(KeyCode::Space) {
-            let active = session.with_term(copy_mode::is_active);
-            session.with_term_mut(|term, selection| {
-                if active {
-                    copy_mode::apply(term, selection, CopyAction::Exit);
-                } else {
-                    copy_mode::enter(term, selection);
-                }
-            });
-            running.window.request_redraw();
-            return true;
-        }
-
-        // In copy mode, all keys belong to copy mode.
+        // In copy mode, all keys belong to copy mode (the copy mode key itself closes it).
         if session.with_term(copy_mode::is_active) {
-            if let Some(action) = copy_mode_action(&key) {
-                let result = session
-                    .with_term_mut(|term, selection| copy_mode::apply(term, selection, action));
+            if action == Some(&Action::Builtin(BuiltinAction::CopyMode)) {
+                return false;
+            }
+            if let Some(copy_action) = copy_mode_action(&key) {
+                let result = session.with_term_mut(|term, selection| {
+                    copy_mode::apply(term, selection, copy_action)
+                });
                 running.window.request_redraw();
                 if let CopyResult::Copied(text) = result {
                     self.copy_text(text);
@@ -602,37 +844,15 @@ impl App {
             return true;
         }
 
-        // Ctrl+Shift+C always copies. Ctrl+C copies only when there is a selection, else it is ^C.
-        if ctrl && physical == PhysicalKey::Code(KeyCode::KeyC) {
+        // Ctrl+C copies when there is a selection, else it goes to the app as ^C.
+        if self.mods.control_key()
+            && !self.mods.shift_key()
+            && !self.mods.alt_key()
+            && event.physical_key == PhysicalKey::Code(KeyCode::KeyC)
+        {
             let selected = session.with_term(|term| term.selection_to_string());
             if let Some(text) = selected.filter(|t| !t.is_empty()) {
                 self.copy_text(text);
-                return true;
-            }
-            if shift {
-                return true;
-            }
-        }
-        // Ctrl+Shift+V and Shift+Insert paste.
-        let paste = (ctrl && shift && physical == PhysicalKey::Code(KeyCode::KeyV))
-            || (shift && event.logical_key == Key::Named(NamedKey::Insert));
-        if paste {
-            self.paste();
-            return true;
-        }
-
-        // Shift + PageUp/PageDown/Home/End scroll the view.
-        if shift && !ctrl {
-            let scroll = match event.logical_key {
-                Key::Named(NamedKey::PageUp) => Some(Scroll::PageUp),
-                Key::Named(NamedKey::PageDown) => Some(Scroll::PageDown),
-                Key::Named(NamedKey::Home) => Some(Scroll::Top),
-                Key::Named(NamedKey::End) => Some(Scroll::Bottom),
-                _ => None,
-            };
-            if let Some(scroll) = scroll {
-                session.with_term_mut(|term, _| term.scroll_display(scroll));
-                running.window.request_redraw();
                 return true;
             }
         }
@@ -797,11 +1017,7 @@ impl App {
                     self.close(event_loop, CloseTarget::Tab(tab));
                 }
             }
-            (MouseButton::Left, Hit::NewTab) => {
-                if let Err(err) = self.new_tab() {
-                    tracing::error!("cannot open a tab: {err:#}");
-                }
-            }
+            (MouseButton::Left, Hit::NewTab) => self.spawn(None, SpawnWhere::Tab),
             _ => {}
         }
     }
@@ -1149,7 +1365,11 @@ impl App {
             .as_ref()
             .map(|(tab, text)| (*tab, text.clone()));
         let hover = self.mouse.tab_hover;
-        let question = self.close_question.as_ref().map(|q| q.lines.clone());
+        let question = self
+            .close_question
+            .as_ref()
+            .map(|q| q.lines.clone())
+            .or_else(|| self.message.clone());
         let running = self.running.as_mut().unwrap();
         let Running {
             gpu,
@@ -1230,6 +1450,7 @@ impl ApplicationHandler<UserEvent> for App {
         if self.running.is_some() {
             return;
         }
+        self.watch_config();
         match self.start(event_loop) {
             Ok(running) => self.running = Some(running),
             Err(err) => {
@@ -1248,7 +1469,7 @@ impl ApplicationHandler<UserEvent> for App {
             1
         };
         for _ in 0..tabs.clamp(1, 20) {
-            if let Err(err) = self.new_tab() {
+            if let Err(err) = self.new_tab(None) {
                 tracing::error!("cannot start the shell: {err:#}");
                 event_loop.exit();
                 return;
@@ -1267,7 +1488,7 @@ impl ApplicationHandler<UserEvent> for App {
                     "down" => Direction::Down,
                     _ => continue,
                 };
-                if let Err(err) = self.split(direction) {
+                if let Err(err) = self.split(direction, None) {
                     tracing::error!("cannot split: {err:#}");
                 }
             }
@@ -1290,7 +1511,13 @@ impl ApplicationHandler<UserEvent> for App {
         let Some(running) = &mut self.running else {
             return;
         };
-        let UserEvent::Term(pane, event) = event;
+        let (pane, event) = match event {
+            UserEvent::Term(pane, event) => (pane, event),
+            UserEvent::ConfigChanged => {
+                self.reload_at = Some(Instant::now() + CONFIG_DEBOUNCE);
+                return;
+            }
+        };
         match event {
             TermEvent::Redraw => {
                 if running.mux.active_pane() == Some(pane) {
@@ -1325,8 +1552,17 @@ impl ApplicationHandler<UserEvent> for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
         let mut wake_at = None;
+        match self.reload_at {
+            Some(at) if now >= at => {
+                self.reload_at = None;
+                self.reload_config();
+            }
+            Some(at) => wake_at = Some(at),
+            None => {}
+        }
         if self.autoscroll() {
-            wake_at = Some(now + AUTOSCROLL_TICK);
+            let tick = now + AUTOSCROLL_TICK;
+            wake_at = Some(wake_at.map_or(tick, |t: Instant| t.min(tick)));
         }
         if let Some(until) = self.title_message_until {
             if now >= until {
@@ -1359,10 +1595,11 @@ impl ApplicationHandler<UserEvent> for App {
                 let running = self.running.as_mut().unwrap();
                 tracing::debug!(scale_factor, "scale factor changed");
                 let scale = scale_factor as f32;
+                let config = &self.config.config;
                 if let Err(err) = running.renderer.set_font_size(
                     running.gpu.device(),
-                    FONT_SIZE * scale,
-                    PADDING * scale,
+                    config.font_size * scale,
+                    config.padding * scale,
                 ) {
                     tracing::error!("cannot change the font size: {err:#}");
                 }
@@ -1393,17 +1630,24 @@ impl ApplicationHandler<UserEvent> for App {
                     self.rename_key(&event);
                     return;
                 }
+                // Any key closes a message box.
+                if self.message.take().is_some() {
+                    self.running.as_ref().unwrap().window.request_redraw();
+                    return;
+                }
                 let key = KeyInput {
                     logical: &event.logical_key,
                     physical: event.physical_key,
                     text: event.text.as_deref(),
                     mods: self.mods,
                 };
-                if let Some(action) = app_action(&key) {
-                    self.do_app_action(event_loop, action);
+                let action =
+                    key_chord(&key).and_then(|chord| self.config.config.keys.get(&chord).cloned());
+                if self.handle_copy_keys(&event, action.as_ref()) {
                     return;
                 }
-                if self.handle_app_key(&event) {
+                if let Some(action) = action {
+                    self.run_action(event_loop, action);
                     return;
                 }
                 let Some(session) = self.running.as_ref().and_then(Running::session) else {
@@ -1437,6 +1681,61 @@ impl ApplicationHandler<UserEvent> for App {
             _ => {}
         }
     }
+}
+
+/// The profiles from the config, or the ones found on this computer.
+fn profiles_for(config: &LoadedConfig) -> Vec<Profile> {
+    if config.config.profiles.is_empty() {
+        detect_profiles(cfg!(windows), which, std::path::Path::exists)
+    } else {
+        config.config.profiles.clone()
+    }
+}
+
+fn palette_for(config: &LoadedConfig) -> Palette {
+    let c = &config.config.colors;
+    let rgb = |c: Option<fterm_config::colors::Rgb>| {
+        c.map(|c| fterm_term::alacritty_terminal::vte::ansi::Rgb {
+            r: c.r,
+            g: c.g,
+            b: c.b,
+        })
+    };
+    Palette::with_colors(&ColorOverrides {
+        background: rgb(c.background),
+        foreground: rgb(c.foreground),
+        cursor: rgb(c.cursor),
+        selection: rgb(c.selection),
+        ansi: c.ansi.map(rgb),
+        bright: c.bright.map(rgb),
+    })
+}
+
+fn edge_of(action: BuiltinAction) -> Edge {
+    use BuiltinAction as A;
+    match action {
+        A::FocusLeft | A::ResizeLeft => Edge::Left,
+        A::FocusRight | A::ResizeRight => Edge::Right,
+        A::FocusUp | A::ResizeUp => Edge::Up,
+        _ => Edge::Down,
+    }
+}
+
+/// An error as lines for the message box (long lines are cut into parts).
+fn error_lines(error: &str) -> Vec<String> {
+    const WIDTH: usize = 90;
+    let mut lines = vec!["Config error:".to_owned(), String::new()];
+    for line in error.lines() {
+        let chars: Vec<char> = line.chars().collect();
+        for part in chars.chunks(WIDTH) {
+            lines.push(part.iter().collect());
+        }
+    }
+    lines.push(String::new());
+    lines.push(
+        "The old config is still used. Fix the file and save it. Any key closes this.".to_owned(),
+    );
+    lines
 }
 
 /// Cell size in whole pixels, for the pty (some apps ask for it).
