@@ -194,10 +194,6 @@ impl Center {
     }
 
     /// The history, newest first.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the Events panel uses it (phase 6.3)")
-    )]
     pub fn history(&self) -> impl Iterator<Item = &Notification> {
         self.history.iter()
     }
@@ -206,18 +202,10 @@ impl Center {
         self.history.iter().find(|n| n.id == id)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the Events panel uses it (phase 6.3)")
-    )]
     pub fn unread(&self) -> usize {
         self.history.iter().filter(|n| !n.read).count()
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the Events panel uses it (phase 6.3)")
-    )]
     pub fn mark_all_read(&mut self) {
         for n in &mut self.history {
             n.read = true;

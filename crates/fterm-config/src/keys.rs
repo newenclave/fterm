@@ -170,11 +170,17 @@ pub enum BuiltinAction {
     OpenConfig,
     /// Put the Claude Code hooks for agent badges into the clipboard.
     CopyClaudeHooks,
+    /// Open or close the dock with the service panels.
+    ToggleDock,
+    PanelEvents,
+    PanelAgents,
+    /// Move the keyboard between the terminal and the dock.
+    FocusDock,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 31] = [
+    pub const ALL: [BuiltinAction; 35] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -206,6 +212,10 @@ impl BuiltinAction {
         Self::ReloadConfig,
         Self::OpenConfig,
         Self::CopyClaudeHooks,
+        Self::ToggleDock,
+        Self::PanelEvents,
+        Self::PanelAgents,
+        Self::FocusDock,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -242,6 +252,10 @@ impl BuiltinAction {
             Self::ReloadConfig => "reload_config",
             Self::OpenConfig => "open_config",
             Self::CopyClaudeHooks => "copy_claude_hooks",
+            Self::ToggleDock => "toggle_dock",
+            Self::PanelEvents => "panel_events",
+            Self::PanelAgents => "panel_agents",
+            Self::FocusDock => "focus_dock",
         };
         name.to_owned()
     }
@@ -266,6 +280,10 @@ impl BuiltinAction {
             Self::CommandPalette => "Command palette".to_owned(),
             Self::OpenConfig => "Open config file".to_owned(),
             Self::CopyClaudeHooks => "Copy Claude Code hooks (settings.json)".to_owned(),
+            Self::ToggleDock => "Show or hide the dock".to_owned(),
+            Self::PanelEvents => "Events panel".to_owned(),
+            Self::PanelAgents => "Agents panel".to_owned(),
+            Self::FocusDock => "Focus the dock or the terminal".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -347,6 +365,10 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("shift+end", "scroll_bottom"),
     ("ctrl+shift+p", "command_palette"),
     ("ctrl+shift+,", "open_config"),
+    ("ctrl+shift+b", "toggle_dock"),
+    ("ctrl+shift+e", "panel_events"),
+    ("ctrl+shift+a", "panel_agents"),
+    ("ctrl+shift+o", "focus_dock"),
 ];
 
 impl Keymap {
@@ -394,6 +416,23 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dock_actions_and_keys() {
+        for name in ["toggle_dock", "panel_events", "panel_agents", "focus_dock"] {
+            let action = BuiltinAction::from_name(name).unwrap();
+            assert_eq!(action.name(), name);
+        }
+        let keys = Keymap::with_defaults();
+        assert_eq!(
+            keys.get(&chord("ctrl+shift+e")),
+            Some(&Action::Builtin(BuiltinAction::PanelEvents))
+        );
+        assert_eq!(
+            keys.get(&chord("ctrl+shift+a")),
+            Some(&Action::Builtin(BuiltinAction::PanelAgents))
+        );
+    }
 
     #[test]
     fn copy_claude_hooks_action() {

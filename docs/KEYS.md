@@ -79,6 +79,28 @@ Some apps ask for the mouse (vim with `set mouse=a`, htop, mc). Then clicks, dra
 Copied text has no spaces at the ends of lines, and lines that were only wrapped by the screen are joined again.
 The window title shows "Copied N lines" for a short time.
 
+## The dock and its panels
+The dock is an area at the right side of the window (or left, or bottom; see `panels` in [CONFIG.md](CONFIG.md)).
+It has service panels: **Events** (all notifications) and **Agents** (every pane with Claude Code or another agent).
+
+| Key or mouse | What it does |
+|---|---|
+| Ctrl + Shift + E | Show the Events panel and give it the keyboard. Press again to close the dock. |
+| Ctrl + Shift + A | The same for the Agents panel. |
+| Ctrl + Shift + B | Show or hide the dock (the keyboard stays in the terminal). |
+| Ctrl + Shift + O | Move the keyboard between the terminal and the dock. |
+| Up / Down, PageUp / PageDown, Home / End | Choose a row (when the dock has the keyboard). |
+| Enter, click on a row | Go to the tab and pane of the row. The keyboard goes back to the terminal. |
+| Tab, Left / Right, click on a panel name | The other panel. |
+| F | Events: show only important events (warnings, errors, attention), or all again. |
+| M | Events: mark all as read. |
+| Esc, click in the terminal | The keyboard goes back to the terminal. The dock stays. |
+| Drag the dock edge | Make the dock bigger or smaller. |
+| Mouse wheel over the dock | Scroll the panel. |
+| Click the number in the tab bar corner | It shows unread events (when the Events panel is not on the screen). The click opens the panel. |
+
+New events have a bright title. They count as read when the Events panel goes away (or fterm goes to the back).
+
 ## Typing
 | Key | What it does |
 |---|---|

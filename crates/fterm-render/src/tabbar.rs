@@ -164,6 +164,9 @@ pub struct TabBarInput<'a> {
     pub editing: Option<(usize, &'a str)>,
     /// A colored dot before the title of a tab (for example, the agent state). Empty = no dots.
     pub badges: &'a [Option<Rgb>],
+    /// A colored dot and a short text at the right end (for example, unread events). Give `layout_tabs`
+    /// the width without `corner_rect`, so the tabs do not cover it.
+    pub corner: Option<(&'a str, Rgb)>,
     pub cell: CellMetrics,
     pub width: f32,
 }
@@ -247,6 +250,29 @@ pub fn build_tab_bar(
         push_text(&mut text, "×", close_x, text_y, cell, close_color, glyph)?;
     }
 
+    if let Some((label, color)) = input.corner {
+        let rect = corner_rect(label, input.width, cell);
+        let size = (cell.width * 0.5).round().max(3.0);
+        quads.push(solid(
+            Rect::new(
+                rect.x + (cell.width - size) / 2.0,
+                text_y + (cell.height - size) / 2.0,
+                size,
+                size,
+            ),
+            color,
+        ));
+        push_text(
+            &mut text,
+            label,
+            rect.x + 2.0 * cell.width,
+            text_y,
+            cell,
+            TEXT,
+            glyph,
+        )?;
+    }
+
     let plus = layout.new_tab;
     if input.hover == Hit::NewTab {
         quads.push(solid(plus, HOVER_BG));
@@ -259,6 +285,13 @@ pub fn build_tab_bar(
 }
 
 /// Adds glyphs for `text` from `(x, y)` (the top-left of the first cell). Returns the cells used.
+/// The place of the corner text (`TabBarInput::corner`): a dot, a space, the text, and a space.
+pub fn corner_rect(label: &str, width: f32, cell: CellMetrics) -> Rect {
+    let cells: usize = label.chars().map(char_cells).sum();
+    let w = (cells + 3) as f32 * cell.width;
+    Rect::new(width - w, 0.0, w, bar_height(cell))
+}
+
 pub(crate) fn push_text(
     out: &mut Vec<Instance>,
     text: &str,
@@ -414,6 +447,7 @@ mod tests {
             hover,
             editing,
             badges: &[],
+            corner: None,
             cell: CELL,
             width: 1000.0,
         };
@@ -487,6 +521,7 @@ mod tests {
             hover: Hit::None,
             editing: None,
             badges: &badges,
+            corner: None,
             cell: CELL,
             width: 1000.0,
         };
@@ -505,5 +540,47 @@ mod tests {
             .find(|x| *x > 0.0 && *x < 3.0 * CELL.width)
             .unwrap();
         assert_eq!(second_tab_title - first_tab_title, CELL.width);
+    }
+
+    #[test]
+    fn the_corner_text_is_on_the_right() {
+        let rect = corner_rect("3", 1000.0, CELL);
+        assert_eq!(rect.x + rect.width, 1000.0);
+        assert_eq!(
+            rect.width,
+            4.0 * CELL.width,
+            "a dot, a space, the text, and some space"
+        );
+        let layout = layout_tabs(1, 1000.0 - rect.width, CELL);
+        let titles = vec!["ab".to_owned()];
+        let pink = Rgb {
+            r: 250,
+            g: 0,
+            b: 250,
+        };
+        let input = TabBarInput {
+            layout: &layout,
+            titles: &titles,
+            active: 0,
+            hover: Hit::None,
+            editing: None,
+            badges: &[],
+            corner: Some(("3", pink)),
+            cell: CELL,
+            width: 1000.0,
+        };
+        let quads = build_tab_bar(&input, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let dots = solid_with(&quads, pink);
+        assert_eq!(dots.len(), 1);
+        assert!(dots[0][0] >= rect.x);
+        let glyph_xs: Vec<f32> = quads
+            .iter()
+            .filter(|q| q.kind == KIND_GLYPH)
+            .map(|q| q.rect[0])
+            .collect();
+        assert!(
+            glyph_xs.iter().any(|x| *x >= rect.x),
+            "the number is drawn in the corner"
+        );
     }
 }

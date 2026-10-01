@@ -178,7 +178,7 @@ Still to do later: move and swap panes, move a pane to another tab, broadcast in
 - Braille style: `braille_style = "pixels"` (default, no gaps) or `"dots"` (round dots).
 - **Check:** change the config and see the change at once. Start an AI tool from the palette.
 
-### Phase 6 — Events and shell integration (in work: OSC loop, shell integration, notifications, agent badges are done)
+### Phase 6 — Events and shell integration ✅ (done: OSC loop, shell integration, notifications, agent dots, Claude hooks, the dock with Events and Agents panels)
 - An event bus inside the app.
 - Support OSC 7 (current folder), OSC 133 (command start and end, exit code), OSC 9 and OSC 777 (notifications), bell.
 - Tab status: "agent is working", "agent waits for you", "done", "error". Show a badge and a system notification.
@@ -259,4 +259,5 @@ An idea from the user. Shell integration (Phase 6) already tells us the folder (
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
 ## Next step
-Write a detailed plan for Phase 6 (events and shell integration) or Phase 3b (images). Then build it.
+Choose the next phase: 6b (folder and command history), 7 (local API, CLI, and MCP), or 3b (images).
+Write a detailed plan for it. Then build it.

@@ -450,6 +450,17 @@ impl FrameParts<'_> {
         Ok(())
     }
 
+    /// The dock with its panel (from `dock::layout_dock`).
+    pub fn dock(
+        &mut self,
+        view: &crate::dock::DockView,
+        layout: &crate::dock::DockLayout,
+    ) -> Result<(), AtlasFull> {
+        let quads = crate::dock::build_dock(view, layout, self.cell, &mut *self.glyph)?;
+        self.quads.extend(quads);
+        Ok(())
+    }
+
     /// Toasts at their places (from `toasts::layout_toasts`).
     pub fn toasts(
         &mut self,

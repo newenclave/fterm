@@ -6,14 +6,17 @@ use std::time::{Duration, Instant};
 
 use fterm_config::keys::{Action, BuiltinAction, SpawnWhere};
 use fterm_config::load::{
-    AgentIn, AgentOut, ApiCall, LoadedConfig, NotifyIn, NotifyOut, OsNotify, SAMPLE_CONFIG,
-    ToastPosition, config_path, load_file,
+    AgentIn, AgentOut, ApiCall, DockPlace, LoadedConfig, NotifyIn, NotifyOut, OsNotify,
+    SAMPLE_CONFIG, ToastPosition, config_path, load_file,
 };
 use fterm_config::profiles::{Profile, detect_profiles, launch_command, path_extension, which};
 use fterm_mux::{Closed, Direction, Edge, Mux, PaneId, Rect, TabId};
 use fterm_render::Renderer;
 use fterm_render::builtin::BrailleStyle;
-use fterm_render::tabbar::{Hit, TabBarInput, bar_height, hit, layout_tabs};
+use fterm_render::dock::{
+    DockHit, DockLayout, DockRow, DockSide, DockView, dock_hit, layout_dock, split_area,
+};
+use fterm_render::tabbar::{Hit, TabBarInput, bar_height, corner_rect, hit, layout_tabs};
 use fterm_render::toasts::{
     Corner, ToastLevel, ToastView, avoid_cursor, close_rect, layout_toasts,
 };
@@ -46,6 +49,9 @@ use crate::mouse::{
 };
 use crate::notify::{Center, Level, Source, human_duration};
 use crate::palette::{PaletteItem, PaletteState, VISIBLE_ROWS};
+use crate::panels::{
+    AgentEntry, Dock, EventFilter, PanelKind, agent_rows, event_rows, level_color, toast_level,
+};
 
 /// How often auto-scroll moves while the user drags a selection out of the pane.
 const AUTOSCROLL_TICK: Duration = Duration::from_millis(16);
@@ -79,6 +85,8 @@ struct Running {
     renderer: Renderer,
     mux: Mux,
     panes: HashMap<PaneId, Pane>,
+    /// The dock with the service panels.
+    dock: Dock,
 }
 
 impl Running {
@@ -94,8 +102,31 @@ impl Running {
         bar_height(self.renderer.cell())
     }
 
-    /// The space for the panes of a tab (the window below the tab bar).
+    /// The space for the panes of a tab: the window below the tab bar, without the dock.
     fn tab_area(&self) -> Rect {
+        let area = self.below_bar();
+        if self.dock.open {
+            split_area(area, self.dock.side, self.dock.ratio, self.renderer.cell()).0
+        } else {
+            area
+        }
+    }
+
+    /// The place of the dock, when it is open.
+    fn dock_rect(&self) -> Option<Rect> {
+        self.dock.open.then(|| {
+            split_area(
+                self.below_bar(),
+                self.dock.side,
+                self.dock.ratio,
+                self.renderer.cell(),
+            )
+            .1
+        })
+    }
+
+    /// The window below the tab bar.
+    fn below_bar(&self) -> Rect {
         let size = self.window.inner_size();
         let top = self.bar_height();
         Rect::new(
@@ -209,6 +240,8 @@ struct MouseState {
     tab_clicks: ClickCounter,
     /// The divider that the user drags (its path in the tree).
     dragging_divider: Option<Vec<bool>>,
+    /// The user drags the dock edge.
+    dragging_dock: bool,
 }
 
 /// What the close question is about.
@@ -255,6 +288,9 @@ pub struct App {
     palette: Option<PaletteState>,
     /// All notifications and the toasts on the screen.
     center: Center,
+    /// The Events panel was on the screen (and fterm in front) in the last frame.
+    /// When it goes away, its events count as read.
+    events_seen: bool,
 }
 
 impl App {
@@ -288,6 +324,7 @@ impl App {
             _watcher: None,
             message,
             reload_at: None,
+            events_seen: false,
             center: Center::new(4, true),
             shell_script: shell_script_path(),
             palette: None,
@@ -499,6 +536,227 @@ impl App {
     }
 
     /// The toasts on the screen and their places (the same for drawing and for the mouse).
+    /// The panel tabs: "Events 3", "Agents 2".
+    fn dock_tabs(&self) -> Vec<String> {
+        let unread = self.center.unread();
+        let agents = self.running.as_ref().map_or(0, |r| {
+            r.panes.values().filter(|p| p.agent.is_some()).count()
+        });
+        PanelKind::ALL
+            .iter()
+            .map(|kind| {
+                let count = match kind {
+                    PanelKind::Events => unread,
+                    PanelKind::Agents => agents,
+                };
+                if count > 0 {
+                    format!("{} {count}", kind.label())
+                } else {
+                    kind.label().to_owned()
+                }
+            })
+            .collect()
+    }
+
+    /// The rows of the active panel, and the pane of each row.
+    fn dock_rows(&self) -> Vec<(DockRow, Option<PaneId>)> {
+        let Some(running) = &self.running else {
+            return Vec::new();
+        };
+        let now = Instant::now();
+        match running.dock.active {
+            PanelKind::Events => event_rows(self.center.history(), running.dock.filter, now),
+            PanelKind::Agents => {
+                let titles = running.tab_titles();
+                let mut entries = Vec::new();
+                for (tab, title) in running.mux.tabs().iter().zip(&titles) {
+                    for pane in tab.layout.panes() {
+                        if let Some(state) = running.panes.get(&pane).and_then(|p| p.agent.as_ref())
+                        {
+                            entries.push(AgentEntry {
+                                pane,
+                                name: title,
+                                state,
+                            });
+                        }
+                    }
+                }
+                agent_rows(&entries, now)
+            }
+        }
+    }
+
+    fn dock_layout(&self) -> Option<DockLayout> {
+        let running = self.running.as_ref()?;
+        let rect = running.dock_rect()?;
+        Some(layout_dock(
+            rect,
+            running.dock.side,
+            &self.dock_tabs(),
+            running.renderer.cell(),
+        ))
+    }
+
+    /// The panes moved (the dock opened, closed, or changed its size).
+    fn dock_changed(&mut self) {
+        if let Some(running) = &self.running {
+            running.resize_all_panes();
+            running.window.request_redraw();
+        }
+    }
+
+    /// Enter or a click on a row: go to its pane, and give the keyboard back to the terminal.
+    fn open_dock_row(&mut self, index: usize) {
+        let pane = self.dock_rows().get(index).and_then(|(_, pane)| *pane);
+        if let Some(pane) = pane
+            && let Some(running) = &mut self.running
+            && running.panes.contains_key(&pane)
+        {
+            running.dock.focused = false;
+            self.go_to_pane(pane);
+        }
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// A key while the dock has the keyboard. The keys never go to the terminal.
+    fn dock_key(&mut self, event: &KeyEvent) {
+        let rows = self.dock_rows().len();
+        let visible = self.dock_layout().map_or(1, |l| l.visible_rows().max(1));
+        let Some(running) = &mut self.running else {
+            return;
+        };
+        let dock = &mut running.dock;
+        let page = visible as isize;
+        match &event.logical_key {
+            Key::Named(NamedKey::ArrowUp) => dock.move_by(-1, rows, visible),
+            Key::Named(NamedKey::ArrowDown) => dock.move_by(1, rows, visible),
+            Key::Named(NamedKey::PageUp) => dock.move_by(-page, rows, visible),
+            Key::Named(NamedKey::PageDown) => dock.move_by(page, rows, visible),
+            Key::Named(NamedKey::Home) => dock.select(0, rows, visible),
+            Key::Named(NamedKey::End) => dock.select(rows.saturating_sub(1), rows, visible),
+            Key::Named(NamedKey::Tab | NamedKey::ArrowLeft | NamedKey::ArrowRight) => {
+                dock.next_panel()
+            }
+            Key::Named(NamedKey::Escape) => dock.focused = false,
+            Key::Named(NamedKey::Enter) => {
+                let index = dock.selected();
+                return self.open_dock_row(index);
+            }
+            Key::Character(c) if dock.active == PanelKind::Events => match c.as_str() {
+                "f" | "F" => {
+                    dock.filter = dock.filter.next();
+                    dock.select(0, rows, visible);
+                }
+                "m" | "M" => self.center.mark_all_read(),
+                _ => {}
+            },
+            _ => {}
+        }
+        running.window.request_redraw();
+    }
+
+    /// A mouse button over the dock. Returns `true` when the dock took it.
+    fn dock_mouse(&mut self, state: ElementState, button: MouseButton) -> bool {
+        if self.mouse.dragging_dock {
+            if state == ElementState::Released && button == MouseButton::Left {
+                self.mouse.dragging_dock = false;
+            }
+            return true;
+        }
+        let Some(layout) = self.dock_layout() else {
+            return false;
+        };
+        let rows = self.dock_rows().len();
+        let (x, y) = (self.mouse.position.0 as f32, self.mouse.position.1 as f32);
+        let Some(running) = &mut self.running else {
+            return false;
+        };
+        let hit = dock_hit(&layout, running.dock.scroll(), rows, x, y);
+        if hit == DockHit::Outside {
+            // A press in the terminal gives the keyboard back to it.
+            if state == ElementState::Pressed && running.dock.focused {
+                running.dock.focused = false;
+                running.window.request_redraw();
+            }
+            return false;
+        }
+        if state != ElementState::Pressed || button != MouseButton::Left {
+            return true;
+        }
+        let visible = layout.visible_rows().max(1);
+        match hit {
+            DockHit::Tab(i) => {
+                if let Some(kind) = PanelKind::ALL.get(i) {
+                    running.dock.active = *kind;
+                }
+                running.dock.focused = true;
+            }
+            DockHit::Row(i) => {
+                running.dock.select(i, rows, visible);
+                self.open_dock_row(i);
+                return true;
+            }
+            DockHit::Grab => self.mouse.dragging_dock = true,
+            DockHit::Inside => running.dock.focused = true,
+            DockHit::Outside => {}
+        }
+        running.window.request_redraw();
+        true
+    }
+
+    /// The mouse moved: drag the dock edge, or show the resize arrow over it.
+    /// Returns `true` when the dock took the move.
+    fn dock_mouse_moved(&mut self, x: f32, y: f32) -> bool {
+        let layout = self.dock_layout();
+        let Some(running) = &mut self.running else {
+            return false;
+        };
+        if self.mouse.dragging_dock {
+            let area = running.below_bar();
+            let ratio = match running.dock.side {
+                DockSide::Right => (area.x + area.width - x) / area.width,
+                DockSide::Left => (x - area.x) / area.width,
+                DockSide::Bottom => (area.y + area.height - y) / area.height,
+            };
+            running.dock.ratio = ratio.clamp(0.1, 0.9);
+            self.dock_changed();
+            return true;
+        }
+        let Some(layout) = layout else {
+            return false;
+        };
+        if !layout.rect.contains(x, y) {
+            return false;
+        }
+        let icon = if layout.grab.contains(x, y) {
+            match layout.side {
+                DockSide::Bottom => CursorIcon::RowResize,
+                _ => CursorIcon::ColResize,
+            }
+        } else {
+            CursorIcon::Default
+        };
+        running.window.set_cursor(icon);
+        true
+    }
+
+    /// The text in the tab bar corner: the unread events, when the Events panel is not on the screen.
+    fn tab_bar_corner(&self) -> Option<String> {
+        let running = self.running.as_ref()?;
+        let unread = self.center.unread();
+        (unread > 0 && !running.dock.showing(PanelKind::Events)).then(|| unread.to_string())
+    }
+
+    /// The width that the tabs can use (the corner text is not for tabs).
+    fn tabs_width(&self, width: f32, cell: fterm_render::font::CellMetrics) -> f32 {
+        match self.tab_bar_corner() {
+            Some(text) => width - corner_rect(&text, width, cell).width,
+            None => width,
+        }
+    }
+
     fn toast_layout(&self) -> Vec<(u64, Rect)> {
         let Some(running) = &self.running else {
             return Vec::new();
@@ -672,6 +930,8 @@ impl App {
         running
             .renderer
             .set_braille_style(running.gpu.device(), braille);
+        running.dock.side = dock_side(config.panels.dock);
+        running.dock.ratio = config.panels.size;
         running.resize_all_panes();
         running.window.request_redraw();
     }
@@ -715,6 +975,11 @@ impl App {
             renderer,
             mux: Mux::default(),
             panes: HashMap::new(),
+            dock: Dock::new(
+                dock_side(config.panels.dock),
+                config.panels.size,
+                config.panels.open.as_deref().and_then(PanelKind::from_name),
+            ),
         })
     }
 
@@ -1014,6 +1279,24 @@ impl App {
 
     fn run_builtin(&mut self, event_loop: &ActiveEventLoop, action: BuiltinAction) {
         use BuiltinAction as A;
+        let dock_action = matches!(
+            action,
+            A::ToggleDock | A::PanelEvents | A::PanelAgents | A::FocusDock
+        );
+        if dock_action {
+            if let Some(running) = &mut self.running {
+                match action {
+                    A::ToggleDock => running.dock.toggle(),
+                    A::PanelEvents => running.dock.show(PanelKind::Events),
+                    A::PanelAgents => running.dock.show(PanelKind::Agents),
+                    _ => running.dock.toggle_focus(),
+                }
+            }
+            if let Some(running) = &self.running {
+                tracing::debug!(?action, open = running.dock.open, focused = running.dock.focused, active = ?running.dock.active, "dock action");
+            }
+            return self.dock_changed();
+        }
         let Some(running) = &mut self.running else {
             return;
         };
@@ -1099,6 +1382,7 @@ impl App {
             }
             A::ReloadConfig => return self.reload_config(),
             A::OpenConfig => return self.open_config(),
+            A::ToggleDock | A::PanelEvents | A::PanelAgents | A::FocusDock => {}
             A::CopyClaudeHooks => {
                 self.copy_text(crate::agent::CLAUDE_HOOKS.to_owned());
                 self.notify(
@@ -1455,7 +1739,8 @@ impl App {
             return Hit::None;
         };
         let width = running.window.inner_size().width as f32;
-        let layout = layout_tabs(running.mux.tabs().len(), width, running.renderer.cell());
+        let cell = running.renderer.cell();
+        let layout = layout_tabs(running.mux.tabs().len(), self.tabs_width(width, cell), cell);
         let (x, y) = self.mouse.position;
         hit(&layout, x as f32, y as f32)
     }
@@ -1552,6 +1837,27 @@ impl App {
                 }
             }
             return;
+        }
+        if !self.mouse.selecting
+            && self.mouse.dragging_divider.is_none()
+            && self.dock_mouse(state, button)
+        {
+            return;
+        }
+        // A click on the unread number in the tab bar opens the Events panel.
+        if state == ElementState::Pressed
+            && button == MouseButton::Left
+            && let Some(text) = self.tab_bar_corner()
+            && let Some(running) = &mut self.running
+        {
+            let width = running.window.inner_size().width as f32;
+            let rect = corner_rect(&text, width, running.renderer.cell());
+            let (x, y) = self.mouse.position;
+            if rect.contains(x as f32, y as f32) {
+                running.dock.show(PanelKind::Events);
+                self.dock_changed();
+                return;
+            }
         }
         // The tab bar.
         if !self.mouse.selecting {
@@ -1657,6 +1963,13 @@ impl App {
             return;
         }
 
+        if !self.mouse.selecting
+            && self.mouse.dragging_divider.is_none()
+            && self.dock_mouse_moved(x as f32, y as f32)
+        {
+            return;
+        }
+
         // Hover in the tab bar.
         let hover = if self.mouse.selecting {
             Hit::None
@@ -1745,6 +2058,24 @@ impl App {
             };
             palette.move_selection(step);
             if let Some(running) = &self.running {
+                running.window.request_redraw();
+            }
+            return;
+        }
+        if let Some(layout) = self.dock_layout()
+            && layout
+                .rect
+                .contains(self.mouse.position.0 as f32, self.mouse.position.1 as f32)
+        {
+            let rows = self.dock_rows().len();
+            if let Some(running) = &mut self.running {
+                let lines = self
+                    .mouse
+                    .wheel
+                    .lines(delta, running.renderer.cell().height);
+                running
+                    .dock
+                    .scroll_by(-(lines as isize), rows, layout.visible_rows());
                 running.window.request_redraw();
             }
             return;
@@ -1868,6 +2199,27 @@ impl App {
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
         let focused = self.focused;
+        // The events count as read when the Events panel goes away (or fterm goes to the back).
+        let events_seen = self
+            .running
+            .as_ref()
+            .is_some_and(|r| r.dock.showing(PanelKind::Events))
+            && focused;
+        if self.events_seen && !events_seen {
+            self.center.mark_all_read();
+        }
+        self.events_seen = events_seen;
+        // The dock: its rows, and the selection kept inside the list.
+        let dock_layout = self.dock_layout();
+        let dock_rows: Vec<DockRow> = self.dock_rows().into_iter().map(|(row, _)| row).collect();
+        let dock_tabs = self.dock_tabs();
+        let corner = self.tab_bar_corner();
+        if let (Some(layout), Some(running)) = (&dock_layout, &mut self.running) {
+            let selected = running.dock.selected();
+            running
+                .dock
+                .select(selected, dock_rows.len(), layout.visible_rows());
+        }
         let (titles, badges) = match &mut self.running {
             Some(running) => {
                 if focused {
@@ -1905,13 +2257,7 @@ impl App {
             .iter()
             .filter_map(|(id, _)| {
                 let n = self.center.get(*id)?;
-                let level = match n.level {
-                    Level::Info => ToastLevel::Info,
-                    Level::Success => ToastLevel::Success,
-                    Level::Warning => ToastLevel::Warning,
-                    Level::Error => ToastLevel::Error,
-                    Level::Attention => ToastLevel::Attention,
-                };
+                let level = toast_level(n.level);
                 Some((n.title.clone(), n.body.clone(), level, hovered == Some(*id)))
             })
             .collect();
@@ -1923,19 +2269,43 @@ impl App {
                 .collect();
             (p.query().to_owned(), rows)
         });
+        let tabs_width = self.running.as_ref().map_or(0.0, |r| {
+            self.tabs_width(r.window.inner_size().width as f32, r.renderer.cell())
+        });
         let running = self.running.as_mut().unwrap();
+        let area = running.tab_area();
         let Running {
             gpu,
             renderer,
             mux,
             panes,
             window,
+            dock,
         } = running;
         let size = window.inner_size();
         let cell = renderer.cell();
-        let top = bar_height(cell);
         let width = size.width as f32;
-        let area = Rect::new(0.0, top, width, (size.height as f32 - top).max(0.0));
+        let dock_focused = dock.focused;
+        let (dock_active, dock_selected, dock_scroll, dock_filter) =
+            (dock.active, dock.selected(), dock.scroll(), dock.filter);
+        let dock_hints = match (dock_active, dock_filter) {
+            (PanelKind::Events, EventFilter::All) => {
+                "Enter go · F important only · M read · Tab · Esc"
+            }
+            (PanelKind::Events, EventFilter::Important) => {
+                "Enter go · F show all · M read · Tab · Esc"
+            }
+            (PanelKind::Agents, _) => "Enter go · Tab next panel · Esc back",
+        };
+        let dock_empty = match (dock_active, dock_filter) {
+            (PanelKind::Events, EventFilter::All) => "No events yet.",
+            (PanelKind::Events, EventFilter::Important) => "No important events.",
+            (PanelKind::Agents, _) => "No agents. See docs/CLAUDE.md.",
+        };
+        let dock_active_index = PanelKind::ALL
+            .iter()
+            .position(|k| *k == dock_active)
+            .unwrap_or(0);
         let pane_rects = mux.pane_rects(area);
         let active_pane = mux.active_pane();
         let zoomed = mux.active_tab().is_some_and(|t| t.zoomed.is_some());
@@ -1956,7 +2326,7 @@ impl App {
                     .map(|(_, r)| *r)
             })
             .flatten();
-        let layout = layout_tabs(mux.tabs().len(), width, cell);
+        let layout = layout_tabs(mux.tabs().len(), tabs_width, cell);
         let active = mux.active_index();
         let editing = renaming.as_ref().and_then(|(tab, text)| {
             let index = mux.tabs().iter().position(|t| t.id == *tab)?;
@@ -1973,17 +2343,36 @@ impl App {
                     hover,
                     editing,
                     badges: &badges,
+                    corner: corner
+                        .as_deref()
+                        .map(|text| (text, level_color(Level::Attention))),
                     cell,
                     width,
                 })?;
                 for (id, rect) in &pane_rects {
                     if let Some(pane) = panes.get(id) {
                         let is_active = Some(*id) == active_pane;
+                        let has_keys = focused && is_active && !dock_focused;
                         pane.session
-                            .with_term(|term| parts.pane(term, *rect, focused && is_active))?;
+                            .with_term(|term| parts.pane(term, *rect, has_keys))?;
                     }
                 }
                 parts.pane_chrome(&dividers, active_frame);
+                if let Some(layout) = &dock_layout {
+                    parts.dock(
+                        &DockView {
+                            tabs: &dock_tabs,
+                            active: dock_active_index,
+                            rows: &dock_rows,
+                            selected: Some(dock_selected),
+                            scroll: dock_scroll,
+                            focused: dock_focused && focused,
+                            empty: dock_empty,
+                            hints: dock_hints,
+                        },
+                        layout,
+                    )?;
+                }
                 let views: Vec<ToastView> = toast_data
                     .iter()
                     .map(|(title, body, level, hover)| ToastView {
@@ -2247,6 +2636,13 @@ impl ApplicationHandler<UserEvent> for App {
                 };
                 let action =
                     key_chord(&key).and_then(|chord| self.config.config.keys.get(&chord).cloned());
+                if self.running.as_ref().is_some_and(|r| r.dock.focused) {
+                    match action {
+                        Some(action) => self.run_action(event_loop, action),
+                        None => self.dock_key(&event),
+                    }
+                    return;
+                }
                 if self.handle_copy_keys(&event, action.as_ref()) {
                     return;
                 }
@@ -2332,6 +2728,14 @@ fn palette_for(config: &LoadedConfig) -> Palette {
         ansi: c.ansi.map(rgb),
         bright: c.bright.map(rgb),
     })
+}
+
+fn dock_side(place: DockPlace) -> DockSide {
+    match place {
+        DockPlace::Left => DockSide::Left,
+        DockPlace::Right => DockSide::Right,
+        DockPlace::Bottom => DockSide::Bottom,
+    }
 }
 
 fn edge_of(action: BuiltinAction) -> Edge {

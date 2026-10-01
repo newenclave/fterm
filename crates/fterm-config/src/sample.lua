@@ -35,4 +35,19 @@ return {
   commands = {
     -- { name = "Git status", action = function(fterm) fterm.send_text("git status\r") end },
   },
+
+  -- The dock with service panels (Events, Agents). Ctrl+Shift+E / Ctrl+Shift+A open them.
+  panels = {
+    dock = "right",          -- "right", "left", or "bottom"
+    size = 0.28,
+    open = {},               -- for example { "events" } to open it at start
+  },
+
+  -- Toasts and OS notifications. OS notifications are off: they can be annoying.
+  -- notifications = { toasts = "bottom_right", os = false, long_command = 10 },
+
+  -- An agent (for example Claude Code) changed its state. Return false = no normal notification.
+  -- on_agent = function(a, fterm)
+  --   if a.state == "done" then fterm.notify({ title = a.name .. " is ready", level = "success" }) end
+  -- end,
 }

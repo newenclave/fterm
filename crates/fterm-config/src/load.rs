@@ -29,6 +29,38 @@ pub enum ToastPosition {
     Bottom,
 }
 
+/// Where the dock with the service panels is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DockPlace {
+    Left,
+    #[default]
+    Right,
+    Bottom,
+}
+
+/// `panels = { dock = "right", size = 0.28, open = { "events" } }`
+#[derive(Clone, Debug, PartialEq)]
+pub struct PanelsConfig {
+    pub dock: DockPlace,
+    /// The dock part of the window.
+    pub size: f32,
+    /// The panel that shows at start (`None` = the dock is closed).
+    pub open: Option<String>,
+}
+
+impl Default for PanelsConfig {
+    fn default() -> Self {
+        Self {
+            dock: DockPlace::Right,
+            size: 0.28,
+            open: None,
+        }
+    }
+}
+
+/// The panel names.
+pub const PANEL_NAMES: [&str; 2] = ["events", "agents"];
+
 /// When fterm also sends a system (OS) notification.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OsNotify {
@@ -137,6 +169,7 @@ pub struct Config {
     /// Load the shell integration script (PowerShell now; bash and zsh by hand, see the docs).
     pub shell_integration: bool,
     pub notifications: NotificationConfig,
+    pub panels: PanelsConfig,
     /// The Lua function `on_notification` (its number), if there is one.
     pub on_notification: Option<usize>,
     /// The Lua function `on_agent` (its number), if there is one.
@@ -157,6 +190,7 @@ impl Default for Config {
             commands: Vec::new(),
             shell_integration: true,
             notifications: NotificationConfig::default(),
+            panels: PanelsConfig::default(),
             on_notification: None,
             on_agent: None,
         }
@@ -472,6 +506,9 @@ impl Reader {
         if let Some(table) = table_field(root, "notifications", "notifications")? {
             config.notifications = notifications(&table)?;
         }
+        if let Some(table) = table_field(root, "panels", "panels")? {
+            config.panels = panels(&table)?;
+        }
         config.on_notification = self.hook(root, "on_notification")?;
         config.on_agent = self.hook(root, "on_agent")?;
         if let Some(profiles) = table_field(root, "profiles", "profiles")? {
@@ -593,6 +630,52 @@ impl Reader {
             )),
         }
     }
+}
+
+fn panels(table: &Table) -> Result<PanelsConfig, String> {
+    let mut p = PanelsConfig::default();
+    if let Some(dock) = string_field(table, "dock", "panels.dock")? {
+        p.dock = match dock.as_str() {
+            "left" => DockPlace::Left,
+            "right" => DockPlace::Right,
+            "bottom" => DockPlace::Bottom,
+            other => {
+                return Err(format!(
+                    "panels.dock: must be \"left\", \"right\", or \"bottom\", got `{other}`"
+                ));
+            }
+        };
+    }
+    if let Some(size) = number_field(table, "size", "panels.size")? {
+        if !(0.1..=0.9).contains(&size) {
+            return Err(format!(
+                "panels.size: must be between 0.1 and 0.9, got {size}"
+            ));
+        }
+        p.size = size as f32;
+    }
+    if let Some(open) = table_field(table, "open", "panels.open")? {
+        for (i, value) in list(&open) {
+            let name = match &value {
+                Value::String(name) => name.to_string_lossy(),
+                other => {
+                    return Err(format!(
+                        "panels.open[{i}]: expected a panel name, got {}",
+                        other.type_name()
+                    ));
+                }
+            };
+            if !PANEL_NAMES.contains(&name.as_str()) {
+                return Err(format!(
+                    "panels.open[{i}]: no panel `{name}` (there are: {})",
+                    PANEL_NAMES.join(", ")
+                ));
+            }
+            // The dock shows one panel at a time: the first one is open.
+            p.open.get_or_insert(name);
+        }
+    }
+    Ok(p)
 }
 
 fn notifications(table: &Table) -> Result<NotificationConfig, String> {
@@ -1234,6 +1317,46 @@ mod tests {
             previous: Some("working".into()),
             message: "Allow Bash?".into(),
             name: "claude".into(),
+        }
+    }
+
+    #[test]
+    fn panels_default_is_a_closed_right_dock() {
+        let p = load("return {}").config.panels;
+        assert_eq!(p, PanelsConfig::default());
+        assert_eq!(p.dock, DockPlace::Right);
+        assert_eq!(p.open, None);
+        assert!((p.size - 0.28).abs() < 1e-6);
+    }
+
+    #[test]
+    fn panels_from_the_config() {
+        let p = load(r#"return { panels = { dock = "bottom", size = 0.4, open = { "agents" } } }"#)
+            .config
+            .panels;
+        assert_eq!(p.dock, DockPlace::Bottom);
+        assert!((p.size - 0.4).abs() < 1e-6);
+        assert_eq!(p.open.as_deref(), Some("agents"));
+        let p = load(r#"return { panels = { dock = "left", open = {} } }"#)
+            .config
+            .panels;
+        assert_eq!((p.dock, p.open), (DockPlace::Left, None));
+    }
+
+    #[test]
+    fn bad_panels_are_errors() {
+        for (source, part) in [
+            (r#"return { panels = { dock = "top" } }"#, "panels.dock"),
+            (r#"return { panels = { size = 2 } }"#, "panels.size"),
+            (
+                r#"return { panels = { open = { "chat" } } }"#,
+                "panels.open",
+            ),
+        ] {
+            let Err(err) = load_str(source, "t") else {
+                panic!("{source} must fail");
+            };
+            assert!(err.contains(part), "{err}");
         }
     }
 

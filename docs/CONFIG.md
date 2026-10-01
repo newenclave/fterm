@@ -121,6 +121,7 @@ also work on other layouts (for example, Russian).
 | `scroll_page_up`, `scroll_page_down`, `scroll_top`, `scroll_bottom` | Scroll. |
 | `command_palette`, `reload_config`, `open_config` | fterm itself. |
 | `copy_claude_hooks` | Copy the Claude Code hooks for tab dots (see [CLAUDE.md](CLAUDE.md)). |
+| `toggle_dock`, `panel_events`, `panel_agents`, `focus_dock` | The dock and its panels (see [KEYS.md](KEYS.md)). |
 
 ### Lua functions
 A function gets an object `fterm` with these functions:
@@ -154,6 +155,21 @@ commands = {
 
 Commands show in the command palette (Ctrl + Shift + P), next to all actions and profiles.
 
+## Panels
+The dock is an area at a window edge with service panels (Events, Agents). It does not cover the terminal:
+the panes get smaller.
+
+```lua
+panels = {
+  dock = "right",          -- "right" (the default), "left", or "bottom"
+  size = 0.28,             -- the dock part of the window, from 0.1 to 0.9
+  open = { "events" },     -- the panel that is open at start; {} or no `open` = the dock is closed
+},
+```
+
+Panels: `events` (all notifications, newest first) and `agents` (every pane with an agent state).
+You can also drag the dock edge with the mouse. Keys: see [KEYS.md](KEYS.md).
+
 ## Notifications
 fterm collects notifications from many places:
 - apps in a pane (OSC 9, OSC 99, OSC 777 — for example from scripts or Claude Code hooks);
@@ -161,7 +177,7 @@ fterm collects notifications from many places:
 - `fterm.notify` in your config;
 - fterm itself (for example, an error in the config).
 
-They show as **toasts**: small boxes in a corner. Toasts never take the focus, your keys always go to the terminal,
+All of them go to the **Events panel** (see [Panels](#panels)). They also show as **toasts**: small boxes in a corner. Toasts never take the focus, your keys always go to the terminal,
 and the mouse only works on the toast itself:
 - the mouse over a toast stops its timer;
 - a click goes to its tab and pane;

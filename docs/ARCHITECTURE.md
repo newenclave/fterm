@@ -70,9 +70,20 @@ processes and real escape codes, and later use it from the CLI and MCP (Phase 7)
      made smaller (or, for emoji, bigger) to fit into its 1 or 2 cells.
 4. There are two atlases: **mask** (R8, normal text and builtin chars) and **color** (RGBA, emoji).
    When an atlas is full, it grows 2 times and the frame is built again.
-5. `renderer.rs` builds one frame from parts (`FrameParts`): the tab bar, the panes, and a message box
-   on top. Then it sends all quads to the GPU and draws them with one draw call.
+5. `renderer.rs` builds one frame from parts (`FrameParts`): the tab bar, the panes, the dock,
+   the toasts, the palette, and a message box on top. Then it sends all quads to the GPU and draws them with one draw call.
 6. `shader.wgsl` has three kinds of quads: solid (`0`), glyph (`1`, mask × text color), color glyph (`2`).
+
+## Events, agents, and the dock
+- `fterm-term/src/io_loop.rs` reads the pty. `osc.rs` finds our OSC sequences in the bytes
+  (7, 9, 99, 133, 777) before the alacritty parser drops them, and sends them as `TermEvent::Osc`.
+- `fterm/src/notify.rs` is the notification center: the history (for the Events panel), the toasts,
+  and the timers. `on_notification` in Lua can change or drop each one.
+- `fterm/src/agent.rs` keeps the agent state of each pane (`777;fterm-agent;<state>`): the tab dot,
+  the notification for a new state, and `on_agent` in Lua.
+- The dock: `fterm/src/panels.rs` is the model (open, the active panel, the keyboard, the selection, the scroll)
+  and makes the rows. `fterm-render/src/dock.rs` places and draws it. The dock takes its part of the window
+  first, and the tab gets the rest (`Running::tab_area`), so panes, splits, and toasts move by themselves.
 
 ## Colors
 
