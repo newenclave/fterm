@@ -3,9 +3,10 @@
 
 use bytemuck::{Pod, Zeroable};
 use fterm_term::alacritty_terminal::event::EventListener;
-use fterm_term::alacritty_terminal::term::Term;
+use fterm_term::alacritty_terminal::grid::Dimensions;
 use fterm_term::alacritty_terminal::term::cell::Flags;
-use fterm_term::alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
+use fterm_term::alacritty_terminal::term::{Term, TermMode};
+use fterm_term::alacritty_terminal::vte::ansi::{CursorShape, NamedColor, Rgb};
 use fterm_term::colors::{Palette, cell_colors};
 
 use crate::atlas::{AtlasFull, AtlasGlyph, GlyphKey};
@@ -38,7 +39,30 @@ pub struct FrameInput<'a> {
     pub padding: f32,
     pub palette: &'a Palette,
     pub focused: bool,
+    /// Size of the view (window) in pixels.
+    pub view: (f32, f32),
 }
+
+/// Background of selected cells (Catppuccin Mocha "surface2").
+pub const SELECTION_BG: Rgb = Rgb {
+    r: 0x58,
+    g: 0x5b,
+    b: 0x70,
+};
+/// The cursor of copy mode (Catppuccin Mocha "yellow").
+pub const COPY_CURSOR: Rgb = Rgb {
+    r: 0xf9,
+    g: 0xe2,
+    b: 0xaf,
+};
+/// The scroll indicator on the right edge (Catppuccin Mocha "overlay1").
+pub const SCROLL_INDICATOR: Rgb = Rgb {
+    r: 0x7f,
+    g: 0x84,
+    b: 0x9c,
+};
+/// Width of the scroll indicator in pixels.
+pub const SCROLL_INDICATOR_WIDTH: f32 = 4.0;
 
 /// Makes all quads for the frame. `glyph` finds a glyph in the atlas (or adds it).
 pub fn build_frame<T: EventListener>(
@@ -68,6 +92,12 @@ pub fn build_frame<T: EventListener>(
     };
     let cursor_row = cursor.point.line.0 + offset;
     let cursor_col = cursor.point.column.0;
+    let selection = content.selection;
+    // The copy mode cursor (vi mode of alacritty), in screen rows.
+    let copy_cursor = content.mode.contains(TermMode::VI).then(|| {
+        let point = term.vi_mode_cursor.point;
+        (point.line.0 + offset, point.column.0)
+    });
 
     let mut backgrounds = Vec::new();
     let mut glyphs = Vec::new();
@@ -94,13 +124,16 @@ pub fn build_frame<T: EventListener>(
             input.palette,
             overrides,
         );
-        let under_block_cursor =
-            cursor_shape == CursorShape::Block && row == cursor_row && col == cursor_col;
+        let under_copy_cursor = copy_cursor == Some((row, col));
+        let under_block_cursor = under_copy_cursor
+            || (cursor_shape == CursorShape::Block && row == cursor_row && col == cursor_col);
         if row == cursor_row && col == cursor_col {
             cursor_width = width;
         }
 
-        if bg != default_bg {
+        if selection.is_some_and(|range| range.contains(indexed.point)) {
+            backgrounds.push(solid([x, y, width, cell.height], linear(SELECTION_BG)));
+        } else if bg != default_bg {
             backgrounds.push(solid([x, y, width, cell.height], linear(bg)));
         }
 
@@ -165,6 +198,13 @@ pub fn build_frame<T: EventListener>(
         ]),
         CursorShape::Hidden => {}
     }
+    if let Some((row, col)) = copy_cursor {
+        let (x, y) = origin(col, row);
+        cursor_back.push(solid([x, y, cell.width, h], linear(COPY_CURSOR)));
+    }
+    if let Some(indicator) = scroll_indicator(term, content.display_offset, input.view) {
+        cursor_front.push(indicator);
+    }
 
     let mut quads = backgrounds;
     quads.extend(cursor_back);
@@ -172,6 +212,33 @@ pub fn build_frame<T: EventListener>(
     quads.extend(lines);
     quads.extend(cursor_front);
     Ok(quads)
+}
+
+/// A thin bar on the right edge that shows where the view is in the history.
+/// Only when the view is scrolled up.
+fn scroll_indicator<T: EventListener>(
+    term: &Term<T>,
+    display_offset: usize,
+    (view_width, view_height): (f32, f32),
+) -> Option<Instance> {
+    if display_offset == 0 {
+        return None;
+    }
+    let history = term.history_size() as f32;
+    let total = history + term.screen_lines() as f32;
+    let height = (view_height * term.screen_lines() as f32 / total)
+        .max(12.0)
+        .min(view_height);
+    let top = (view_height * (history - display_offset as f32) / total).min(view_height - height);
+    Some(solid(
+        [
+            view_width - SCROLL_INDICATOR_WIDTH,
+            top.max(0.0),
+            SCROLL_INDICATOR_WIDTH,
+            height,
+        ],
+        linear(SCROLL_INDICATOR),
+    ))
 }
 
 fn solid(rect: [f32; 4], color: [f32; 4]) -> Instance {
@@ -187,9 +254,12 @@ fn solid(rect: [f32; 4], color: [f32; 4]) -> Instance {
 #[cfg(test)]
 mod tests {
     use fterm_term::alacritty_terminal::event::VoidListener;
+    use fterm_term::alacritty_terminal::grid::Scroll;
+    use fterm_term::alacritty_terminal::index::{Column, Line, Point, Side};
+    use fterm_term::alacritty_terminal::selection::{Selection, SelectionType};
     use fterm_term::alacritty_terminal::term::Config;
     use fterm_term::alacritty_terminal::term::color::Colors;
-    use fterm_term::alacritty_terminal::vte::ansi::{Processor, Rgb};
+    use fterm_term::alacritty_terminal::vte::ansi::Processor;
     use fterm_term::size::GridSize;
 
     use super::*;
@@ -200,6 +270,8 @@ mod tests {
         baseline: 15.0,
     };
     const PADDING: f32 = 4.0;
+    /// 10x3 cells + padding.
+    const VIEW: (f32, f32) = (108.0, 68.0);
     /// Every glyph in the fake atlas has this place and size.
     const GLYPH: AtlasGlyph = AtlasGlyph {
         x: 3,
@@ -226,6 +298,7 @@ mod tests {
             padding: PADDING,
             palette: &palette,
             focused,
+            view: VIEW,
         };
         let mut keys = Vec::new();
         let quads = build_frame(&term, &input, &mut |key| {
@@ -353,6 +426,7 @@ mod tests {
             padding: PADDING,
             palette: &palette,
             focused: true,
+            view: VIEW,
         };
         let quads = build_frame(&term, &input, &mut |key| {
             Ok(Some(AtlasGlyph {
@@ -449,8 +523,111 @@ mod tests {
             padding: PADDING,
             palette: &palette,
             focused: true,
+            view: VIEW,
         };
         let got = build_frame(&term, &input, &mut |_| Err(AtlasFull));
         assert_eq!(got, Err(AtlasFull));
+    }
+
+    fn build(term: &Term<VoidListener>) -> Vec<Instance> {
+        let palette = Palette::default();
+        let input = FrameInput {
+            cell: CELL,
+            padding: PADDING,
+            palette: &palette,
+            focused: true,
+            view: VIEW,
+        };
+        build_frame(term, &input, &mut |_| Ok(Some(GLYPH))).unwrap()
+    }
+
+    fn select(term: &mut Term<VoidListener>, line: i32, from: usize, to: usize) {
+        let mut selection = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(line), Column(from)),
+            Side::Left,
+        );
+        selection.update(Point::new(Line(line), Column(to)), Side::Right);
+        term.selection = Some(selection);
+    }
+
+    fn rects_with_color(quads: &[Instance], color: Rgb) -> Vec<[f32; 4]> {
+        quads
+            .iter()
+            .filter(|q| q.kind == KIND_SOLID && q.color == linear(color))
+            .map(|q| q.rect)
+            .collect()
+    }
+
+    #[test]
+    fn selected_cells_get_the_selection_background() {
+        let mut term = term_with(b"abcd");
+        select(&mut term, 0, 1, 2);
+        let rects = rects_with_color(&build(&term), SELECTION_BG);
+        assert_eq!(rects, [cell_rect(1.0, 0.0), cell_rect(2.0, 0.0)]);
+    }
+
+    #[test]
+    fn empty_cells_can_be_selected_too() {
+        let mut term = term_with(b"ab");
+        select(&mut term, 1, 4, 4);
+        let rects = rects_with_color(&build(&term), SELECTION_BG);
+        assert_eq!(rects, [cell_rect(4.0, 1.0)]);
+    }
+
+    #[test]
+    fn selected_text_keeps_its_color() {
+        let mut term = term_with(b"ab");
+        select(&mut term, 0, 0, 1);
+        let quads = build(&term);
+        assert!(
+            glyphs(&quads)
+                .iter()
+                .all(|g| g.color == color(NamedColor::Foreground))
+        );
+    }
+
+    #[test]
+    fn selection_scrolls_with_the_view() {
+        // 10 lines in a 3-row terminal, scrolled up 2 lines: history line -2 is the top row.
+        let text: Vec<String> = (0..10).map(|i| i.to_string()).collect();
+        let mut term = term_with(text.join("\r\n").as_bytes());
+        term.scroll_display(Scroll::Delta(2));
+        select(&mut term, -2, 0, 0);
+        let rects = rects_with_color(&build(&term), SELECTION_BG);
+        assert_eq!(rects, [cell_rect(0.0, 0.0)]);
+    }
+
+    #[test]
+    fn copy_mode_cursor_is_a_yellow_block() {
+        let mut term = term_with(b"abc");
+        term.toggle_vi_mode();
+        let rects = rects_with_color(&build(&term), COPY_CURSOR);
+        // The copy mode cursor starts at the shell cursor (after "abc").
+        assert_eq!(rects, [cell_rect(3.0, 0.0)]);
+    }
+
+    #[test]
+    fn scroll_indicator_shows_only_when_scrolled_up() {
+        let text: Vec<String> = (0..30).map(|i| i.to_string()).collect();
+        let mut term = term_with(text.join("\r\n").as_bytes());
+        assert!(rects_with_color(&build(&term), SCROLL_INDICATOR).is_empty());
+
+        term.scroll_display(Scroll::Delta(5));
+        let rects = rects_with_color(&build(&term), SCROLL_INDICATOR);
+        assert_eq!(rects.len(), 1);
+        let [x, y, w, h] = rects[0];
+        assert_eq!(x + w, VIEW.0, "at the right edge");
+        assert_eq!(w, SCROLL_INDICATOR_WIDTH);
+        assert!(y >= 0.0 && y + h <= VIEW.1 && h >= 4.0, "{:?}", rects[0]);
+    }
+
+    #[test]
+    fn scroll_indicator_is_at_the_top_when_at_the_top() {
+        let text: Vec<String> = (0..30).map(|i| i.to_string()).collect();
+        let mut term = term_with(text.join("\r\n").as_bytes());
+        term.scroll_display(Scroll::Top);
+        let rects = rects_with_color(&build(&term), SCROLL_INDICATOR);
+        assert_eq!(rects[0][1], 0.0);
     }
 }

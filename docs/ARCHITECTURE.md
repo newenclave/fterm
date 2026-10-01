@@ -64,6 +64,15 @@ processes and real escape codes, and later use it from the CLI and MCP (Phase 7)
 - Tests use `Fonts::embedded_only`, so they give the same result on every machine.
   Tests that need system fonts (emoji, CJK) do nothing when the font is not there.
 
+## Selection
+
+- alacritty removes `term.selection` when an app erases or rewrites the selected lines.
+  `fterm-term/src/select.rs` (`StickySelection`) keeps the user's selection and puts it back,
+  moved by the lines that went into the history. `Session::with_term` calls it before every use.
+- Change the selection only through `Session::with_term_mut` and `StickySelection::set`.
+- Copy mode (`copy_mode.rs`) uses the vi mode of alacritty. After each move the view scrolls to the cursor.
+- Limit: when the history is full (10 000 lines) and output is very fast, a restored selection can move by a few lines.
+
 ## Known limits
 
 - The alacritty parser does not join graphemes: ZWJ families, skin tones, and flags are drawn as

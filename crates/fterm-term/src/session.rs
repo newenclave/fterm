@@ -13,6 +13,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 
+use crate::select::StickySelection;
 use crate::size::GridSize;
 
 /// Events from the session. They come from the pty thread.
@@ -79,6 +80,8 @@ pub struct Session {
     term: Arc<FairMutex<Term<Listener>>>,
     notifier: Mutex<Notifier>,
     size: Mutex<GridSize>,
+    /// The user's selection. It is kept here, so the terminal cannot remove it.
+    selection: Mutex<StickySelection>,
 }
 
 impl Session {
@@ -94,7 +97,7 @@ impl Session {
             sender: Arc::new(OnceLock::new()),
         };
         let term = Arc::new(FairMutex::new(Term::new(
-            Config::default(),
+            term_config(),
             &size,
             listener.clone(),
         )));
@@ -126,6 +129,7 @@ impl Session {
             term,
             notifier: Mutex::new(Notifier(sender)),
             size: Mutex::new(size),
+            selection: Mutex::new(StickySelection::default()),
         })
     }
 
@@ -150,7 +154,21 @@ impl Session {
     /// Runs `f` with the terminal state locked, for example to draw it.
     /// Keep `f` short: the pty thread waits for the lock.
     pub fn with_term<R>(&self, f: impl FnOnce(&Term<Listener>) -> R) -> R {
-        f(&self.term.lock())
+        let mut term = self.term.lock();
+        self.selection.lock().unwrap().sync(&mut term);
+        f(&term)
+    }
+
+    /// Like `with_term`, but `f` can change the terminal (scroll, vi mode) and the selection.
+    /// Change the selection only through `StickySelection::set`.
+    pub fn with_term_mut<R>(
+        &self,
+        f: impl FnOnce(&mut Term<Listener>, &mut StickySelection) -> R,
+    ) -> R {
+        let mut term = self.term.lock();
+        let mut selection = self.selection.lock().unwrap();
+        selection.sync(&mut term);
+        f(&mut term, &mut selection)
     }
 
     /// Text on the screen, one line per row, without spaces at the end of lines.
@@ -181,6 +199,18 @@ impl Drop for Session {
     }
 }
 
+/// Settings for the terminal state.
+pub fn term_config() -> Config {
+    Config {
+        semantic_escape_chars: WORD_SEPARATORS.to_owned(),
+        ..Config::default()
+    }
+}
+
+/// Chars that end a word for double click. `:` `/` `.` `-` `_` `?` `=` `&` `#` `~` are not here,
+/// so URLs, paths, `file:line`, and git hashes are one word.
+const WORD_SEPARATORS: &str = ",│`|\"' ()[]{}<>\t";
+
 fn window_size(size: GridSize, (cell_width, cell_height): (u16, u16)) -> WindowSize {
     WindowSize {
         num_lines: size.rows as u16,
@@ -206,4 +236,50 @@ fn default_shell() -> String {
 fn find_in_path(program: &str) -> bool {
     std::env::var_os("PATH")
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+}
+
+#[cfg(test)]
+mod tests {
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::index::{Column, Point, Side};
+    use alacritty_terminal::selection::{Selection, SelectionType};
+    use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+    use super::*;
+
+    /// Double click on column `col` of line 0, and return the selected word.
+    fn double_click(text: &str, col: usize) -> String {
+        let mut term = Term::new(term_config(), &GridSize::new(60, 2), VoidListener);
+        Processor::<StdSyncHandler>::new().advance(&mut term, text.as_bytes());
+        let point = Point::new(Line(0), Column(col));
+        term.selection = Some(Selection::new(SelectionType::Semantic, point, Side::Left));
+        term.selection_to_string().unwrap()
+    }
+
+    #[test]
+    fn double_click_selects_a_whole_url() {
+        let text = "see https://example.com/a-b_c.d?x=1&y=2#top now";
+        assert_eq!(
+            double_click(text, 12),
+            "https://example.com/a-b_c.d?x=1&y=2#top"
+        );
+    }
+
+    #[test]
+    fn double_click_selects_a_whole_path_with_line_number() {
+        assert_eq!(
+            double_click("error in C:\\work\\fterm\\src\\app.rs:42 here", 15),
+            "C:\\work\\fterm\\src\\app.rs:42"
+        );
+        assert_eq!(
+            double_click("at ~/code/fterm/main.rs:7", 8),
+            "~/code/fterm/main.rs:7"
+        );
+    }
+
+    #[test]
+    fn double_click_stops_at_quotes_and_brackets() {
+        assert_eq!(double_click("open(\"a/b.txt\")", 8), "a/b.txt");
+        assert_eq!(double_click("commit 1a2b3c4d done", 9), "1a2b3c4d");
+    }
 }

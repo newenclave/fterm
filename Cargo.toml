@@ -11,6 +11,7 @@ license = "MIT"
 [workspace.dependencies]
 alacritty_terminal = "0.26"
 anyhow = "1"
+arboard = "3.6"
 bytemuck = { version = "1", features = ["derive"] }
 cosmic-text = "0.19"
 etagere = "0.3"

@@ -2,6 +2,8 @@
 //! This crate has no GPU or window code, so it is easy to test.
 
 pub mod colors;
+pub mod copy_mode;
+pub mod select;
 pub mod session;
 pub mod size;
 

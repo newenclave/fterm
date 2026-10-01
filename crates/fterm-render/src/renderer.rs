@@ -248,7 +248,8 @@ impl Renderer {
         term: &Term<T>,
         focused: bool,
     ) {
-        let quads = self.build(device, queue, term, focused);
+        let view_size = (size.0 as f32, size.1 as f32);
+        let quads = self.build(device, queue, term, focused, view_size);
         let background = linear(
             self.palette
                 .get(NamedColor::Background as usize, term.colors()),
@@ -308,6 +309,7 @@ impl Renderer {
         queue: &wgpu::Queue,
         term: &Term<T>,
         focused: bool,
+        view_size: (f32, f32),
     ) -> Vec<Instance> {
         for _ in 0..4 {
             let input = FrameInput {
@@ -315,6 +317,7 @@ impl Renderer {
                 padding: self.padding,
                 palette: &self.palette,
                 focused,
+                view: view_size,
             };
             let (mask, color, fonts) = (&mut self.mask, &mut self.color, &mut self.fonts);
             let (braille, gamma) = (self.braille, &self.gamma);

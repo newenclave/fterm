@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+arboard.workspace = true
 fterm-render.workspace = true
 fterm-term.workspace = true
 pollster.workspace = true

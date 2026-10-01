@@ -1,5 +1,8 @@
 //! Keyboard: turns a winit key press into bytes for the pty (xterm style).
 
+use fterm_term::alacritty_terminal::selection::SelectionType;
+use fterm_term::alacritty_terminal::vi_mode::ViMotion;
+use fterm_term::copy_mode::CopyAction;
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
 /// One key press, with the parts of `winit::event::KeyEvent` that we need.
@@ -112,7 +115,12 @@ fn ctrl_code(key: &KeyInput) -> Option<u8> {
     {
         return Some(code);
     }
-    let PhysicalKey::Code(code) = key.physical else {
+    physical_letter(key.physical).and_then(from_char)
+}
+
+/// The Latin letter (or bracket) on a key, the same on every layout.
+fn physical_letter(physical: PhysicalKey) -> Option<char> {
+    let PhysicalKey::Code(code) = physical else {
         return None;
     };
     let letter = match code {
@@ -147,7 +155,83 @@ fn ctrl_code(key: &KeyInput) -> Option<u8> {
         KeyCode::Backslash => '\\',
         _ => return None,
     };
-    from_char(letter)
+    Some(letter)
+}
+
+/// A key in copy mode. Keys like in vi and less. `None` = the key does nothing in copy mode.
+pub fn copy_mode_action(key: &KeyInput) -> Option<CopyAction> {
+    use CopyAction::{Move, Select};
+    let ctrl = key.mods.control_key();
+    if let Key::Named(named) = key.logical {
+        return match named {
+            NamedKey::ArrowUp => Some(Move(ViMotion::Up)),
+            NamedKey::ArrowDown => Some(Move(ViMotion::Down)),
+            NamedKey::ArrowLeft => Some(Move(ViMotion::Left)),
+            NamedKey::ArrowRight => Some(Move(ViMotion::Right)),
+            NamedKey::Home => Some(Move(ViMotion::First)),
+            NamedKey::End => Some(Move(ViMotion::Last)),
+            NamedKey::PageUp => Some(CopyAction::PageUp),
+            NamedKey::PageDown => Some(CopyAction::PageDown),
+            NamedKey::Enter => Some(CopyAction::Copy),
+            NamedKey::Escape => Some(CopyAction::Exit),
+            _ => None,
+        };
+    }
+
+    // The char on the key. On a non-Latin layout we use the Latin letter of the physical key.
+    let typed = match key.logical {
+        Key::Character(s) => s.chars().next(),
+        _ => None,
+    };
+    let c = match typed {
+        Some(c) if c.is_ascii() => c,
+        _ => {
+            let letter = physical_letter(key.physical)?;
+            if key.mods.shift_key() {
+                letter.to_ascii_uppercase()
+            } else {
+                letter
+            }
+        }
+    };
+    if ctrl {
+        return match c.to_ascii_lowercase() {
+            'u' => Some(CopyAction::HalfPageUp),
+            'd' => Some(CopyAction::HalfPageDown),
+            'b' => Some(CopyAction::PageUp),
+            'f' => Some(CopyAction::PageDown),
+            'v' => Some(Select(SelectionType::Block)),
+            _ => None,
+        };
+    }
+    match c {
+        'k' => Some(Move(ViMotion::Up)),
+        'j' => Some(Move(ViMotion::Down)),
+        'h' => Some(Move(ViMotion::Left)),
+        'l' => Some(Move(ViMotion::Right)),
+        'w' => Some(Move(ViMotion::SemanticRight)),
+        'b' => Some(Move(ViMotion::SemanticLeft)),
+        'e' => Some(Move(ViMotion::SemanticRightEnd)),
+        'W' => Some(Move(ViMotion::WordRight)),
+        'B' => Some(Move(ViMotion::WordLeft)),
+        'E' => Some(Move(ViMotion::WordRightEnd)),
+        '0' => Some(Move(ViMotion::First)),
+        '$' => Some(Move(ViMotion::Last)),
+        '^' => Some(Move(ViMotion::FirstOccupied)),
+        'H' => Some(Move(ViMotion::High)),
+        'M' => Some(Move(ViMotion::Middle)),
+        'L' => Some(Move(ViMotion::Low)),
+        '{' => Some(Move(ViMotion::ParagraphUp)),
+        '}' => Some(Move(ViMotion::ParagraphDown)),
+        '%' => Some(Move(ViMotion::Bracket)),
+        'g' => Some(CopyAction::Top),
+        'G' => Some(CopyAction::Bottom),
+        'v' => Some(Select(SelectionType::Simple)),
+        'V' => Some(Select(SelectionType::Lines)),
+        'y' => Some(CopyAction::Copy),
+        'q' => Some(CopyAction::Exit),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -336,5 +420,89 @@ mod tests {
     fn modifier_keys_alone_send_nothing() {
         assert_eq!(press(named(NamedKey::Shift), SHIFT), None);
         assert_eq!(press(named(NamedKey::Control), CTRL), None);
+    }
+
+    fn copy_key(logical: Key, mods: ModifiersState) -> Option<CopyAction> {
+        let key = KeyInput {
+            logical: &logical,
+            physical: PhysicalKey::Code(KeyCode::KeyZ),
+            text: None,
+            mods,
+        };
+        copy_mode_action(&key)
+    }
+
+    #[test]
+    fn copy_mode_moves_with_arrows_and_hjkl() {
+        use CopyAction::Move;
+        assert_eq!(
+            copy_key(named(NamedKey::ArrowUp), NONE),
+            Some(Move(ViMotion::Up))
+        );
+        assert_eq!(copy_key(ch("k"), NONE), Some(Move(ViMotion::Up)));
+        assert_eq!(copy_key(ch("j"), NONE), Some(Move(ViMotion::Down)));
+        assert_eq!(copy_key(ch("h"), NONE), Some(Move(ViMotion::Left)));
+        assert_eq!(copy_key(ch("l"), NONE), Some(Move(ViMotion::Right)));
+        assert_eq!(copy_key(ch("w"), NONE), Some(Move(ViMotion::SemanticRight)));
+        assert_eq!(copy_key(ch("b"), NONE), Some(Move(ViMotion::SemanticLeft)));
+        assert_eq!(copy_key(ch("0"), NONE), Some(Move(ViMotion::First)));
+        assert_eq!(copy_key(ch("$"), NONE), Some(Move(ViMotion::Last)));
+        assert_eq!(
+            copy_key(named(NamedKey::Home), NONE),
+            Some(Move(ViMotion::First))
+        );
+    }
+
+    #[test]
+    fn copy_mode_pages_and_ends() {
+        assert_eq!(
+            copy_key(named(NamedKey::PageUp), NONE),
+            Some(CopyAction::PageUp)
+        );
+        assert_eq!(
+            copy_key(named(NamedKey::PageDown), NONE),
+            Some(CopyAction::PageDown)
+        );
+        assert_eq!(copy_key(ch("u"), CTRL), Some(CopyAction::HalfPageUp));
+        assert_eq!(copy_key(ch("d"), CTRL), Some(CopyAction::HalfPageDown));
+        assert_eq!(copy_key(ch("g"), NONE), Some(CopyAction::Top));
+        assert_eq!(copy_key(ch("G"), SHIFT), Some(CopyAction::Bottom));
+    }
+
+    #[test]
+    fn copy_mode_select_copy_and_exit() {
+        use CopyAction::Select;
+        assert_eq!(copy_key(ch("v"), NONE), Some(Select(SelectionType::Simple)));
+        assert_eq!(copy_key(ch("V"), SHIFT), Some(Select(SelectionType::Lines)));
+        assert_eq!(copy_key(ch("v"), CTRL), Some(Select(SelectionType::Block)));
+        assert_eq!(copy_key(ch("y"), NONE), Some(CopyAction::Copy));
+        assert_eq!(
+            copy_key(named(NamedKey::Enter), NONE),
+            Some(CopyAction::Copy)
+        );
+        assert_eq!(
+            copy_key(named(NamedKey::Escape), NONE),
+            Some(CopyAction::Exit)
+        );
+        assert_eq!(copy_key(ch("q"), NONE), Some(CopyAction::Exit));
+    }
+
+    #[test]
+    fn copy_mode_ignores_other_keys() {
+        assert_eq!(copy_key(ch("x"), NONE), None);
+        assert_eq!(copy_key(named(NamedKey::F5), NONE), None);
+    }
+
+    #[test]
+    fn copy_mode_works_on_the_russian_layout() {
+        // On the Russian layout the "K" key gives "л": we use the physical key.
+        let logical = ch("л");
+        let key = KeyInput {
+            logical: &logical,
+            physical: PhysicalKey::Code(KeyCode::KeyK),
+            text: Some("л"),
+            mods: NONE,
+        };
+        assert_eq!(copy_mode_action(&key), Some(CopyAction::Move(ViMotion::Up)));
     }
 }

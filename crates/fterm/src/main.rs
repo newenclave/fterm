@@ -2,8 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod clipboard;
 mod gpu;
 mod input;
+mod mouse;
 
 use tracing_subscriber::EnvFilter;
 use winit::event_loop::{ControlFlow, EventLoop};

@@ -90,7 +90,7 @@ Before each phase we write a detailed plan for it.
 - Selection and copy: see the next section. This is a main goal, not a small thing.
 - **Check:** `claude` works fully: many lines of input, big paste, Esc, Ctrl+C, scroll.
 
-#### Selection and copy (done right)
+#### Selection and copy (done right) — first part ✅ (sticky selection, auto-scroll, copy mode)
 In many terminals, copying is painful, most of all when the text is longer than the screen.
 Ideas (we pick the order in the Phase 3 plan):
 - **Select and scroll together.**
