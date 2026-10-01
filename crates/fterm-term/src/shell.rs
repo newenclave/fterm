@@ -147,6 +147,37 @@ pub fn wsl_args(distro: &str, cwd: &str, script: Option<&str>) -> Vec<String> {
     args
 }
 
+/// The folder for `wsl.exe --cd` when a pane of `distro` opens from `cwd` (the folder of another pane,
+/// or the saved one): a Linux path as it is, a Windows path, or `~` when WSL cannot open it.
+pub fn wsl_cwd(distro: &str, cwd: Option<&str>) -> String {
+    let Some(cwd) = cwd.filter(|c| !c.is_empty()) else {
+        return "~".to_owned();
+    };
+    let windows = cwd.replace('/', "\\");
+    if let Some(unc) = windows.strip_prefix(r"\\") {
+        // `\\wsl$\Ubuntu\home\me` or `\\wsl.localhost\Ubuntu\home\me`.
+        let mut parts = unc.splitn(3, '\\');
+        let (host, name, rest) = (parts.next(), parts.next(), parts.next().unwrap_or(""));
+        let wsl_host = host.is_some_and(|h| {
+            h.eq_ignore_ascii_case("wsl$") || h.eq_ignore_ascii_case("wsl.localhost")
+        });
+        return match name {
+            Some(name) if wsl_host && name.eq_ignore_ascii_case(distro) => {
+                format!("/{}", rest.replace('\\', "/").trim_end_matches('/'))
+            }
+            _ => "~".to_owned(),
+        };
+    }
+    if cwd.starts_with('/') {
+        return cwd.to_owned();
+    }
+    let drive = cwd.as_bytes();
+    if drive.len() >= 2 && drive[0].is_ascii_alphabetic() && drive[1] == b':' {
+        return windows;
+    }
+    "~".to_owned()
+}
+
 /// The shell integration scripts that come with fterm.
 pub const POWERSHELL_SCRIPT: &str = include_str!("../../../assets/shell/fterm.ps1");
 pub const BASH_SCRIPT: &str = include_str!("../../../assets/shell/fterm.bash");
@@ -310,6 +341,30 @@ mod tests {
             panic!("a command ended");
         };
         assert_eq!(command, None);
+    }
+
+    #[test]
+    fn the_wsl_folder_of_a_new_pane() {
+        // No folder: home.
+        assert_eq!(wsl_cwd("Ubuntu", None), "~");
+        // A Linux folder (from a WSL pane): as it is.
+        assert_eq!(wsl_cwd("Ubuntu", Some("/tmp/a b")), "/tmp/a b");
+        // A Windows folder (OSC 7 of PowerShell has `/`): wsl.exe takes a Windows path.
+        assert_eq!(wsl_cwd("Ubuntu", Some("C:/work/fterm")), r"C:\work\fterm");
+        // A folder of the same distro, seen from Windows: the Linux path.
+        assert_eq!(
+            wsl_cwd("Ubuntu", Some(r"\\wsl$\Ubuntu\home\me")),
+            "/home/me"
+        );
+        assert_eq!(
+            wsl_cwd("ubuntu", Some("//wsl.localhost/Ubuntu/home/me/src")),
+            "/home/me/src"
+        );
+        assert_eq!(wsl_cwd("Ubuntu", Some(r"\\wsl.localhost\Ubuntu")), "/");
+        // A folder of another distro cannot be opened here.
+        assert_eq!(wsl_cwd("Debian", Some(r"\\wsl$\Ubuntu\home\me")), "~");
+        // Other network folders neither.
+        assert_eq!(wsl_cwd("Ubuntu", Some(r"\\server\share")), "~");
     }
 
     #[test]

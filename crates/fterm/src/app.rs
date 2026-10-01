@@ -34,7 +34,7 @@ use fterm_term::osc::OscEvent;
 use fterm_term::process::{display_name, is_shell, running_children};
 use fterm_term::session::{Session, SessionOptions, TermEvent};
 use fterm_term::shell::{
-    ShellEvent, ShellState, install_scripts, is_powershell, powershell_args, wsl_args,
+    ShellEvent, ShellState, install_scripts, is_powershell, powershell_args, wsl_args, wsl_cwd,
 };
 use fterm_term::size::GridSize;
 use winit::application::ApplicationHandler;
@@ -1220,12 +1220,25 @@ impl App {
 
     /// Starts a profile (or the default profile) for a new pane with this grid size.
     fn spawn_pane(&mut self, size: GridSize, profile: Option<&str>) -> anyhow::Result<PaneId> {
-        // A new pane starts in the folder of the active pane, unless the profile has its own folder.
-        let active_cwd = self
-            .running
-            .as_ref()
-            .and_then(Running::active_pane)
-            .and_then(|pane| pane.shell.cwd.clone())
+        // A new pane starts in the folder of the active pane (or the saved one), unless the profile
+        // has its own folder. From a WSL pane it is the same distro: its folder is a Linux one.
+        let (raw_cwd, active_wsl) = {
+            let active = self.running.as_ref().and_then(Running::active_pane);
+            let raw_cwd = self
+                .spawn_cwd
+                .clone()
+                .or_else(|| active.and_then(|p| p.shell.cwd.clone()));
+            let active_wsl = active.and_then(|p| p.profile.clone()).filter(|name| {
+                self.profiles
+                    .iter()
+                    .any(|p| p.name == *name && p.wsl.is_some())
+            });
+            (raw_cwd, active_wsl)
+        };
+        let profile = profile.map(str::to_owned).or(active_wsl);
+        let profile = profile.as_deref();
+        let active_cwd = raw_cwd
+            .clone()
             .map(std::path::PathBuf::from)
             .filter(|dir| dir.is_dir());
         let profile_name = self.profile(profile).map(|p| p.name.clone());
@@ -1247,7 +1260,8 @@ impl App {
                         .as_ref()
                         .filter(|_| self.config.config.shell_integration)
                         .map(|ps1| ps1.with_file_name("fterm-wsl.bash").display().to_string());
-                    args = wsl_args(distro, "~", script.as_deref());
+                    let cwd = wsl_cwd(distro, raw_cwd.as_deref());
+                    args = wsl_args(distro, &cwd, script.as_deref());
                 }
                 SessionOptions {
                     program: Some(program),
