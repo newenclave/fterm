@@ -240,6 +240,17 @@ pub enum Restore {
     Never,
 }
 
+/// What comes back in a restored pane where a program (or an agent) ran.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Rerun {
+    /// Put the command into the prompt; Enter runs it.
+    #[default]
+    Prompt,
+    /// Run it at once.
+    Run,
+    Never,
+}
+
 /// When the window × asks first.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ConfirmClose {
@@ -376,6 +387,8 @@ pub struct Config {
     pub history: HistoryConfig,
     pub confirm_close: ConfirmClose,
     pub restore: Restore,
+    pub restore_programs: Rerun,
+    pub restore_agents: Rerun,
     pub api: ApiConfig,
     pub ai: AiConfig,
     /// The Lua function `on_notification` (its number), if there is one.
@@ -410,6 +423,8 @@ impl Default for Config {
             history: HistoryConfig::default(),
             confirm_close: ConfirmClose::default(),
             restore: Restore::default(),
+            restore_programs: Rerun::default(),
+            restore_agents: Rerun::default(),
             api: ApiConfig::default(),
             ai: AiConfig::default(),
             on_notification: None,
@@ -905,6 +920,25 @@ impl Reader {
                     ));
                 }
             };
+        }
+        for key in ["restore_programs", "restore_agents"] {
+            if let Some(text) = string_field(root, key, key)? {
+                let value = match text.as_str() {
+                    "prompt" => Rerun::Prompt,
+                    "run" => Rerun::Run,
+                    "never" => Rerun::Never,
+                    other => {
+                        return Err(format!(
+                            "{key}: must be \"prompt\", \"run\", or \"never\", got `{other}`"
+                        ));
+                    }
+                };
+                if key == "restore_programs" {
+                    config.restore_programs = value;
+                } else {
+                    config.restore_agents = value;
+                }
+            }
         }
         if let Some(text) = string_field(root, "confirm_close", "confirm_close")? {
             config.confirm_close = match text.as_str() {
@@ -2052,6 +2086,25 @@ mod tests {
             assert_eq!(load(&source).config.restore, value);
         }
         assert!(load_str(r#"return { restore = "maybe" }"#, "t").is_err());
+    }
+
+    #[test]
+    fn rerun_values() {
+        let config = load("return {}").config;
+        assert_eq!(config.restore_programs, Rerun::Prompt);
+        assert_eq!(config.restore_agents, Rerun::Prompt);
+        for (text, value) in [
+            ("prompt", Rerun::Prompt),
+            ("run", Rerun::Run),
+            ("never", Rerun::Never),
+        ] {
+            let source =
+                format!("return {{ restore_programs = \"{text}\", restore_agents = \"{text}\" }}");
+            let config = load(&source).config;
+            assert_eq!(config.restore_programs, value);
+            assert_eq!(config.restore_agents, value);
+        }
+        assert!(load_str(r#"return { restore_agents = "yes" }"#, "t").is_err());
     }
 
     #[test]

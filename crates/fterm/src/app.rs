@@ -110,6 +110,8 @@ struct Pane {
     opened_by: Option<fterm_api::server::ClientId>,
     /// The profile that started it (for restoring the session).
     profile: Option<String>,
+    /// A restored pane: the command that ran in it, for its first prompt (true = run it).
+    rerun: Option<(String, bool)>,
 }
 
 /// Everything that exists only while the window is open.
@@ -1299,6 +1301,7 @@ impl App {
                 remote: true,
                 opened_by: None,
                 profile: profile_name,
+                rerun: None,
             },
         );
         Ok(id)
@@ -3388,6 +3391,12 @@ impl ApplicationHandler<UserEvent> for App {
                     _ => None,
                 };
                 let done = p.shell.apply(&osc, Instant::now());
+                if p.shell.at_prompt()
+                    && let Some((text, run)) = p.rerun.take()
+                {
+                    p.session
+                        .write(crate::history_popup::replace_input("", &text, run));
+                }
                 let program = p.session.program().to_owned();
                 if let Some(dir) = &new_dir
                     && let Some(server) = &self.api_server

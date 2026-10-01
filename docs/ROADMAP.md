@@ -279,8 +279,10 @@ that want a URL, and saved "always allow" answers.
 
 ### Phase 9b — Restore the session (an idea from the user) — in progress
 Done: 9b.0 (save the window, the "Restore the last session?" box, the palette command) and
-9b.1 (the list of sessions, Ctrl+Shift+S: named sessions and the last 20 closed windows).
-Still to do: "This pane ran: …", `claude --continue`, the old text in grey, `on_restore`.
+9b.1 (the list of sessions, Ctrl+Shift+S: named sessions and the last 20 closed windows),
+9b.2 (a program that ran comes back into the prompt; Claude Code as `claude --continue`;
+`restore_programs` and `restore_agents` = "prompt" | "run" | "never").
+Still to do: the old text in grey, `on_restore`.
 Like a browser: when you open fterm again, you can get back what you had before you closed it.
 - **What is saved:** the window size and place; all tabs (their titles, the active tab); the split layout of each tab
   (the tree and the sizes); for each pane its profile, its folder (OSC 7), and its title; the dock (open, the panel, the size);

@@ -54,6 +54,13 @@ return {
   -- confirm_close = "running",
   -- on_close_window = function(info) if #info.running == 0 then return true end end,
 
+  -- Sessions (Ctrl+Shift+S). At start: "ask" (default), "always", "never".
+  -- restore = "ask",
+  -- A program that ran in a pane comes back: "prompt" (default, Enter runs it), "run", "never".
+  -- Claude Code comes back as `claude --continue`.
+  -- restore_programs = "prompt",
+  -- restore_agents = "prompt",
+
   -- Toasts and OS notifications. OS notifications are off: they can be annoying.
   -- notifications = { toasts = "bottom_right", os = false, long_command = 10 },
 

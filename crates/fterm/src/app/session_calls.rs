@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use fterm_config::load::Restore;
+use fterm_config::load::{Rerun, Restore};
 
 use crate::ai_chat::InputBox;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -11,8 +11,8 @@ use super::*;
 use crate::history_popup::{HistoryPopup, PopupKind, PopupRow};
 use crate::session_state::{
     Entry, EntryKind, SavedDock, SavedPane, SavedSession, SavedTab, SavedWindow, VERSION,
-    adopt_dead, close_live, entry_text, list, live_path, load, newest_closed, restore_layout, save,
-    save_layout, save_named, sessions_dir,
+    adopt_dead, close_live, entry_text, list, live_path, load, newest_closed, rerun_command,
+    restore_layout, save, save_layout, save_named, sessions_dir,
 };
 
 /// How often the session is saved (so a crash or a reboot loses little).
@@ -33,6 +33,7 @@ impl App {
                     profile: p.profile.clone(),
                     cwd: p.shell.cwd.clone(),
                     program: display_name(p.session.program()).to_owned(),
+                    ran: p.shell.running_command().map(str::to_owned),
                 })
                 .unwrap_or_default()
         };
@@ -341,11 +342,28 @@ impl App {
         let size = running.grid_for(running.tab_area());
         let first = running.mux.tabs().len();
         let mut opened = 0;
+        let (programs, agents) = (
+            self.config.config.restore_programs,
+            self.config.config.restore_agents,
+        );
+        let mut reruns = 0;
         for tab in &saved.tabs {
             let layout = restore_layout(&tab.layout, &mut |pane| {
                 self.spawn_cwd = pane.cwd.clone();
                 match self.spawn_pane(size, pane.profile.as_deref()) {
-                    Ok(id) => Some(id),
+                    Ok(id) => {
+                        let rerun = pane
+                            .ran
+                            .as_deref()
+                            .and_then(|ran| rerun_command(ran, programs, agents));
+                        if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&id))
+                            && rerun.is_some()
+                        {
+                            p.rerun = rerun;
+                            reruns += 1;
+                        }
+                        Some(id)
+                    }
                     Err(err) => {
                         tracing::warn!("cannot restore a pane: {err:#}");
                         None
@@ -404,7 +422,24 @@ impl App {
                 }
             }
         }
-        tracing::info!(tabs = opened, "session restored");
+        tracing::info!(tabs = opened, reruns, "session restored");
+        if reruns > 0 && programs != Rerun::Run && agents != Rerun::Run {
+            let body = if reruns == 1 {
+                "A pane ran a program: its command is in the prompt again. Press Enter to run it."
+                    .to_owned()
+            } else {
+                format!(
+                    "{reruns} panes ran programs: their commands are in the prompt again. Press Enter to run them."
+                )
+            };
+            self.notify(
+                None,
+                "Programs can run again",
+                &body,
+                Level::Info,
+                Source::App,
+            );
+        }
         self.resize_all_panes();
         self.tab_changed();
     }

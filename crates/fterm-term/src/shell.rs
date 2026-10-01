@@ -118,6 +118,14 @@ impl ShellState {
         self.input_start.is_some() && !self.is_running()
     }
 
+    /// The text of the running command, when the shell told it (OSC 633;E).
+    pub fn running_command(&self) -> Option<&str> {
+        if !self.is_running() {
+            return None;
+        }
+        self.running.0.as_deref()
+    }
+
     /// True while a command runs (between OSC 133 C and D).
     pub fn is_running(&self) -> bool {
         self.running_since.is_some()
@@ -284,6 +292,23 @@ mod tests {
             panic!("a command ended");
         };
         assert_eq!(command, None);
+    }
+
+    #[test]
+    fn the_text_of_the_running_command() {
+        let mut shell = ShellState::default();
+        let t0 = Instant::now();
+        assert_eq!(shell.running_command(), None);
+        shell.apply(&OscEvent::CommandLine("npm run dev".into()), t0);
+        assert_eq!(
+            shell.running_command(),
+            None,
+            "typed, but it does not run yet"
+        );
+        shell.apply(&mark(PromptMark::CommandExecuted), t0);
+        assert_eq!(shell.running_command(), Some("npm run dev"));
+        shell.apply(&mark(PromptMark::CommandFinished(Some(0))), t0);
+        assert_eq!(shell.running_command(), None);
     }
 
     #[test]

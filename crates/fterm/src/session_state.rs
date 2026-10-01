@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use fterm_config::load::Rerun;
 use fterm_mux::{Direction, Layout, PaneId};
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +66,9 @@ pub struct SavedPane {
     /// The program of the pane (for the question text), for example `powershell`.
     #[serde(default)]
     pub program: String,
+    /// The command that ran in the pane when it was saved (from shell integration).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ran: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -384,6 +388,25 @@ pub fn entry_text(entry: &Entry, now: u64) -> (String, String) {
     (text, hint)
 }
 
+/// What to put into a restored pane where `ran` ran: the command and true when Enter runs it.
+/// Claude Code comes back as `claude --continue`, so its conversation comes back too.
+pub fn rerun_command(ran: &str, programs: Rerun, agents: Rerun) -> Option<(String, bool)> {
+    let ran = ran.trim();
+    let first = ran.split_whitespace().next()?;
+    let name = first.rsplit(['\\', '/']).next().unwrap_or(first);
+    let name = name.split('.').next().unwrap_or(name);
+    let (command, policy) = if name.eq_ignore_ascii_case("claude") {
+        ("claude --continue".to_owned(), agents)
+    } else {
+        (ran.to_owned(), programs)
+    };
+    match policy {
+        Rerun::Prompt => Some((command, false)),
+        Rerun::Run => Some((command, true)),
+        Rerun::Never => None,
+    }
+}
+
 /// The newest closed session (for "Restore the last session?").
 pub fn newest_closed(dir: &Path) -> Option<Entry> {
     list(dir).into_iter().find(|e| e.kind == EntryKind::Closed)
@@ -398,7 +421,55 @@ mod tests {
             profile: Some(format!("p{n}")),
             cwd: Some(format!("C:/d{n}")),
             program: "powershell".into(),
+            ..SavedPane::default()
         }
+    }
+
+    #[test]
+    fn a_program_comes_back_into_the_prompt() {
+        let p = Rerun::Prompt;
+        assert_eq!(
+            rerun_command("npm run dev", p, p),
+            Some(("npm run dev".to_owned(), false))
+        );
+        assert_eq!(
+            rerun_command("  cargo watch  ", Rerun::Run, p),
+            Some(("cargo watch".to_owned(), true))
+        );
+        assert_eq!(rerun_command("npm run dev", Rerun::Never, p), None);
+        assert_eq!(rerun_command("   ", p, p), None);
+    }
+
+    #[test]
+    fn claude_comes_back_with_its_conversation() {
+        let p = Rerun::Prompt;
+        for ran in [
+            "claude",
+            "claude --model opus",
+            r"C:\tools\claude.exe",
+            "Claude.cmd -r",
+        ] {
+            assert_eq!(
+                rerun_command(ran, Rerun::Never, p),
+                Some(("claude --continue".to_owned(), false)),
+                "{ran}"
+            );
+        }
+        assert_eq!(
+            rerun_command("claude", p, Rerun::Run),
+            Some(("claude --continue".to_owned(), true))
+        );
+        assert_eq!(rerun_command("claude", p, Rerun::Never), None);
+        // Not an agent: only the name starts the same.
+        assert_eq!(rerun_command("claudette", Rerun::Never, p), None);
+    }
+
+    #[test]
+    fn an_old_file_has_no_command() {
+        let pane: SavedPane = serde_json::from_str(r#"{"program":"pwsh"}"#).unwrap();
+        assert_eq!(pane.ran, None);
+        let text = serde_json::to_string(&SavedPane::default()).unwrap();
+        assert!(!text.contains("ran"), "{text}");
     }
 
     fn tree() -> Layout {

@@ -329,7 +329,16 @@ restore = "ask",   -- the default: at start, ask "Restore the last session?" (En
 
 - fterm saves the window every 30 seconds and when it closes. So after a crash you lose 30 seconds at most.
 - fterm asks only when no other fterm window is open.
-- Only shells come back: each pane starts its profile in its old folder. Programs do not run again.
+- Each pane starts its profile in its old folder. When a program ran in the pane (for example `npm run dev`),
+  its command is in the prompt again, and you press Enter to run it. Claude Code comes back as
+  `claude --continue`, so you get its conversation back. This needs shell integration (fterm knows the command
+  from it).
+
+```lua
+restore_programs = "prompt",   -- the default: put the command into the prompt; "run" = run it at once; "never"
+restore_agents = "prompt",     -- the same for Claude Code (`claude --continue`)
+```
+
 - **Ctrl + Shift + S** (`sessions`) shows the list of sessions: your named sessions (★) first, then the last
   20 closed windows, newest first. Enter = restore, Delete = forget.
 - **Save session as…** (`save_session_as`, in the palette) saves this window with a name. A named session
