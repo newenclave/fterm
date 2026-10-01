@@ -1644,6 +1644,10 @@ impl ApplicationHandler<UserEvent> for App {
                 running.window.request_redraw();
                 self.update_window_title();
             }
+            TermEvent::Osc(osc) => {
+                // Shell integration, notifications, and agent states (handled in the next steps).
+                tracing::debug!(pane = pane.0, ?osc, "osc event");
+            }
             TermEvent::Exit => {
                 tracing::info!(pane = pane.0, "the shell ended");
                 running.panes.remove(&pane);

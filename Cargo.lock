@@ -731,6 +731,7 @@ name = "fterm-term"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
+ "polling",
  "sysinfo",
  "tracing",
 ]

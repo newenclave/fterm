@@ -3,7 +3,9 @@
 
 pub mod colors;
 pub mod copy_mode;
+pub mod io_loop;
 pub mod links;
+pub mod osc;
 pub mod process;
 pub mod select;
 pub mod session;

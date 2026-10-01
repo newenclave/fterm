@@ -123,8 +123,7 @@ Ideas (we pick the order in the Phase 3 plan):
 - First a test: which image protocols get through ConPTY (Kitty, Sixel, iTerm2)?
   A new `conpty.dll` + `OpenConsole.exe` from Windows Terminal may be needed.
 - Our own pty read loop, so we can catch image sequences before the parser.
-  It also reads the pty until the end of the stream after the process ends.
-  Now (alacritty loop) a command that ends at once can lose its output on Windows.
+  It also reads the pty until the end of the stream after the process ends. ✅ (done in Phase 6.0: `io_loop.rs`)
 - iTerm2 (OSC 1337) and Sixel first, then the Kitty graphics protocol.
 - Images are quads that stay on their cells and scroll with the text.
 - `fterm cli image file.png` and an MCP tool: they send images over the local API (Phase 7), not over ConPTY.

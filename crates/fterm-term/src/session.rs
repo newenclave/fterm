@@ -4,8 +4,9 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::io_loop::{IoLoop, LoopSender, Msg, Notifier};
+use crate::osc::OscEvent;
 use alacritty_terminal::event::{Event, EventListener, Notify, OnResize, WindowSize};
-use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg, Notifier};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::sync::FairMutex;
@@ -25,6 +26,8 @@ pub enum TermEvent {
     Title(String),
     /// The shell process ended.
     Exit,
+    /// Shell integration, a notification, or an agent state (from our OSC scanner).
+    Osc(OscEvent),
 }
 
 /// What to run in the session.
@@ -72,7 +75,7 @@ impl SessionOptions {
 pub struct Listener {
     on_event: Arc<dyn Fn(TermEvent) + Send + Sync>,
     /// Set after the event loop starts. Used to answer the app (`PtyWrite`).
-    sender: Arc<OnceLock<EventLoopSender>>,
+    sender: Arc<OnceLock<LoopSender>>,
 }
 
 impl EventListener for Listener {
@@ -85,7 +88,7 @@ impl EventListener for Listener {
             Event::Exit => (self.on_event)(TermEvent::Exit),
             Event::PtyWrite(text) => {
                 if let Some(sender) = self.sender.get() {
-                    let _ = sender.send(Msg::Input(text.into_bytes().into()));
+                    sender.send(Msg::Input(text.into_bytes().into()));
                 }
             }
             Event::ChildExit(status) => tracing::debug!(?status, "child process ended"),
@@ -154,7 +157,13 @@ impl Session {
         let pid = pty.child_watcher().pid().map(|pid| pid.get());
         #[cfg(unix)]
         let pid = Some(pty.child().id());
-        let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, true, false)?;
+        let osc_listener = listener.clone();
+        let osc_sink: crate::io_loop::OscSink = Arc::new(move |events: Vec<OscEvent>| {
+            for event in events {
+                (osc_listener.on_event)(TermEvent::Osc(event));
+            }
+        });
+        let event_loop = IoLoop::new(term.clone(), listener.clone(), pty, osc_sink)?;
         let sender = event_loop.channel();
         let _ = listener.sender.set(sender.clone());
         event_loop.spawn();
@@ -241,7 +250,7 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         // Stop the pty thread. The shell ends when its pty closes.
-        let _ = self.notifier.lock().unwrap().0.send(Msg::Shutdown);
+        self.notifier.lock().unwrap().0.send(Msg::Shutdown);
     }
 }
 

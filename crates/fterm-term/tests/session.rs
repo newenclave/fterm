@@ -4,6 +4,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use fterm_term::alacritty_terminal::grid::Dimensions;
+use fterm_term::osc::{OscEvent, PromptMark};
 use fterm_term::session::{Session, SessionOptions, TermEvent};
 use fterm_term::size::GridSize;
 
@@ -37,13 +38,8 @@ screen:
 
 fn echo_command() -> SessionOptions {
     if cfg!(windows) {
-        // The short wait (ping) is needed: when a process ends at once, alacritty reads the pty
-        // only one more time, and ConPTY can send the output later. Then the output is lost.
-        // Our own pty loop (roadmap, Phase 3b) will read until the end of the stream.
-        SessionOptions::command(
-            "cmd.exe",
-            ["/c", "echo fterm-ok & ping -n 2 127.0.0.1 >nul"],
-        )
+        // No wait here: the command ends at once, and its output must still be there.
+        SessionOptions::command("cmd.exe", ["/c", "echo fterm-ok"])
     } else {
         SessionOptions::command("sh", ["-c", "echo fterm-ok"])
     }
@@ -107,13 +103,9 @@ fn session_knows_its_shell_pid_and_program() {
 fn session_starts_in_its_folder_with_its_env() {
     let dir = std::env::temp_dir();
     let mut options = if cfg!(windows) {
-        // The ping keeps the process alive a bit, so the output is not lost (see above).
-        SessionOptions::command(
-            "cmd.exe",
-            ["/c", "cd & echo %FTERM_TEST% & ping -n 2 127.0.0.1 >nul"],
-        )
+        SessionOptions::command("cmd.exe", ["/c", "cd & echo %FTERM_TEST%"])
     } else {
-        SessionOptions::command("sh", ["-c", "pwd; echo $FTERM_TEST; sleep 1"])
+        SessionOptions::command("sh", ["-c", "pwd; echo $FTERM_TEST"])
     };
     options.cwd = Some(dir.clone());
     options.env = vec![("FTERM_TEST".to_owned(), "hello-env".to_owned())];
@@ -128,15 +120,9 @@ fn session_starts_in_its_folder_with_its_env() {
 #[test]
 fn scrollback_size_comes_from_the_options() {
     let mut options = if cfg!(windows) {
-        SessionOptions::command(
-            "cmd.exe",
-            [
-                "/c",
-                "(for /l %i in (1,1,200) do @echo line %i) & ping -n 2 127.0.0.1 >nul",
-            ],
-        )
+        SessionOptions::command("cmd.exe", ["/c", "for /l %i in (1,1,200) do @echo line %i"])
     } else {
-        SessionOptions::command("sh", ["-c", "seq 200; sleep 1"])
+        SessionOptions::command("sh", ["-c", "seq 200"])
     };
     options.scrollback = 50;
     let (session, rx) = spawn(options);
@@ -144,4 +130,89 @@ fn scrollback_size_comes_from_the_options() {
     // 200 lines on a 24-line screen: the history keeps only 50 of them.
     let history = session.with_term(|term| term.history_size());
     assert_eq!(history, 50);
+}
+
+#[test]
+fn fast_commands_do_not_lose_their_output() {
+    // Many runs, because the old bug did not happen every time.
+    for _ in 0..5 {
+        let (session, rx) = spawn(echo_command());
+        wait_for_exit(&session, &rx);
+        let text = session.screen_text();
+        assert!(
+            text.contains("fterm-ok"),
+            "screen text was:
+{text}"
+        );
+    }
+}
+
+/// All events until Exit.
+fn events_until_exit(session: &Session, rx: &mpsc::Receiver<TermEvent>) -> Vec<TermEvent> {
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    let mut events = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(TermEvent::Exit) => return events,
+            Ok(TermEvent::Redraw) => {}
+            Ok(event) => events.push(event),
+            Err(err) => panic!(
+                "no Exit event: {err}
+screen:
+{}",
+                session.screen_text()
+            ),
+        }
+    }
+}
+
+#[test]
+fn osc_events_come_through_the_pty() {
+    // This also checks that ConPTY passes these sequences to us.
+    let script = if cfg!(windows) {
+        r#"$e=[char]27; $b=[char]7; Write-Host -NoNewline "$e]9;hello 9$b$e]777;notify;Title;body 777$b$e]777;fterm-agent;waiting;need you$b$e]7;file://pc/C:/work$b$e]133;D;3$b"; Start-Sleep -Milliseconds 300"#
+    } else {
+        r#"printf ']9;hello 9]777;notify;Title;body 777]777;fterm-agent;waiting;need you]7;file://pc/C:/work]133;D;3'; sleep 0.3"#
+    };
+    let options = if cfg!(windows) {
+        SessionOptions::command("powershell.exe", ["-NoProfile", "-Command", script])
+    } else {
+        SessionOptions::command("sh", ["-c", script])
+    };
+    let (session, rx) = spawn(options);
+    let events = events_until_exit(&session, &rx);
+    let osc: Vec<OscEvent> = events
+        .into_iter()
+        .filter_map(|e| match e {
+            TermEvent::Osc(osc) => Some(osc),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        osc.contains(&OscEvent::Notify {
+            title: None,
+            body: "hello 9".into()
+        }),
+        "{osc:?}"
+    );
+    assert!(
+        osc.contains(&OscEvent::Notify {
+            title: Some("Title".into()),
+            body: "body 777".into()
+        }),
+        "{osc:?}"
+    );
+    assert!(
+        osc.contains(&OscEvent::Agent {
+            state: "waiting".into(),
+            message: "need you".into()
+        }),
+        "{osc:?}"
+    );
+    assert!(osc.contains(&OscEvent::Cwd("C:/work".into())), "{osc:?}");
+    assert!(
+        osc.contains(&OscEvent::Prompt(PromptMark::CommandFinished(Some(3)))),
+        "{osc:?}"
+    );
 }

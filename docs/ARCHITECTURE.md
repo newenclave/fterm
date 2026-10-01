@@ -13,6 +13,17 @@
 `fterm-term` has no GPU and no window code. So we can test it with real
 processes and real escape codes, and later use it from the CLI and MCP (Phase 7).
 
+## The pty loop
+
+`fterm-term/src/io_loop.rs` is our own pty read and write loop (a port of the alacritty loop).
+- The bytes from the pty go through `osc::Scanner` first, then to the alacritty parser.
+  The scanner finds the sequences that alacritty drops: OSC 7 (folder), OSC 9 / 99 / 777 (notifications),
+  OSC 133 (shell integration), and `OSC 777;fterm-agent;<state>;<text>` (agent state). They come as `TermEvent::Osc`.
+- ConPTY passes all these sequences (tested on Windows 11 with a real ConPTY).
+- After the child process ends, the loop reads until the output is quiet (150 ms, at most 2 s),
+  and it looks for the exit event after every wait (at most 200 ms). So a command that ends at once
+  does not lose its output, and its exit is not missed.
+
 ## Threads
 
 ```
@@ -106,4 +117,3 @@ processes and real escape codes, and later use it from the CLI and MCP (Phase 7)
 - The alacritty parser does not join graphemes: ZWJ families, skin tones, and flags are drawn as
   separate chars, and `❤️` gets 1 cell. See the roadmap.
 - No bidi: right-to-left text is shown in grid order.
-- On Windows, a command that ends at once can lose its output (ConPTY + alacritty loop). Phase 3b fixes it.
