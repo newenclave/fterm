@@ -159,7 +159,7 @@ With shell integration, the shell tells fterm:
 **PowerShell** (5.1 and 7): fterm loads its script by itself (after your profile). Your prompt does not change.
 Turn it off with `shell_integration = false`.
 
-**bash and zsh:** fterm writes the scripts to `%LOCALAPPDATA%term\shell\` (Windows) or
+**bash and zsh:** fterm writes the scripts to `%LOCALAPPDATA%\fterm\shell\` (Windows) or
 `~/.local/share/fterm/shell/`. Add one line to your rc file:
 
 ```sh
