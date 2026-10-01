@@ -388,6 +388,10 @@ With shell integration, the shell tells fterm:
 **PowerShell** (5.1 and 7): fterm loads its script by itself (after your profile). Your prompt does not change.
 Turn it off with `shell_integration = false`.
 
+**WSL:** when the default shell of the distro is bash, fterm starts it with its script (`fterm-wsl.bash`).
+The script reads your profile files and `~/.bashrc` first, like a normal login. Other shells (zsh, fish)
+start as they are; for zsh add the line below to `~/.zshrc` (the path is `/mnt/c/Users/<you>/AppData/Local/fterm/shell/`).
+
 **bash and zsh:** fterm writes the scripts to `%LOCALAPPDATA%\fterm\shell\` (Windows) or
 `~/.local/share/fterm/shell/`. Add one line to your rc file:
 

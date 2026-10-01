@@ -33,7 +33,9 @@ use fterm_term::links::url_at;
 use fterm_term::osc::OscEvent;
 use fterm_term::process::{display_name, is_shell, running_children};
 use fterm_term::session::{Session, SessionOptions, TermEvent};
-use fterm_term::shell::{ShellEvent, ShellState, install_scripts, is_powershell, powershell_args};
+use fterm_term::shell::{
+    ShellEvent, ShellState, install_scripts, is_powershell, powershell_args, wsl_args,
+};
 use fterm_term::size::GridSize;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
@@ -1235,6 +1237,17 @@ impl App {
                     && let Some(script) = &self.shell_script
                 {
                     args = powershell_args(&args, script);
+                }
+                // A WSL distro with the args that fterm made: bash with the shell integration.
+                if let Some(distro) = &profile.wsl
+                    && args == wsl_args(distro, "~", None)
+                {
+                    let script = self
+                        .shell_script
+                        .as_ref()
+                        .filter(|_| self.config.config.shell_integration)
+                        .map(|ps1| ps1.with_file_name("fterm-wsl.bash").display().to_string());
+                    args = wsl_args(distro, "~", script.as_deref());
                 }
                 SessionOptions {
                     program: Some(program),

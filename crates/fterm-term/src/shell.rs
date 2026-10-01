@@ -132,10 +132,27 @@ impl ShellState {
     }
 }
 
+/// The arguments of `wsl.exe` for a pane of `distro` in `cwd` (`~`, a Linux path, or a Windows path).
+/// With `script` (the Windows path of `fterm-wsl.bash`), bash starts with the fterm shell integration.
+pub fn wsl_args(distro: &str, cwd: &str, script: Option<&str>) -> Vec<String> {
+    let mut args: Vec<String> = vec!["-d".into(), distro.into(), "--cd".into(), cwd.into()];
+    if let Some(script) = script {
+        let quoted = script.replace('\'', r"'\''");
+        // Only bash gets the script; zsh, fish, and others start as they are.
+        let launcher = format!(
+            r#"f=$(wslpath '{quoted}' 2>/dev/null); case "${{SHELL##*/}}" in bash) [ -r "$f" ] && exec bash --rcfile "$f" -i;; esac; exec "${{SHELL:-/bin/sh}}" -l"#
+        );
+        args.extend(["--exec".into(), "sh".into(), "-c".into(), launcher]);
+    }
+    args
+}
+
 /// The shell integration scripts that come with fterm.
 pub const POWERSHELL_SCRIPT: &str = include_str!("../../../assets/shell/fterm.ps1");
 pub const BASH_SCRIPT: &str = include_str!("../../../assets/shell/fterm.bash");
 pub const ZSH_SCRIPT: &str = include_str!("../../../assets/shell/fterm.zsh");
+/// The `--rcfile` of bash in WSL: what a login bash reads, and then `fterm.bash`.
+pub const WSL_BASH_SCRIPT: &str = include_str!("../../../assets/shell/fterm-wsl.bash");
 
 /// Writes the scripts into `dir` (if they changed) and returns the path of the PowerShell script.
 pub fn install_scripts(dir: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
@@ -144,6 +161,7 @@ pub fn install_scripts(dir: &std::path::Path) -> std::io::Result<std::path::Path
         ("fterm.ps1", POWERSHELL_SCRIPT),
         ("fterm.bash", BASH_SCRIPT),
         ("fterm.zsh", ZSH_SCRIPT),
+        ("fterm-wsl.bash", WSL_BASH_SCRIPT),
     ] {
         let path = dir.join(name);
         if std::fs::read_to_string(&path).ok().as_deref() != Some(text) {
@@ -292,6 +310,51 @@ mod tests {
             panic!("a command ended");
         };
         assert_eq!(command, None);
+    }
+
+    #[test]
+    fn a_wsl_pane_without_integration() {
+        assert_eq!(wsl_args("Ubuntu", "~", None), ["-d", "Ubuntu", "--cd", "~"]);
+        assert_eq!(
+            wsl_args("Debian", "/tmp", None),
+            ["-d", "Debian", "--cd", "/tmp"]
+        );
+    }
+
+    #[test]
+    fn a_wsl_pane_loads_the_bash_script() {
+        let args = wsl_args(
+            "Ubuntu",
+            "~",
+            Some(r"C:\Users\me\AppData\Local\fterm\shell\fterm-wsl.bash"),
+        );
+        assert_eq!(args[..6], ["-d", "Ubuntu", "--cd", "~", "--exec", "sh"]);
+        assert_eq!(args[6], "-c");
+        let launcher = &args[7];
+        // Linux finds the Windows file itself (the drives are not always in /mnt).
+        assert!(
+            launcher.contains(r"wslpath 'C:\Users\me\AppData\Local\fterm\shell\fterm-wsl.bash'"),
+            "{launcher}"
+        );
+        assert!(
+            launcher.contains(r#"exec bash --rcfile "$f" -i"#),
+            "{launcher}"
+        );
+        // Other shells (zsh, fish) start as they are, as a login shell.
+        assert!(
+            launcher.contains(r#"exec "${SHELL:-/bin/sh}" -l"#),
+            "{launcher}"
+        );
+    }
+
+    #[test]
+    fn a_quote_in_the_script_path_is_safe() {
+        let args = wsl_args("Ubuntu", "~", Some(r"C:\Users\o'neil\fterm-wsl.bash"));
+        assert!(
+            args[7].contains(r"wslpath 'C:\Users\o'\''neil\fterm-wsl.bash'"),
+            "{}",
+            args[7]
+        );
     }
 
     #[test]
