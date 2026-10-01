@@ -6,7 +6,7 @@ use fterm_term::alacritty_terminal::vte::ansi::Rgb;
 use crate::atlas::{AtlasFull, AtlasGlyph, GlyphKey};
 use crate::font::CellMetrics;
 use crate::frame::{Instance, Rect};
-use crate::overlay::{BOX_TEXT, HINT_TEXT};
+use crate::overlay::{BAD_TEXT, BOX_BORDER, BOX_TEXT, HINT_TEXT};
 use crate::tabbar::{
     ACCENT, ACTIVE_BG, ACTIVE_TEXT, BAR_BG, BAR_PADDING, HOVER_BG, TEXT, char_cells, fit_title,
     push_text, solid,
@@ -94,6 +94,67 @@ pub struct DockRow {
     pub new: bool,
 }
 
+/// How a line of the AI chat looks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChatStyle {
+    /// What the user asked.
+    User,
+    /// The text of an answer.
+    Answer,
+    /// The language name over a code block.
+    CodeHeader,
+    /// A line of a code block.
+    Code,
+    Error,
+    /// Quiet text (an empty line between turns, "Thinking…").
+    Note,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatLine {
+    pub text: String,
+    pub style: ChatStyle,
+}
+
+/// The background of code lines in the chat.
+pub const CODE_BG: Rgb = Rgb {
+    r: 0x11,
+    g: 0x11,
+    b: 0x1b,
+};
+/// The background of the input box.
+pub const INPUT_BG: Rgb = Rgb {
+    r: 0x26,
+    g: 0x27,
+    b: 0x3a,
+};
+/// The input box grows up to this many lines.
+pub const MAX_INPUT_ROWS: usize = 6;
+
+/// The AI chat in the dock (instead of the rows).
+pub struct ChatView<'a> {
+    pub lines: &'a [ChatLine],
+    /// How many lines the view is up from the end (0 = the newest lines).
+    pub scroll: usize,
+    /// The input lines (from `InputBox::layout`).
+    pub input: &'a [String],
+    /// The text cursor in the input (line, cell), when the dock has the keyboard.
+    pub cursor: Option<(usize, usize)>,
+    /// The provider and the model, on the right of the panel tabs.
+    pub title: &'a str,
+}
+
+/// The height of the input box for this many lines.
+fn input_height(cell: CellMetrics, input_lines: usize) -> f32 {
+    (input_lines.clamp(1, MAX_INPUT_ROWS) as f32 + 0.5) * cell.height
+}
+
+/// How many chat lines fit above an input box with `input_lines` lines.
+pub fn chat_rows(layout: &DockLayout, cell: CellMetrics, input_lines: usize) -> usize {
+    let free = layout.list.height - input_height(cell, input_lines) - cell.height * 0.5;
+    (free / cell.height).floor().max(0.0) as usize
+}
+
 /// What the dock shows.
 pub struct DockView<'a> {
     /// The panel tabs at the top, for example "Events 3".
@@ -109,6 +170,8 @@ pub struct DockView<'a> {
     pub empty: &'a str,
     /// Key hints at the bottom (only when focused).
     pub hints: &'a str,
+    /// The AI chat: drawn instead of the rows.
+    pub chat: Option<ChatView<'a>>,
 }
 
 /// The places of the dock parts.
@@ -248,6 +311,24 @@ pub fn build_dock(
     ));
 
     let cells = (list.width / cell.width) as usize;
+    if let Some(chat) = &view.chat {
+        build_chat(chat, layout, cell, &mut quads, &mut text, glyph)?;
+        if view.focused && !view.hints.is_empty() {
+            let y = list.y + list.height + cell.height * 0.125;
+            let shown = fit_title(view.hints, cells.saturating_sub(2));
+            push_text(
+                &mut text,
+                &shown,
+                list.x + cell.width,
+                y,
+                cell,
+                HINT_TEXT,
+                glyph,
+            )?;
+        }
+        quads.extend(text);
+        return Ok(quads);
+    }
     if view.rows.is_empty() {
         let shown = fit_title(view.empty, cells.saturating_sub(2));
         push_text(
@@ -338,6 +419,94 @@ pub fn build_dock(
     }
     quads.extend(text);
     Ok(quads)
+}
+
+/// The chat lines (the newest at the bottom), the input box, and the title.
+fn build_chat(
+    chat: &ChatView,
+    layout: &DockLayout,
+    cell: CellMetrics,
+    quads: &mut Vec<Instance>,
+    text: &mut Vec<Instance>,
+    glyph: &mut dyn FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
+) -> Result<(), AtlasFull> {
+    let list = layout.list;
+    let cells = (list.width / cell.width) as usize;
+    // The title on the right of the panel tabs.
+    if !chat.title.is_empty() {
+        let tabs_end = layout.tabs.last().map_or(list.x, |t| t.x + t.width);
+        let room = ((list.x + list.width - tabs_end) / cell.width) as usize;
+        let shown = fit_title(chat.title, room.saturating_sub(2));
+        let w: usize = shown.chars().map(char_cells).sum();
+        if w > 0 {
+            let x = list.x + list.width - (w + 1) as f32 * cell.width;
+            push_text(
+                text,
+                &shown,
+                x,
+                layout.rect.y + BAR_PADDING,
+                cell,
+                HINT_TEXT,
+                glyph,
+            )?;
+        }
+    }
+    // The lines: the last ones that fit, moved up by `scroll`.
+    let rows = chat_rows(layout, cell, chat.input.len());
+    let end = chat.lines.len().saturating_sub(chat.scroll);
+    let start = end.saturating_sub(rows);
+    for (n, line) in chat.lines[start..end].iter().enumerate() {
+        let y = list.y + cell.height * 0.25 + n as f32 * cell.height;
+        let color = match line.style {
+            ChatStyle::User => BOX_BORDER,
+            ChatStyle::Answer => BOX_TEXT,
+            ChatStyle::Code => ACTIVE_TEXT,
+            ChatStyle::CodeHeader | ChatStyle::Note => HINT_TEXT,
+            ChatStyle::Error => BAD_TEXT,
+        };
+        if matches!(line.style, ChatStyle::Code | ChatStyle::CodeHeader) {
+            quads.push(solid(
+                Rect::new(list.x + 2.0, y, list.width - 4.0, cell.height),
+                CODE_BG,
+            ));
+        }
+        let shown = fit_title(&line.text, cells.saturating_sub(2));
+        push_text(text, &shown, list.x + cell.width, y, cell, color, glyph)?;
+    }
+    // A scroll bar when the chat does not fit.
+    if chat.lines.len() > rows && rows > 0 {
+        let area = rows as f32 * cell.height;
+        let total = chat.lines.len() as f32;
+        let height = (area * rows as f32 / total).max(cell.height);
+        let top_share = start as f32 / (total - rows as f32).max(1.0);
+        let top = list.y + cell.height * 0.25 + (area - height) * top_share;
+        quads.push(solid(
+            Rect::new(list.x + list.width - 3.0, top, 3.0, height),
+            EDGE,
+        ));
+    }
+    // The input box at the bottom.
+    let height = input_height(cell, chat.input.len());
+    let input = Rect::new(
+        list.x + 2.0,
+        list.y + list.height - height,
+        list.width - 4.0,
+        height,
+    );
+    quads.push(solid(input, INPUT_BG));
+    let first = chat.input.len().saturating_sub(MAX_INPUT_ROWS);
+    for (n, line) in chat.input.iter().skip(first).enumerate() {
+        let y = input.y + cell.height * 0.25 + n as f32 * cell.height;
+        push_text(text, line, list.x + cell.width, y, cell, BOX_TEXT, glyph)?;
+    }
+    if let Some((row, col)) = chat.cursor
+        && row >= first
+    {
+        let y = input.y + cell.height * 0.25 + (row - first) as f32 * cell.height;
+        let x = list.x + cell.width + col as f32 * cell.width;
+        quads.push(solid(Rect::new(x, y, 2.0, cell.height), ACTIVE_TEXT));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -487,6 +656,7 @@ mod tests {
             focused: false,
             empty: "Nothing yet",
             hints: "Enter go",
+            chat: None,
         };
         let build =
             |view: &DockView| build_dock(view, &layout, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
@@ -524,6 +694,7 @@ mod tests {
             focused: false,
             empty: "",
             hints: "",
+            chat: None,
         };
         let quads = build_dock(&view, &layout, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
         let found = colors(&quads);
@@ -546,6 +717,7 @@ mod tests {
             focused: false,
             empty: "",
             hints: "",
+            chat: None,
         };
         let quads = build_dock(&view, &layout, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
         for q in &quads {
@@ -556,5 +728,111 @@ mod tests {
             );
             assert!(q.rect[0] >= rect.x - 0.5);
         }
+    }
+
+    fn chat_line(text: &str, style: ChatStyle) -> ChatLine {
+        ChatLine {
+            text: text.into(),
+            style,
+        }
+    }
+
+    fn chat_quads(chat: ChatView) -> (DockLayout, Vec<Instance>) {
+        let (_, rect) = split_area(AREA, DockSide::Right, 0.4, CELL);
+        let tabs = tabs();
+        let layout = layout_dock(rect, DockSide::Right, &tabs, CELL);
+        let view = DockView {
+            tabs: &tabs,
+            active: 0,
+            rows: &[],
+            selected: None,
+            scroll: 0,
+            focused: true,
+            empty: "",
+            hints: "Enter send",
+            chat: Some(chat),
+        };
+        let quads = build_dock(&view, &layout, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        (layout, quads)
+    }
+
+    #[test]
+    fn a_chat_has_lines_code_and_an_input_with_a_cursor() {
+        let lines = [
+            chat_line("hi", ChatStyle::User),
+            chat_line("bash", ChatStyle::CodeHeader),
+            chat_line("ls", ChatStyle::Code),
+            chat_line("no key", ChatStyle::Error),
+        ];
+        let input = ["ab".to_owned()];
+        let (layout, quads) = chat_quads(ChatView {
+            lines: &lines,
+            scroll: 0,
+            input: &input,
+            cursor: Some((0, 2)),
+            title: "anthropic · haiku",
+        });
+        let found = colors(&quads);
+        assert!(
+            found.contains(&linear_color(CODE_BG)),
+            "code lines have a background"
+        );
+        assert!(found.contains(&linear_color(INPUT_BG)), "the input box");
+        let cursor = quads
+            .iter()
+            .find(|q| {
+                q.kind == KIND_SOLID && q.color == linear_color(ACTIVE_TEXT) && q.rect[2] <= 2.0
+            })
+            .expect("a text cursor");
+        assert!(
+            cursor.rect[1] > layout.list.y + layout.list.height / 2.0,
+            "the input is at the bottom"
+        );
+        let red = quads
+            .iter()
+            .filter(|q| q.kind == crate::frame::KIND_GLYPH && q.color == linear_color(BAD_TEXT))
+            .count();
+        assert_eq!(red, 5, "`no key` is red (5 glyphs, no space)");
+        for q in &quads {
+            assert!(
+                q.rect[1] >= layout.rect.y - 0.5
+                    && q.rect[1] + q.rect[3] <= layout.rect.y + layout.rect.height + 0.5
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_chat_shows_its_end_and_scrolls_up() {
+        let lines: Vec<ChatLine> = (0..200)
+            .map(|i| {
+                chat_line(
+                    if i == 0 { "FIRST" } else { "x" },
+                    if i == 0 {
+                        ChatStyle::Error
+                    } else {
+                        ChatStyle::Answer
+                    },
+                )
+            })
+            .collect();
+        let input = [String::new()];
+        let view = |scroll| ChatView {
+            lines: &lines,
+            scroll,
+            input: &input,
+            cursor: None,
+            title: "",
+        };
+        let red = |quads: &[Instance]| {
+            quads
+                .iter()
+                .any(|q| q.kind == crate::frame::KIND_GLYPH && q.color == linear_color(BAD_TEXT))
+        };
+        let (layout, quads) = chat_quads(view(0));
+        assert!(!red(&quads), "the bottom: the first line is far above");
+        let rows = chat_rows(&layout, CELL, 1);
+        assert!(rows > 5 && rows < 200);
+        let (_, quads) = chat_quads(view(200 - rows));
+        assert!(red(&quads), "scrolled to the top: the first line shows");
     }
 }

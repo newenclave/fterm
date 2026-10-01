@@ -15,15 +15,18 @@ use crate::notify::{Level, Notification};
 pub enum PanelKind {
     Events,
     Agents,
+    /// The AI chat (Phase 8).
+    Ai,
 }
 
 impl PanelKind {
-    pub const ALL: [PanelKind; 2] = [PanelKind::Events, PanelKind::Agents];
+    pub const ALL: [PanelKind; 3] = [PanelKind::Events, PanelKind::Agents, PanelKind::Ai];
 
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "events" => Some(Self::Events),
             "agents" => Some(Self::Agents),
+            "ai" => Some(Self::Ai),
             _ => None,
         }
     }
@@ -32,6 +35,7 @@ impl PanelKind {
         match self {
             Self::Events => "Events",
             Self::Agents => "Agents",
+            Self::Ai => "AI",
         }
     }
 
@@ -39,6 +43,7 @@ impl PanelKind {
         match self {
             Self::Events => 0,
             Self::Agents => 1,
+            Self::Ai => 2,
         }
     }
 }
@@ -72,8 +77,8 @@ pub struct Dock {
     pub focused: bool,
     pub filter: EventFilter,
     /// The selected row and the first row on the screen, for each panel.
-    selected: [usize; 2],
-    scroll: [usize; 2],
+    selected: [usize; 3],
+    scroll: [usize; 3],
 }
 
 impl Dock {
@@ -85,8 +90,8 @@ impl Dock {
             active: open.unwrap_or(PanelKind::Events),
             focused: false,
             filter: EventFilter::All,
-            selected: [0; 2],
-            scroll: [0; 2],
+            selected: [0; 3],
+            scroll: [0; 3],
         }
     }
 
@@ -431,6 +436,8 @@ mod tests {
         d.next_panel();
         assert_eq!(d.active, PanelKind::Agents);
         d.next_panel();
+        assert_eq!(d.active, PanelKind::Ai);
+        d.next_panel();
         assert_eq!(d.active, PanelKind::Events);
     }
 
@@ -457,8 +464,10 @@ mod tests {
         d.show(PanelKind::Events);
         d.select(3, 10, 4);
         d.next_panel();
-        assert_eq!(d.selected(), 0);
+        assert_eq!(d.selected(), 0, "Agents has its own selection");
         d.next_panel();
+        d.next_panel();
+        assert_eq!(d.active, PanelKind::Events);
         assert_eq!(d.selected(), 3);
     }
 
@@ -484,6 +493,8 @@ mod tests {
     fn panel_names() {
         assert_eq!(PanelKind::from_name("events"), Some(PanelKind::Events));
         assert_eq!(PanelKind::from_name("agents"), Some(PanelKind::Agents));
+        assert_eq!(PanelKind::from_name("ai"), Some(PanelKind::Ai));
+        assert_eq!(PanelKind::Ai.label(), "AI");
         assert_eq!(PanelKind::from_name("x"), None);
         assert_eq!(EventFilter::All.next(), EventFilter::Important);
         assert_eq!(EventFilter::Important.next(), EventFilter::All);

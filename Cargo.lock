@@ -963,6 +963,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "fterm-ai",
  "fterm-api",
  "fterm-config",
  "fterm-history",
@@ -976,6 +977,7 @@ dependencies = [
  "serde_json",
  "tracing",
  "tracing-subscriber",
+ "unicode-width",
  "wgpu",
  "winit",
 ]

@@ -77,8 +77,11 @@ pub enum UserEvent {
     Api(crate::api::ApiRequest),
     /// An API client closed its connection.
     ApiGone(fterm_api::server::ClientId),
+    /// A piece of an AI answer (request id, event).
+    Ai(u64, fterm_ai::Event),
 }
 
+mod ai_calls;
 mod api_calls;
 
 /// The last command of a pane (for the API).
@@ -352,6 +355,10 @@ pub struct App {
     waits: Vec<api_calls::Wait>,
     /// Messages between agents, by pane.
     inbox: crate::inbox::Inbox,
+    /// The AI chat, the flag that stops its running answer, and the API key prompt.
+    ai: crate::ai_chat::Session,
+    ai_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    key_prompt: Option<crate::ai_chat::InputBox>,
     /// The Events panel was on the screen (and fterm in front) in the last frame.
     /// When it goes away, its events count as read.
     events_seen: bool,
@@ -402,6 +409,9 @@ impl App {
             api_questions: std::collections::VecDeque::new(),
             waits: Vec::new(),
             inbox: crate::inbox::Inbox::default(),
+            ai: crate::ai_chat::Session::default(),
+            ai_stop: None,
+            key_prompt: None,
             center: Center::new(4, true),
             shell_script: shell_script_path(),
             palette: None,
@@ -731,6 +741,7 @@ impl App {
                 let count = match kind {
                     PanelKind::Events => unread,
                     PanelKind::Agents => agents,
+                    PanelKind::Ai => 0,
                 };
                 if count > 0 {
                     format!("{} {count}", kind.label())
@@ -748,6 +759,8 @@ impl App {
         };
         let now = Instant::now();
         match running.dock.active {
+            // The AI panel draws its chat, not rows.
+            PanelKind::Ai => Vec::new(),
             PanelKind::Events => event_rows(self.center.history(), running.dock.filter, now),
             PanelKind::Agents => {
                 let titles = running.tab_titles();
@@ -806,6 +819,13 @@ impl App {
 
     /// A key while the dock has the keyboard. The keys never go to the terminal.
     fn dock_key(&mut self, event: &KeyEvent) {
+        if self
+            .running
+            .as_ref()
+            .is_some_and(|r| r.dock.active == PanelKind::Ai)
+        {
+            return self.ai_key(event);
+        }
         let rows = self.dock_rows().len();
         let visible = self.dock_layout().map_or(1, |l| l.visible_rows().max(1));
         let Some(running) = &mut self.running else {
@@ -1641,9 +1661,21 @@ impl App {
 
     fn run_builtin(&mut self, event_loop: &ActiveEventLoop, action: BuiltinAction) {
         use BuiltinAction as A;
+        if action == A::SetAiKey {
+            return self.start_key_prompt();
+        }
+        // Ctrl+V in the AI panel goes into its input, not into the terminal.
+        if action == A::Paste
+            && self
+                .running
+                .as_ref()
+                .is_some_and(|r| r.dock.focused && r.dock.showing(PanelKind::Ai))
+        {
+            return self.ai_paste();
+        }
         let dock_action = matches!(
             action,
-            A::ToggleDock | A::PanelEvents | A::PanelAgents | A::FocusDock
+            A::ToggleDock | A::PanelEvents | A::PanelAgents | A::PanelAi | A::FocusDock
         );
         if matches!(action, A::HistoryCommands | A::HistoryDirs) {
             let kind = if action == A::HistoryCommands {
@@ -1659,6 +1691,7 @@ impl App {
                     A::ToggleDock => running.dock.toggle(),
                     A::PanelEvents => running.dock.show(PanelKind::Events),
                     A::PanelAgents => running.dock.show(PanelKind::Agents),
+                    A::PanelAi => running.dock.show(PanelKind::Ai),
                     _ => running.dock.toggle_focus(),
                 }
             }
@@ -1754,6 +1787,7 @@ impl App {
             A::OpenConfig => return self.open_config(),
             A::ToggleDock | A::PanelEvents | A::PanelAgents | A::FocusDock => {}
             A::HistoryCommands | A::HistoryDirs => {}
+            A::PanelAi | A::SetAiKey => {}
             A::ToggleRemoteControl => {
                 let Some(pane) = running.mux.active_pane() else {
                     return;
@@ -2749,9 +2783,13 @@ impl App {
                     .mouse
                     .wheel
                     .lines(delta, running.renderer.cell().height);
-                running
-                    .dock
-                    .scroll_by(-(lines as isize), rows, layout.visible_rows());
+                if running.dock.active == PanelKind::Ai {
+                    self.ai.scroll = self.ai.scroll.saturating_add_signed(lines as isize);
+                } else {
+                    running
+                        .dock
+                        .scroll_by(-(lines as isize), rows, layout.visible_rows());
+                }
                 running.window.request_redraw();
             }
             return;
@@ -2890,6 +2928,23 @@ impl App {
         let dock_rows: Vec<DockRow> = self.dock_rows().into_iter().map(|(row, _)| row).collect();
         let dock_tabs = self.dock_tabs();
         let corner = self.tab_bar_corner();
+        // The AI chat: its lines, its input, and the scroll kept inside the chat.
+        let ai_view = match (&dock_layout, self.running.as_ref()) {
+            (Some(layout), Some(r)) if r.dock.active == PanelKind::Ai => {
+                let cell = r.renderer.cell();
+                let width = ((layout.list.width / cell.width) as usize).saturating_sub(2);
+                let lines = crate::ai_chat::layout(&self.ai.views(), width);
+                let (input, cursor) = self.ai.input.layout(width);
+                let rows = fterm_render::dock::chat_rows(layout, cell, input.len());
+                let max_scroll = lines.len().saturating_sub(rows);
+                Some((lines, input, cursor, self.ai_title(), max_scroll))
+            }
+            _ => None,
+        };
+        if let Some((_, _, _, _, max_scroll)) = &ai_view {
+            self.ai.scroll = self.ai.scroll.min(*max_scroll);
+        }
+        let ai_scroll = self.ai.scroll;
         if let (Some(layout), Some(running)) = (&dock_layout, &mut self.running) {
             let selected = running.dock.selected();
             running
@@ -2922,7 +2977,8 @@ impl App {
             .map(|(tab, text)| (*tab, text.clone()));
         let hover = self.mouse.tab_hover;
         let question = self
-            .access_question_lines()
+            .key_prompt_lines()
+            .or_else(|| self.access_question_lines())
             .or_else(|| self.close_question.as_ref().map(|q| q.lines.clone()))
             .or_else(|| self.message.clone());
         let hovered = self.toast_under_mouse().map(|(id, _)| id);
@@ -2996,11 +3052,13 @@ impl App {
                 "Enter go · F show all · M read · Tab · Esc"
             }
             (PanelKind::Agents, _) => "Enter go · Tab next panel · Esc back",
+            (PanelKind::Ai, _) => "Enter send · Shift+Enter new line · Esc stop / back · PageUp",
         };
         let dock_empty = match (dock_active, dock_filter) {
             (PanelKind::Events, EventFilter::All) => "No events yet.",
             (PanelKind::Events, EventFilter::Important) => "No important events.",
             (PanelKind::Agents, _) => "No agents. See docs/CLAUDE.md.",
+            (PanelKind::Ai, _) => "",
         };
         let dock_active_index = PanelKind::ALL
             .iter()
@@ -3077,6 +3135,15 @@ impl App {
                             focused: dock_focused && focused,
                             empty: dock_empty,
                             hints: dock_hints,
+                            chat: ai_view.as_ref().map(|(lines, input, cursor, title, _)| {
+                                fterm_render::dock::ChatView {
+                                    lines,
+                                    scroll: ai_scroll,
+                                    input,
+                                    cursor: (dock_focused && focused).then_some(*cursor),
+                                    title,
+                                }
+                            }),
                         },
                         layout,
                     )?;
@@ -3191,6 +3258,7 @@ impl ApplicationHandler<UserEvent> for App {
         let event = match event {
             UserEvent::Api(request) => return self.api_call(event_loop, request),
             UserEvent::ApiGone(client) => return self.api_client_gone(client),
+            UserEvent::Ai(id, event) => return self.ai_event(id, event),
             other => other,
         };
         let Some(running) = &mut self.running else {
@@ -3202,7 +3270,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.reload_at = Some(Instant::now() + CONFIG_DEBOUNCE);
                 return;
             }
-            UserEvent::Api(_) | UserEvent::ApiGone(_) => return,
+            UserEvent::Api(_) | UserEvent::ApiGone(_) | UserEvent::Ai(..) => return,
         };
         match event {
             TermEvent::Redraw => {
@@ -3396,6 +3464,10 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Ime(Ime::Commit(text)) => self.ime_commit(&text),
             WindowEvent::ModifiersChanged(mods) => self.mods = mods.state(),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                if self.key_prompt.is_some() {
+                    self.key_prompt_key(&event);
+                    return;
+                }
                 if !self.api_questions.is_empty() {
                     let answer = match (&event.logical_key, physical_letter(event.physical_key)) {
                         (Key::Named(NamedKey::Enter), _) => Some(api_calls::AccessAnswer::Allow),

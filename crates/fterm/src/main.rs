@@ -3,6 +3,7 @@
 
 mod access;
 mod agent;
+mod ai_chat;
 mod api;
 mod app;
 mod clipboard;

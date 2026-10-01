@@ -182,11 +182,15 @@ pub enum BuiltinAction {
     HistoryDirs,
     /// API clients may (not) read and type into the active pane.
     ToggleRemoteControl,
+    /// The AI panel with the keyboard.
+    PanelAi,
+    /// Ask for the API key of the AI provider and save it in the key store.
+    SetAiKey,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 38] = [
+    pub const ALL: [BuiltinAction; 40] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -225,6 +229,8 @@ impl BuiltinAction {
         Self::HistoryCommands,
         Self::HistoryDirs,
         Self::ToggleRemoteControl,
+        Self::PanelAi,
+        Self::SetAiKey,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -268,6 +274,8 @@ impl BuiltinAction {
             Self::HistoryCommands => "history_commands",
             Self::HistoryDirs => "history_dirs",
             Self::ToggleRemoteControl => "toggle_remote_control",
+            Self::PanelAi => "panel_ai",
+            Self::SetAiKey => "set_ai_key",
         };
         name.to_owned()
     }
@@ -299,6 +307,8 @@ impl BuiltinAction {
             Self::HistoryCommands => "Command history".to_owned(),
             Self::HistoryDirs => "Folder history".to_owned(),
             Self::ToggleRemoteControl => "Remote control on or off for this pane".to_owned(),
+            Self::PanelAi => "AI panel".to_owned(),
+            Self::SetAiKey => "Set the AI key".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -384,6 +394,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+shift+e", "panel_events"),
     ("ctrl+shift+a", "panel_agents"),
     ("ctrl+shift+o", "focus_dock"),
+    ("ctrl+shift+i", "panel_ai"),
     ("alt+f8", "history_commands"),
     ("alt+f12", "history_dirs"),
 ];
@@ -433,6 +444,17 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ai_actions_and_keys() {
+        let keys = Keymap::with_defaults();
+        assert_eq!(
+            keys.get(&chord("ctrl+shift+i")),
+            Some(&Action::Builtin(BuiltinAction::PanelAi))
+        );
+        assert_eq!(BuiltinAction::SetAiKey.name(), "set_ai_key");
+        assert_eq!(BuiltinAction::SetAiKey.label(), "Set the AI key");
+    }
 
     #[test]
     fn remote_control_action() {
