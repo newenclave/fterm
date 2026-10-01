@@ -125,6 +125,7 @@ also work on other layouts (for example, Russian).
 | `history_commands`, `history_dirs` | The command and folder history (Alt+F8, Alt+F12). |
 | `toggle_remote_control` | API clients may (or may not) read and type into this pane (see [API.md](API.md)). |
 | `panel_ai`, `explain_error`, `ask_ai_selection`, `set_ai_key`, `text_to_command` | The AI panel and text to command (see [AI.md](AI.md)). |
+| `sessions` (Ctrl+Shift+S), `save_session_as`, `restore_session` | Saved sessions (see [Sessions](#sessions)). |
 
 ### Lua functions
 A function gets an object `fterm` with these functions:
@@ -316,6 +317,25 @@ end,
 
 When the function says `false`, a toast tells you. Press × again in the next 5 seconds to get the normal
 question, so a wrong function can never lock the window.
+
+## Sessions
+Like a browser, fterm can bring back the window you had before: the tabs, the splits, the folder of each pane,
+the dock, and the window size.
+
+```lua
+restore = "ask",   -- the default: at start, ask "Restore the last session?" (Enter = yes, Esc = no)
+                   -- "always" = restore without a question, "never" = do not save sessions
+```
+
+- fterm saves the window every 30 seconds and when it closes. So after a crash you lose 30 seconds at most.
+- fterm asks only when no other fterm window is open.
+- Only shells come back: each pane starts its profile in its old folder. Programs do not run again.
+- **Ctrl + Shift + S** (`sessions`) shows the list of sessions: your named sessions (★) first, then the last
+  20 closed windows, newest first. Enter = restore, Delete = forget.
+- **Save session as…** (`save_session_as`, in the palette) saves this window with a name. A named session
+  stays in the list after you restore it; a closed one leaves the list.
+- **Restore the last session** (`restore_session`, in the palette) opens the newest closed window.
+- The files are in `%LOCALAPPDATA%\fterm\sessions\` (or the folder in `FTERM_SESSION_DIR`).
 
 ## Shell integration
 With shell integration, the shell tells fterm:

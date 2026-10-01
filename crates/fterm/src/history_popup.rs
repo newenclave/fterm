@@ -10,9 +10,11 @@ use crate::panels::short_ago;
 pub enum PopupKind {
     Commands,
     Dirs,
+    /// Saved sessions (Phase 9b).
+    Sessions,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PopupRow {
     /// The command or the folder.
     pub text: String,
@@ -20,6 +22,8 @@ pub struct PopupRow {
     pub hint: String,
     /// A failed command or a folder that is not there any more (red / grey).
     pub bad: bool,
+    /// What the row stands for when it is not `text` (the file of a session).
+    pub key: String,
 }
 
 pub struct HistoryPopup {
@@ -111,6 +115,7 @@ impl HistoryPopup {
     pub fn title(&self) -> String {
         match self.kind {
             PopupKind::Dirs => "Folders".to_owned(),
+            PopupKind::Sessions => "Sessions".to_owned(),
             PopupKind::Commands => {
                 let mut title = "Commands".to_owned();
                 if self.only_here {
@@ -133,6 +138,9 @@ impl HistoryPopup {
             PopupKind::Dirs => {
                 "Enter cd · Shift+Enter tab · Ctrl+Enter split · Ctrl+P pin · Del forget"
             }
+            PopupKind::Sessions => {
+                "Enter restore · Del forget · Save session as… is in the palette"
+            }
         }
     }
 }
@@ -152,6 +160,7 @@ pub fn command_rows(entries: &[CommandEntry], now: u64) -> Vec<PopupRow> {
                 text: e.cmd.clone(),
                 hint,
                 bad,
+                ..PopupRow::default()
             }
         })
         .collect()
@@ -174,6 +183,7 @@ pub fn dir_rows(entries: &[DirEntry], now: u64, exists: impl Fn(&str) -> bool) -
                 text: shown_dir(&e.dir),
                 hint,
                 bad: !there,
+                ..PopupRow::default()
             }
         })
         .collect()
@@ -246,6 +256,7 @@ mod tests {
             text: text.into(),
             hint: String::new(),
             bad: false,
+            ..PopupRow::default()
         }
     }
 
@@ -328,6 +339,9 @@ mod tests {
         assert_eq!(p.title(), "Commands · this folder · exit 0");
         let d = HistoryPopup::new(PopupKind::Dirs, vec![], String::new(), None);
         assert_eq!(d.title(), "Folders");
+        let sessions = HistoryPopup::new(PopupKind::Sessions, vec![], String::new(), None);
+        assert_eq!(sessions.title(), "Sessions");
+        assert!(sessions.footer().contains("Enter restore"));
         assert!(p.footer().contains("Shift+Enter"));
         assert!(d.footer().contains("Ctrl+P"));
     }

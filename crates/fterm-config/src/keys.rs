@@ -194,11 +194,15 @@ pub enum BuiltinAction {
     TextToCommand,
     /// Open the tabs of the last saved session again (Phase 9b).
     RestoreSession,
+    /// The list of saved sessions.
+    Sessions,
+    /// Save this window as a named session.
+    SaveSessionAs,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 44] = [
+    pub const ALL: [BuiltinAction; 46] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -243,6 +247,8 @@ impl BuiltinAction {
         Self::AskAiSelection,
         Self::TextToCommand,
         Self::RestoreSession,
+        Self::Sessions,
+        Self::SaveSessionAs,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -292,6 +298,8 @@ impl BuiltinAction {
             Self::AskAiSelection => "ask_ai_selection",
             Self::TextToCommand => "text_to_command",
             Self::RestoreSession => "restore_session",
+            Self::Sessions => "sessions",
+            Self::SaveSessionAs => "save_session_as",
         };
         name.to_owned()
     }
@@ -329,6 +337,8 @@ impl BuiltinAction {
             Self::AskAiSelection => "Ask AI about the selection".to_owned(),
             Self::TextToCommand => "Text to command (AI)".to_owned(),
             Self::RestoreSession => "Restore the last session".to_owned(),
+            Self::Sessions => "Sessions".to_owned(),
+            Self::SaveSessionAs => "Save session as…".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -418,6 +428,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+shift+i", "panel_ai"),
     ("ctrl+shift+x", "explain_error"),
     ("ctrl+shift+g", "text_to_command"),
+    ("ctrl+shift+s", "sessions"),
     ("alt+f8", "history_commands"),
     ("alt+f12", "history_dirs"),
 ];
@@ -477,6 +488,18 @@ mod tests {
         );
         assert_eq!(BuiltinAction::TextToCommand.name(), "text_to_command");
         assert_eq!(BuiltinAction::TextToCommand.label(), "Text to command (AI)");
+    }
+
+    #[test]
+    fn session_actions() {
+        let keys = Keymap::with_defaults();
+        assert_eq!(
+            keys.get(&chord("ctrl+shift+s")),
+            Some(&Action::Builtin(BuiltinAction::Sessions))
+        );
+        assert_eq!(BuiltinAction::SaveSessionAs.name(), "save_session_as");
+        assert_eq!(BuiltinAction::SaveSessionAs.label(), "Save session as…");
+        assert_eq!(BuiltinAction::Sessions.label(), "Sessions");
     }
 
     #[test]

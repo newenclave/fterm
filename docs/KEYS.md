@@ -28,6 +28,7 @@ The tab title is your name for the tab, or the title from the program, or the pr
 | Key or mouse | What it does |
 |---|---|
 | The window ×, Alt + F4 | Close fterm. When a program or an agent runs, fterm asks first (Enter = close, Esc = stay). See `confirm_close` in [CONFIG.md](CONFIG.md). |
+| Ctrl + Shift + S | The list of sessions: named ones (★) and the last closed windows. Enter = restore, Delete = forget. "Save session as…" is in the palette. See [CONFIG.md](CONFIG.md#sessions). |
 
 ## Split panes
 | Key or mouse | What it does |

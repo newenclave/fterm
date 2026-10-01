@@ -10,6 +10,9 @@ pub const VERSION: u32 = 1;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedSession {
     pub version: u32,
+    /// The name of a session that the user saved ("Save session as…").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// When it was saved (unix ms).
     pub saved: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -199,6 +202,193 @@ pub fn load(path: &Path) -> Option<SavedSession> {
     (session.version <= VERSION && !session.tabs.is_empty()).then_some(session)
 }
 
+/// How many closed sessions are kept (like "recently closed" in a browser).
+pub const KEEP_CLOSED: usize = 20;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryKind {
+    /// A window that closed (or crashed).
+    Closed,
+    /// Saved with a name by the user (never deleted by fterm).
+    Named,
+}
+
+/// One saved session in the list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Entry {
+    pub path: PathBuf,
+    pub kind: EntryKind,
+    pub session: SavedSession,
+}
+
+/// `%LOCALAPPDATA%\fterm\sessions` (Linux and macOS: `~/.local/state/fterm/sessions`).
+/// `FTERM_SESSION_DIR` wins (for tests).
+pub fn sessions_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("FTERM_SESSION_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    Some(default_path()?.parent()?.join("sessions"))
+}
+
+/// The file that the window with this pid saves to while it runs.
+pub fn live_path(dir: &Path, pid: u32) -> PathBuf {
+    dir.join(format!("live-{pid}.json"))
+}
+
+/// The window closed: its live file becomes a closed session. Only the newest `KEEP_CLOSED` stay.
+pub fn close_live(dir: &Path, pid: u32) {
+    let live = live_path(dir, pid);
+    let Some(session) = load(&live) else {
+        let _ = std::fs::remove_file(&live);
+        return;
+    };
+    let closed = dir.join(format!("closed-{}-{pid}.json", session.saved));
+    if std::fs::rename(&live, &closed).is_err() {
+        return;
+    }
+    // Only the newest closed sessions stay.
+    let mut closed: Vec<Entry> = list(dir)
+        .into_iter()
+        .filter(|e| e.kind == EntryKind::Closed)
+        .collect();
+    if closed.len() > KEEP_CLOSED {
+        for old in closed.drain(KEEP_CLOSED..) {
+            let _ = std::fs::remove_file(old.path);
+        }
+    }
+}
+
+/// Live files of windows that are not alive any more (a crash, a reboot) become closed sessions.
+pub fn adopt_dead(dir: &Path, alive: &[u32]) {
+    let Ok(files) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for file in files.flatten() {
+        let name = file.file_name().to_string_lossy().into_owned();
+        let pid = name
+            .strip_prefix("live-")
+            .and_then(|rest| rest.strip_suffix(".json"))
+            .and_then(|pid| pid.parse::<u32>().ok());
+        if let Some(pid) = pid
+            && !alive.contains(&pid)
+        {
+            close_live(dir, pid);
+        }
+    }
+}
+
+/// Saves the session with a name. The same name takes the place of the old one.
+pub fn save_named(dir: &Path, name: &str, session: &SavedSession) -> std::io::Result<PathBuf> {
+    // A file name from the name: letters, digits, and `-`; the real name is in the file.
+    let slug: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let slug = slug.trim_matches('-');
+    let slug = if slug.is_empty() { "session" } else { slug };
+    let path = dir.join(format!("named-{slug}.json"));
+    let named = SavedSession {
+        name: Some(name.trim().to_owned()),
+        ..session.clone()
+    };
+    save(&path, &named)?;
+    Ok(path)
+}
+
+/// All saved sessions: named ones first (by name), then closed ones (newest first). Live files are not in it.
+pub fn list(dir: &Path) -> Vec<Entry> {
+    let Ok(files) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<Entry> = files
+        .flatten()
+        .filter_map(|file| {
+            let name = file.file_name().to_string_lossy().into_owned();
+            let kind = if name.starts_with("closed-") {
+                EntryKind::Closed
+            } else if name.starts_with("named-") {
+                EntryKind::Named
+            } else {
+                return None;
+            };
+            let path = file.path();
+            let session = load(&path)?;
+            Some(Entry {
+                path,
+                kind,
+                session,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| match (a.kind, b.kind) {
+        (EntryKind::Named, EntryKind::Closed) => std::cmp::Ordering::Less,
+        (EntryKind::Closed, EntryKind::Named) => std::cmp::Ordering::Greater,
+        (EntryKind::Named, EntryKind::Named) => a.session.name.cmp(&b.session.name),
+        (EntryKind::Closed, EntryKind::Closed) => b.session.saved.cmp(&a.session.saved),
+    });
+    out
+}
+
+/// The text of a session in the list: its name (★), or its folders; and "2 tabs, 3 panes · 10 min".
+pub fn entry_text(entry: &Entry, now: u64) -> (String, String) {
+    fn folders(l: &SavedLayout, out: &mut Vec<String>) {
+        match l {
+            SavedLayout::Pane(p) => {
+                let dir = crate::history_popup::shown_dir(p.cwd.as_deref().unwrap_or("~"));
+                if !out.contains(&dir) {
+                    out.push(dir);
+                }
+            }
+            SavedLayout::Split { first, second, .. } => {
+                folders(first, out);
+                folders(second, out);
+            }
+        }
+    }
+    let s = &entry.session;
+    let text = match &s.name {
+        Some(name) => format!("★ {name}"),
+        None => {
+            let mut all = Vec::new();
+            for tab in &s.tabs {
+                folders(&tab.layout, &mut all);
+            }
+            let mut text = all.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
+            if all.len() > 2 {
+                text.push_str(&format!(" +{}", all.len() - 2));
+            }
+            text
+        }
+    };
+    let plural = |n: usize, word: &str| {
+        if n == 1 {
+            format!("1 {word}")
+        } else {
+            format!("{n} {word}s")
+        }
+    };
+    let age = crate::panels::short_ago(std::time::Duration::from_millis(
+        now.saturating_sub(s.saved),
+    ));
+    let hint = format!(
+        "{}, {} · {age}",
+        plural(s.tabs.len(), "tab"),
+        plural(s.pane_count(), "pane")
+    );
+    (text, hint)
+}
+
+/// The newest closed session (for "Restore the last session?").
+pub fn newest_closed(dir: &Path) -> Option<Entry> {
+    list(dir).into_iter().find(|e| e.kind == EntryKind::Closed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,6 +472,7 @@ mod tests {
     fn session() -> SavedSession {
         SavedSession {
             version: VERSION,
+            name: None,
             saved: 1_000_000,
             window: Some(SavedWindow {
                 width: 1200,
@@ -343,5 +534,128 @@ mod tests {
         save(&path, &newer).unwrap();
         assert_eq!(load(&path), None, "a file from a newer fterm");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn temp(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("fterm-sessions-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn at(saved: u64) -> SavedSession {
+        SavedSession { saved, ..session() }
+    }
+
+    #[test]
+    fn a_closed_window_goes_to_the_list() {
+        let dir = temp("close");
+        save(&live_path(&dir, 42), &at(1000)).unwrap();
+        assert!(list(&dir).is_empty(), "a live window is not in the list");
+        close_live(&dir, 42);
+        assert!(!live_path(&dir, 42).exists());
+        let entries = list(&dir);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, EntryKind::Closed);
+        assert_eq!(entries[0].session.saved, 1000);
+        assert_eq!(newest_closed(&dir).unwrap().session.saved, 1000);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_the_newest_closed_sessions_stay() {
+        let dir = temp("keep");
+        for i in 0..(KEEP_CLOSED as u64 + 5) {
+            save(&live_path(&dir, 7), &at(1000 + i)).unwrap();
+            close_live(&dir, 7);
+        }
+        let entries = list(&dir);
+        assert_eq!(entries.len(), KEEP_CLOSED);
+        assert_eq!(
+            entries[0].session.saved,
+            1000 + KEEP_CLOSED as u64 + 4,
+            "newest first"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_crashed_window_is_not_lost() {
+        let dir = temp("crash");
+        save(&live_path(&dir, 100), &at(5000)).unwrap();
+        save(&live_path(&dir, 200), &at(6000)).unwrap();
+        adopt_dead(&dir, &[200]);
+        let entries = list(&dir);
+        assert_eq!(
+            entries.len(),
+            1,
+            "pid 100 is dead: its session is closed now"
+        );
+        assert_eq!(entries[0].session.saved, 5000);
+        assert!(
+            live_path(&dir, 200).exists(),
+            "pid 200 is alive: it stays live"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn named_sessions_come_first_and_stay() {
+        let dir = temp("named");
+        save(&live_path(&dir, 1), &at(9000)).unwrap();
+        close_live(&dir, 1);
+        save_named(&dir, "my project", &at(100)).unwrap();
+        save_named(&dir, "Backend: api/db", &at(200)).unwrap();
+        let entries = list(&dir);
+        let names: Vec<Option<&str>> = entries.iter().map(|e| e.session.name.as_deref()).collect();
+        assert_eq!(names, [Some("Backend: api/db"), Some("my project"), None]);
+        assert_eq!(entries[0].kind, EntryKind::Named);
+        // The same name again: it takes the place of the old one.
+        save_named(&dir, "my project", &at(300)).unwrap();
+        assert_eq!(list(&dir).len(), 3);
+        // Many closed windows never push a named session out.
+        for i in 0..(KEEP_CLOSED as u64 + 3) {
+            save(&live_path(&dir, 2), &at(10_000 + i)).unwrap();
+            close_live(&dir, 2);
+        }
+        assert_eq!(
+            list(&dir)
+                .iter()
+                .filter(|e| e.kind == EntryKind::Named)
+                .count(),
+            2
+        );
+        assert_eq!(newest_closed(&dir).unwrap().session.name, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_text_of_an_entry() {
+        let closed = Entry {
+            path: PathBuf::from("closed-1.json"),
+            kind: EntryKind::Closed,
+            session: at(1_000_000),
+        };
+        let (text, hint) = entry_text(&closed, 1_000_000 + 5 * 60_000);
+        // The folders of the panes (each one time), short.
+        assert_eq!(
+            text,
+            if cfg!(windows) {
+                "C:\\d1, C:\\d2 +1"
+            } else {
+                "C:/d1, C:/d2 +1"
+            }
+        );
+        assert_eq!(hint, "2 tabs, 4 panes · 5 min");
+        let named = Entry {
+            kind: EntryKind::Named,
+            session: SavedSession {
+                name: Some("my project".into()),
+                ..at(1_000_000)
+            },
+            ..closed
+        };
+        assert_eq!(entry_text(&named, 1_000_000).0, "★ my project");
     }
 }

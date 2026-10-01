@@ -277,13 +277,16 @@ that want a URL, and saved "always allow" answers.
 - You see the command first. Then it goes into the terminal without Enter (or runs after you say yes).
 - **Check:** "find the 10 biggest files in this folder" gives a good command for PowerShell and for bash.
 
-### Phase 9b — Restore the session (an idea from the user)
+### Phase 9b — Restore the session (an idea from the user) — in progress
+Done: 9b.0 (save the window, the "Restore the last session?" box, the palette command) and
+9b.1 (the list of sessions, Ctrl+Shift+S: named sessions and the last 20 closed windows).
+Still to do: "This pane ran: …", `claude --continue`, the old text in grey, `on_restore`.
 Like a browser: when you open fterm again, you can get back what you had before you closed it.
 - **What is saved:** the window size and place; all tabs (their titles, the active tab); the split layout of each tab
   (the tree and the sizes); for each pane its profile, its folder (OSC 7), and its title; the dock (open, the panel, the size);
   and the AI chat.
 - **When:** when fterm closes, and every 30 seconds (so a crash or a reboot does not lose it).
-  The file is `%LOCALAPPDATA%\fterm\session.json` (one per window when there are many).
+  The files are in `%LOCALAPPDATA%\fterm\sessions\` (one live file per window).
 - **Restore:** `restore = "ask"` (the default: at start, a small box "Restore the last session? 4 tabs, 7 panes"),
   `"always"`, or `"never"`. Also the command palette: **Restore the last session**.
 - **Programs cannot come back**, only shells: each pane starts its profile in its old folder. Panes where a program ran

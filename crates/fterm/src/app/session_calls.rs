@@ -3,12 +3,16 @@
 use std::time::{Duration, Instant};
 
 use fterm_config::load::Restore;
+
+use crate::ai_chat::InputBox;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 use super::*;
+use crate::history_popup::{HistoryPopup, PopupKind, PopupRow};
 use crate::session_state::{
-    SavedDock, SavedPane, SavedSession, SavedTab, SavedWindow, VERSION, default_path, load,
-    restore_layout, save, save_layout,
+    Entry, EntryKind, SavedDock, SavedPane, SavedSession, SavedTab, SavedWindow, VERSION,
+    adopt_dead, close_live, entry_text, list, live_path, load, newest_closed, restore_layout, save,
+    save_layout, save_named, sessions_dir,
 };
 
 /// How often the session is saved (so a crash or a reboot loses little).
@@ -62,6 +66,7 @@ impl App {
         };
         Some(SavedSession {
             version: VERSION,
+            name: None,
             saved: now_ms(),
             window,
             active_tab: running.mux.active_index(),
@@ -74,30 +79,36 @@ impl App {
         })
     }
 
-    /// Saves the session now (when there is something to save).
+    /// Saves this window to its live file (when there is something to save).
     pub(super) fn save_session(&mut self) {
         self.session_saved_at = Some(Instant::now());
         if self.config.config.restore == Restore::Never {
             return;
         }
-        let (Some(path), Some(session)) = (default_path(), self.capture_session()) else {
+        let (Some(dir), Some(session)) = (sessions_dir(), self.capture_session()) else {
             return;
         };
+        let path = live_path(&dir, std::process::id());
         if let Err(err) = save(&path, &session) {
             tracing::warn!(path = %path.display(), "cannot save the session: {err}");
         }
     }
 
-    /// When fterm closes: save what is open. When the last tab was closed, there is nothing to bring back.
+    /// When fterm closes: what is open goes to the list of closed sessions. When the last tab was
+    /// closed by hand, there is nothing to bring back.
     pub(super) fn save_or_forget_session(&mut self) {
+        let Some(dir) = sessions_dir() else {
+            return;
+        };
         let has_tabs = self
             .running
             .as_ref()
             .is_some_and(|r| !r.mux.tabs().is_empty());
         if has_tabs {
             self.save_session();
-        } else if let Some(path) = default_path() {
-            let _ = std::fs::remove_file(path);
+            close_live(&dir, std::process::id());
+        } else {
+            let _ = std::fs::remove_file(live_path(&dir, std::process::id()));
         }
     }
 
@@ -111,25 +122,30 @@ impl App {
         at
     }
 
-    /// At start: bring back the last session, or ask first (only when no other fterm window runs).
+    /// At start: bring back the last closed session, or ask first (only when no other fterm window runs).
     pub(super) fn offer_restore(&mut self) {
         self.session_saved_at = Some(Instant::now());
-        if self.config.config.restore == Restore::Never {
+        let Some(dir) = sessions_dir() else {
+            return;
+        };
+        let alive: Vec<u32> =
+            fterm_api::discovery::instances(&fterm_api::discovery::instances_dir())
+                .into_iter()
+                .map(|i| i.pid)
+                .chain([std::process::id()])
+                .collect();
+        // Windows that crashed: their sessions are closed ones now.
+        adopt_dead(&dir, &alive);
+        if self.config.config.restore == Restore::Never || alive.len() > 1 {
             return;
         }
-        let others = fterm_api::discovery::instances(&fterm_api::discovery::instances_dir())
-            .into_iter()
-            .any(|i| i.pid != std::process::id());
-        if others {
-            return;
-        }
-        let Some(saved) = default_path().and_then(|path| load(&path)) else {
+        let Some(entry) = newest_closed(&dir) else {
             return;
         };
         match self.config.config.restore {
-            Restore::Always => self.restore_session(saved),
+            Restore::Always => self.restore_from(entry),
             _ => {
-                self.restore_offer = Some(saved);
+                self.restore_offer = Some(entry);
                 if let Some(running) = &self.running {
                     running.window.request_redraw();
                 }
@@ -138,20 +154,20 @@ impl App {
     }
 
     pub(super) fn restore_question_lines(&self) -> Option<Vec<String>> {
-        let saved = self.restore_offer.as_ref()?;
+        let entry = self.restore_offer.as_ref()?;
         Some(vec![
             "Restore the last session?".to_owned(),
-            saved.describe(now_ms()),
+            entry.session.describe(now_ms()),
             String::new(),
-            "Enter = restore, Esc = no".to_owned(),
+            "Enter = restore, Esc = no (Ctrl+Shift+S: all sessions)".to_owned(),
         ])
     }
 
     pub(super) fn restore_key(&mut self, event: &KeyEvent) {
         match &event.logical_key {
             Key::Named(NamedKey::Enter) => {
-                if let Some(saved) = self.restore_offer.take() {
-                    self.restore_session(saved);
+                if let Some(entry) = self.restore_offer.take() {
+                    self.restore_from(entry);
                 }
             }
             Key::Named(NamedKey::Escape) => self.restore_offer = None,
@@ -162,11 +178,150 @@ impl App {
         }
     }
 
-    /// The palette command: bring back the last saved session now.
+    /// The palette command: bring back the newest closed session now.
     pub(super) fn restore_last_session(&mut self) {
-        match default_path().and_then(|path| load(&path)) {
-            Some(saved) => self.restore_session(saved),
+        match sessions_dir().and_then(|dir| newest_closed(&dir)) {
+            Some(entry) => self.restore_from(entry),
             None => self.notify(None, "No saved session", "", Level::Info, Source::App),
+        }
+    }
+
+    /// Restores a session of the list. A closed one leaves the list (it is open again);
+    /// a named one stays.
+    fn restore_from(&mut self, entry: Entry) {
+        if entry.kind == EntryKind::Closed {
+            let _ = std::fs::remove_file(&entry.path);
+        }
+        self.restore_session(entry.session);
+    }
+
+    /// Enter in the sessions list: the row key is the file of the session.
+    pub(super) fn restore_entry(&mut self, path: &str) {
+        let path = std::path::PathBuf::from(path);
+        let kind = if path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("named-"))
+        {
+            EntryKind::Named
+        } else {
+            EntryKind::Closed
+        };
+        match load(&path) {
+            Some(session) => self.restore_from(Entry {
+                path,
+                kind,
+                session,
+            }),
+            None => self.notify(None, "The session is gone", "", Level::Warning, Source::App),
+        }
+    }
+
+    /// The rows of the sessions list.
+    pub(super) fn session_rows(&self) -> Vec<PopupRow> {
+        let Some(dir) = sessions_dir() else {
+            return Vec::new();
+        };
+        let now = now_ms();
+        list(&dir)
+            .into_iter()
+            .map(|entry| {
+                let (text, hint) = entry_text(&entry, now);
+                PopupRow {
+                    text,
+                    hint,
+                    bad: false,
+                    key: entry.path.display().to_string(),
+                }
+            })
+            .collect()
+    }
+
+    /// `sessions` (Ctrl+Shift+S): the list of saved sessions.
+    pub(super) fn open_sessions_popup(&mut self) {
+        let rows = self.session_rows();
+        if rows.is_empty() {
+            return self.notify(
+                None,
+                "No saved sessions",
+                "A session is saved when fterm closes, or with \"Save session as…\".",
+                Level::Info,
+                Source::App,
+            );
+        }
+        self.palette = None;
+        self.history_popup = Some(HistoryPopup::new(
+            PopupKind::Sessions,
+            rows,
+            String::new(),
+            None,
+        ));
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// `save_session_as`: a box that asks for the name.
+    pub(super) fn start_name_prompt(&mut self) {
+        self.name_prompt = Some(InputBox::default());
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    pub(super) fn name_prompt_lines(&self) -> Option<Vec<String>> {
+        let input = self.name_prompt.as_ref()?;
+        Some(vec![
+            "Save this session as:".to_owned(),
+            format!("{}▏", input.text),
+            String::new(),
+            "Enter = save, Esc = cancel. A saved session stays in the list (Ctrl+Shift+S)."
+                .to_owned(),
+        ])
+    }
+
+    pub(super) fn name_prompt_key(&mut self, event: &KeyEvent) {
+        let ctrl = self.mods.control_key();
+        let Some(input) = &mut self.name_prompt else {
+            return;
+        };
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => self.name_prompt = None,
+            Key::Named(NamedKey::Enter) => {
+                let name = input.take();
+                self.name_prompt = None;
+                if !name.trim().is_empty() {
+                    self.save_named_session(name.trim());
+                }
+            }
+            Key::Named(NamedKey::Backspace) => input.backspace(),
+            _ => {
+                if let Some(text) = event.text.as_deref()
+                    && !ctrl
+                    && !self.mods.alt_key()
+                {
+                    let text: String = text.chars().filter(|c| !c.is_control()).collect();
+                    input.insert(&text);
+                }
+            }
+        }
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    fn save_named_session(&mut self, name: &str) {
+        let (Some(dir), Some(session)) = (sessions_dir(), self.capture_session()) else {
+            return;
+        };
+        match save_named(&dir, name, &session) {
+            Ok(_) => self.notify(None, "Session saved", name, Level::Success, Source::App),
+            Err(err) => self.notify(
+                None,
+                "Cannot save the session",
+                &err.to_string(),
+                Level::Error,
+                Source::App,
+            ),
         }
     }
 

@@ -366,8 +366,10 @@ pub struct App {
     key_prompt: Option<crate::ai_chat::InputBox>,
     /// "Text to command" that waits for its answer.
     pending_command: Option<ai_calls::PendingCommand>,
-    /// The last session, while fterm asks "Restore the last session?".
-    restore_offer: Option<crate::session_state::SavedSession>,
+    /// The last session (and its file), while fterm asks "Restore the last session?".
+    restore_offer: Option<crate::session_state::Entry>,
+    /// The name box of "Save session as…".
+    name_prompt: Option<crate::ai_chat::InputBox>,
     /// When the session was saved last.
     session_saved_at: Option<Instant>,
     command_next_id: u64,
@@ -426,6 +428,7 @@ impl App {
             key_prompt: None,
             pending_command: None,
             restore_offer: None,
+            name_prompt: None,
             session_saved_at: None,
             command_next_id: 0,
             center: Center::new(4, true),
@@ -1693,6 +1696,12 @@ impl App {
         if action == A::RestoreSession {
             return self.restore_last_session();
         }
+        if action == A::Sessions {
+            return self.open_sessions_popup();
+        }
+        if action == A::SaveSessionAs {
+            return self.start_name_prompt();
+        }
         if action == A::AskAiSelection {
             return self.ask_ai_selection();
         }
@@ -1833,7 +1842,9 @@ impl App {
             | A::ExplainError
             | A::AskAiSelection
             | A::TextToCommand
-            | A::RestoreSession => {}
+            | A::RestoreSession
+            | A::Sessions
+            | A::SaveSessionAs => {}
             A::ToggleRemoteControl => {
                 let Some(pane) = running.mux.active_pane() else {
                     return;
@@ -1923,11 +1934,15 @@ impl App {
         only_ok: bool,
         here: Option<&str>,
     ) -> Vec<PopupRow> {
+        if kind == PopupKind::Sessions {
+            return self.session_rows();
+        }
         let Some(history) = &self.history else {
             return Vec::new();
         };
         let now = now_ms();
         match kind {
+            PopupKind::Sessions => Vec::new(),
             PopupKind::Commands => {
                 let filter = CommandFilter {
                     cwd: if only_here {
@@ -2020,6 +2035,7 @@ impl App {
             .and_then(Running::active_pane)
             .is_some_and(|pane| pane.shell.is_running());
         match popup.kind {
+            PopupKind::Sessions => return self.restore_entry(&row.key),
             PopupKind::Dirs if run || split => {
                 self.spawn_cwd = Some(row.text.clone());
                 let place = if split {
@@ -2132,6 +2148,12 @@ impl App {
             (Key::Named(NamedKey::PageUp), _) => popup.move_selection(-(VISIBLE_ROWS as i32)),
             (Key::Named(NamedKey::PageDown), _) => popup.move_selection(VISIBLE_ROWS as i32),
             (Key::Named(NamedKey::Backspace), _) => popup.backspace(),
+            (Key::Named(NamedKey::Delete), _) if kind == PopupKind::Sessions => {
+                if let Some(row) = popup.selected().cloned() {
+                    let _ = std::fs::remove_file(&row.key);
+                    self.refresh_history_popup();
+                }
+            }
             (Key::Named(NamedKey::Delete), _) => {
                 if let Some(row) = popup.selected().cloned()
                     && let Some(history) = &mut self.history
@@ -2139,6 +2161,7 @@ impl App {
                     let result = match kind {
                         PopupKind::Commands => history.forget_command(&row.text),
                         PopupKind::Dirs => history.forget_dir(&row.text, now_ms()),
+                        PopupKind::Sessions => Ok(()),
                     };
                     if let Err(err) = result {
                         tracing::warn!("cannot change the history: {err}");
@@ -3025,6 +3048,7 @@ impl App {
         let hover = self.mouse.tab_hover;
         let question = self
             .restore_question_lines()
+            .or_else(|| self.name_prompt_lines())
             .or_else(|| self.key_prompt_lines())
             .or_else(|| self.access_question_lines())
             .or_else(|| self.close_question.as_ref().map(|q| q.lines.clone()))
@@ -3532,6 +3556,10 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if self.restore_offer.is_some() {
                     self.restore_key(&event);
+                    return;
+                }
+                if self.name_prompt.is_some() {
+                    self.name_prompt_key(&event);
                     return;
                 }
                 if self.key_prompt.is_some() {
