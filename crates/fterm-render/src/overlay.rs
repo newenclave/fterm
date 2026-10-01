@@ -42,6 +42,12 @@ pub const BAD_TEXT: Rgb = Rgb {
     g: 0x8b,
     b: 0xa8,
 };
+/// A hint from the history after the cursor (grey, quiet).
+pub const GHOST_TEXT: Rgb = Rgb {
+    r: 0x6c,
+    g: 0x70,
+    b: 0x86,
+};
 /// The widest palette, in cells.
 pub const PALETTE_CELLS: usize = 80;
 
@@ -173,6 +179,28 @@ pub fn build_palette(
             glyph,
         )?;
     }
+    Ok(quads)
+}
+
+/// Grey text at (`x`, `y`), at most `max_cells` wide (the rest of the line).
+pub fn build_ghost(
+    text: &str,
+    x: f32,
+    y: f32,
+    max_cells: usize,
+    cell: CellMetrics,
+    glyph: &mut dyn FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
+) -> Result<Vec<Instance>, AtlasFull> {
+    let mut used = 0;
+    let shown: String = text
+        .chars()
+        .take_while(|c| {
+            used += char_cells(*c);
+            used <= max_cells
+        })
+        .collect();
+    let mut quads = Vec::new();
+    push_text(&mut quads, &shown, x, y, cell, GHOST_TEXT, glyph)?;
     Ok(quads)
 }
 
@@ -321,6 +349,25 @@ mod tests {
             .find(|q| q.kind == KIND_SOLID && q.color == linear(BOX_BG))
             .expect("no box")
             .rect[3]
+    }
+
+    #[test]
+    fn ghost_text_is_grey_and_stops_at_the_line_end() {
+        let quads = build_ghost(" status", 100.0, 40.0, 4, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        // " sta" fits in 4 cells; the space is not drawn.
+        assert_eq!(quads.len(), 3);
+        assert!(
+            quads
+                .iter()
+                .all(|q| q.kind == KIND_GLYPH && q.color == linear(GHOST_TEXT))
+        );
+        assert!(quads[0].rect[0] >= 100.0 + CELL.width, "after the space");
+        assert!(quads.iter().all(|q| q.rect[0] < 100.0 + 4.0 * CELL.width));
+        assert!(
+            build_ghost("abc", 0.0, 0.0, 0, CELL, &mut |_| Ok(Some(GLYPH)))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

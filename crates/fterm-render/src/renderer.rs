@@ -450,6 +450,24 @@ impl FrameParts<'_> {
         Ok(())
     }
 
+    /// A grey hint after the cursor of the pane in `area`: at screen cell (`column`, `line`),
+    /// at most to the end of that line.
+    pub fn ghost(
+        &mut self,
+        text: &str,
+        area: Rect,
+        column: usize,
+        line: usize,
+        columns: usize,
+    ) -> Result<(), AtlasFull> {
+        let x = area.x + self.padding + column as f32 * self.cell.width;
+        let y = area.y + self.padding + line as f32 * self.cell.height;
+        let max = columns.saturating_sub(column);
+        let quads = crate::overlay::build_ghost(text, x, y, max, self.cell, &mut *self.glyph)?;
+        self.quads.extend(quads);
+        Ok(())
+    }
+
     /// The dock with its panel (from `dock::layout_dock`).
     pub fn dock(
         &mut self,

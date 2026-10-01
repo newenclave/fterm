@@ -1,5 +1,6 @@
 //! The app: it gets window events from winit, sends keys to the active pane, and draws the window.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,7 +22,7 @@ use fterm_render::tabbar::{Hit, TabBarInput, bar_height, corner_rect, hit, layou
 use fterm_render::toasts::{
     Corner, ToastLevel, ToastView, avoid_cursor, close_rect, layout_toasts,
 };
-use fterm_term::alacritty_terminal::grid::Scroll;
+use fterm_term::alacritty_terminal::grid::{Dimensions, Scroll};
 use fterm_term::alacritty_terminal::index::{Point, Side};
 use fterm_term::alacritty_terminal::selection::{Selection, SelectionType};
 use fterm_term::alacritty_terminal::term::TermMode;
@@ -259,6 +260,9 @@ enum CloseTarget {
 /// One line of the command palette to draw: (label, key, is it selected).
 type PaletteRow = (String, String, bool);
 
+/// The hint cache: (typed text, folder, history changes, the hint).
+type HintCache = (String, Option<String>, u64, Option<String>);
+
 /// A list to draw like the palette: the command palette, or a history popup.
 struct ListView {
     query: String,
@@ -308,6 +312,10 @@ pub struct App {
     history_popup: Option<HistoryPopup>,
     /// The next new pane starts in this folder (a choice in the folder popup).
     spawn_cwd: Option<String>,
+    /// The last hint: (typed text, folder, history changes) -> the rest of the command.
+    hint_cache: RefCell<Option<HintCache>>,
+    /// Grows when a command is saved, so the hint cache knows it is old.
+    history_changes: u64,
     /// The Events panel was on the screen (and fterm in front) in the last frame.
     /// When it goes away, its events count as read.
     events_seen: bool,
@@ -348,6 +356,8 @@ impl App {
             history: None,
             history_popup: None,
             spawn_cwd: None,
+            hint_cache: RefCell::new(None),
+            history_changes: 0,
             center: Center::new(4, true),
             shell_script: shell_script_path(),
             palette: None,
@@ -642,6 +652,7 @@ impl App {
         {
             tracing::warn!("cannot save the command: {err}");
         }
+        self.history_changes += 1;
     }
 
     /// The panel tabs: "Events 3", "Agents 2".
@@ -1706,6 +1717,52 @@ impl App {
         }
     }
 
+    /// The grey hint for the active pane now: (the rest of the command, cursor column, cursor line).
+    /// Only with `history.hints`, at the prompt, at the bottom of the history, with the cursor at the end
+    /// of the typed text. When the shell draws its own hint, the cursor is not at the end, so ours is not shown.
+    fn current_hint(&self) -> Option<(String, usize, usize)> {
+        if !self.config.config.history.hints {
+            return None;
+        }
+        let history = self.history.as_ref()?;
+        let pane = self.running.as_ref()?.active_pane()?;
+        if !pane.shell.at_prompt() {
+            return None;
+        }
+        let start = pane.shell.input_start()?;
+        let (input, cursor) = pane.session.with_term(|term| {
+            if term.grid().display_offset() != 0 || term.mode().contains(TermMode::ALT_SCREEN) {
+                return None;
+            }
+            let point = term.grid().cursor.point;
+            let line = usize::try_from(point.line.0).ok()?;
+            Some((typed_input(term, start)?, (point.column.0, line)))
+        })?;
+        if !input.cursor_at_end || input.text.trim().is_empty() {
+            return None;
+        }
+        let cwd = pane.shell.cwd.clone();
+        let mut cache = self.hint_cache.borrow_mut();
+        let hint = match &*cache {
+            Some((typed, dir, changes, hint))
+                if *typed == input.text && *dir == cwd && *changes == self.history_changes =>
+            {
+                hint.clone()
+            }
+            _ => {
+                let here = history.commands(&CommandFilter {
+                    cwd: cwd.clone(),
+                    only_ok: false,
+                });
+                let all = history.commands(&CommandFilter::default());
+                let hint = crate::hints::pick_hint(&input.text, &here, &all);
+                *cache = Some((input.text.clone(), cwd, self.history_changes, hint.clone()));
+                hint
+            }
+        };
+        hint.map(|text| (text, cursor.0, cursor.1))
+    }
+
     /// Puts `text` into the prompt of the active pane in place of `typed`.
     fn type_into_prompt(&self, typed: &str, text: &str, run: bool) {
         if let Some(session) = self.running.as_ref().and_then(Running::session) {
@@ -2651,6 +2708,7 @@ impl App {
                     }
                 })
             });
+        let hint = self.current_hint();
         let tabs_width = self.running.as_ref().map_or(0.0, |r| {
             self.tabs_width(r.window.inner_size().width as f32, r.renderer.cell())
         });
@@ -2738,6 +2796,14 @@ impl App {
                         pane.session
                             .with_term(|term| parts.pane(term, *rect, has_keys))?;
                     }
+                }
+                if let Some((text, column, line)) = &hint
+                    && let Some((_, rect)) =
+                        pane_rects.iter().find(|(p, _)| Some(*p) == active_pane)
+                    && let Some(pane) = active_pane.and_then(|id| panes.get(&id))
+                {
+                    let columns = pane.session.with_term(|term| term.grid().columns());
+                    parts.ghost(text, *rect, *column, *line, columns)?;
                 }
                 parts.pane_chrome(&dividers, active_frame);
                 if let Some(layout) = &dock_layout {
@@ -3062,6 +3128,19 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if let Some(action) = action {
                     self.run_action(event_loop, action);
+                    return;
+                }
+                let plain =
+                    !self.mods.control_key() && !self.mods.alt_key() && !self.mods.shift_key();
+                if plain
+                    && matches!(
+                        event.logical_key,
+                        Key::Named(NamedKey::ArrowRight | NamedKey::End)
+                    )
+                    && let Some((rest, _, _)) = self.current_hint()
+                    && let Some(session) = self.running.as_ref().and_then(Running::session)
+                {
+                    session.write(rest.into_bytes());
                     return;
                 }
                 let Some(session) = self.running.as_ref().and_then(Running::session) else {

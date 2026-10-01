@@ -189,7 +189,7 @@ Still to do later: move and swap panes, move a pane to another tab, broadcast in
 - A dock with service panels: an Events panel and an Agents panel.
 - **Check:** Claude finishes in a background tab → the tab shows a badge and a notification. `cd` changes the tab folder.
 
-### Phase 6b — Folder and command history (like Far Manager) (in work: the command text, the input start, the history files, and the Alt+F8 / Alt+F12 lists are done; the hints are next)
+### Phase 6b — Folder and command history (like Far Manager) ✅ (done: the command text, the history files, Alt+F8 / Alt+F12, and hints)
 An idea from the user. Shell integration (Phase 6) already tells us the folder (OSC 7) and where each command starts and ends (OSC 133).
 - **Folder history** (like Alt+F12 in Far): fterm saves every folder where a pane was.
   - A list window, like the command palette: newest at the top, type to filter, Enter = `cd` to it in the active pane
@@ -208,6 +208,21 @@ An idea from the user. Shell integration (Phase 6) already tells us the folder (
 - Keys (can be changed): `Alt+F12` folders, `Alt+F8` commands. Also in the palette and in Lua (`fterm.history`).
 - **Check:** cd into 5 folders in 2 tabs, Alt+F12 shows all 5, Enter goes there. Run commands, close fterm,
   open it again: Alt+F8 shows them with exit codes.
+
+### Phase 6c — Close the window safely (an idea from the user)
+Now the window × (and Alt+F4) closes fterm at once, with all tabs and programs. It must ask first.
+- The × of the window asks: "Close fterm? 3 tabs, 5 panes. claude works in tab 2, cargo runs in tab 3."
+  Enter = close, Esc = stay. It uses the same box as "close the tab".
+- Config: `confirm_close = "running"` (the default: ask only when a program or an agent runs in some pane,
+  like for tabs), `"always"`, or `"never"`.
+- **Lua hook** `on_close_window = function(info, fterm) … end`. `info` has `tabs`, `panes`, and lists of
+  `running` programs and `agents` (with their state). It returns:
+  - `true` = close now, do not ask (for example: only idle shells are open);
+  - `false` = do not close (for example: an agent is `working`) — fterm shows a toast "Closing was stopped by your config";
+  - `nil` = the normal rule from `confirm_close`.
+- The same rule for the last tab and for `fterm cli quit` (Phase 7).
+- **Check:** × with only shells closes at once (with `"running"`); with `claude` running it asks; a Lua hook
+  that returns `false` keeps the window open and shows the toast.
 
 ### Phase 7 — Local API, CLI, and MCP
 - Local API: JSON-RPC over a named pipe (Windows) or a unix socket (Linux/macOS).

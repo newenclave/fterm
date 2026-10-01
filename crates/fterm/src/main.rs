@@ -5,6 +5,7 @@ mod agent;
 mod app;
 mod clipboard;
 mod gpu;
+mod hints;
 mod history_popup;
 mod input;
 mod mouse;

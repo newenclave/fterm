@@ -247,6 +247,7 @@ history = {
   commands = 10000,        -- how many commands to keep
   dirs = 500,              -- how many folders to keep (pinned folders always stay)
   ignore_space = true,     -- a command that starts with a space is not saved
+  hints = false,           -- grey hints from the history while you type (Right arrow or End takes it)
 },
 ```
 
@@ -254,6 +255,11 @@ The files are in `%APPDATA%\fterm\history\` (Linux and macOS: `~/.local/share/ft
 `commands.jsonl` and `dirs.jsonl`, one JSON record per line. They are plain text: you can read them,
 change them, or delete them. Many fterm windows can write to them at the same time. When a file gets
 two times bigger than the limit, fterm writes it again with only the newest records.
+
+**Hints** (`hints = true`): when you type at the prompt, fterm shows the rest of the newest command that
+starts with your text (commands from this folder first) in grey after the cursor. Right arrow or End takes it.
+They are off by default, because PowerShell 7 (PSReadLine), fish, and zsh plugins have their own hints.
+When the shell draws its own hint, fterm does not draw one.
 
 ### on_history
 This function sees every command before it is saved. Fields: `cmd`, `cwd`, `exit`, `shell`.

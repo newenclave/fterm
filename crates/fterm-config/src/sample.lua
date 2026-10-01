@@ -44,7 +44,7 @@ return {
   },
 
   -- The command and folder history (Alt+F8, Alt+F12). A command that starts with a space is not saved.
-  -- history = { enabled = true, commands = 10000, dirs = 500, ignore_space = true },
+  -- history = { enabled = true, commands = 10000, dirs = 500, ignore_space = true, hints = false },
   -- on_history = function(h) if h.cmd:find("token") then return false end end,
 
   -- Toasts and OS notifications. OS notifications are off: they can be annoying.
