@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use fterm_mux::{Closed, Mux, PaneId, Rect, TabId};
+use fterm_mux::{Closed, Direction, Mux, PaneId, Rect, TabId};
 use fterm_render::Renderer;
 use fterm_render::tabbar::{Hit, TabBarInput, bar_height, hit, layout_tabs};
 use fterm_term::alacritty_terminal::grid::Scroll;
@@ -21,7 +21,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::clipboard::{Clipboard, paste_bytes};
 use crate::gpu::Gpu;
@@ -74,8 +74,8 @@ impl Running {
         bar_height(self.renderer.cell())
     }
 
-    /// The place of the active pane in the window (below the tab bar).
-    fn pane_area(&self) -> Rect {
+    /// The space for the panes of a tab (the window below the tab bar).
+    fn tab_area(&self) -> Rect {
         let size = self.window.inner_size();
         let top = self.bar_height();
         Rect::new(
@@ -86,16 +86,47 @@ impl Running {
         )
     }
 
-    fn grid_size(&self) -> GridSize {
-        let area = self.pane_area();
+    /// The place of the active pane in the window.
+    fn pane_area(&self) -> Rect {
+        let area = self.tab_area();
+        let active = self.mux.active_pane();
+        self.mux
+            .pane_rects(area)
+            .into_iter()
+            .find(|(pane, _)| Some(*pane) == active)
+            .map_or(area, |(_, rect)| rect)
+    }
+
+    /// How many cells fit in a pane of this size.
+    fn grid_for(&self, rect: Rect) -> GridSize {
         let cell = self.renderer.cell();
         GridSize::from_pixels(
-            area.width as u32,
-            area.height as u32,
+            rect.width as u32,
+            rect.height as u32,
             cell.width,
             cell.height,
             self.renderer.padding(),
         )
+    }
+
+    /// Every pane of every tab gets the size of its own rect.
+    fn resize_all_panes(&self) {
+        let area = self.tab_area();
+        let cell = cell_px(&self.renderer);
+        for tab in self.mux.tabs() {
+            let rects = match tab.zoomed {
+                Some(pane) => vec![(pane, area)],
+                None => tab.layout.rects(area),
+            };
+            for (id, rect) in rects {
+                let size = self.grid_for(rect);
+                if let Some(pane) = self.panes.get(&id)
+                    && pane.session.grid_size() != size
+                {
+                    pane.session.resize(size, cell);
+                }
+            }
+        }
     }
 
     fn tab_titles(&self) -> Vec<String> {
@@ -131,11 +162,20 @@ struct MouseState {
     tab_hover: Hit,
     /// Clicks on tabs (a double click renames).
     tab_clicks: ClickCounter,
+    /// The divider that the user drags (its path in the tree).
+    dragging_divider: Option<Vec<bool>>,
+}
+
+/// What the close question is about.
+#[derive(Clone, Copy)]
+enum CloseTarget {
+    Tab(TabId),
+    Pane(PaneId),
 }
 
 /// "Close the tab? A program is running."
 struct CloseQuestion {
-    tab: TabId,
+    target: CloseTarget,
     lines: Vec<String>,
 }
 
@@ -192,11 +232,10 @@ impl App {
         })
     }
 
-    /// Starts a shell in a new tab, after the active tab.
-    fn new_tab(&mut self) -> anyhow::Result<PaneId> {
+    /// Starts a shell for a new pane with this grid size.
+    fn spawn_pane(&mut self, size: GridSize) -> anyhow::Result<PaneId> {
         let running = self.running.as_mut().expect("the window is open");
         let id = running.mux.new_pane_id();
-        let size = running.grid_size();
         let proxy = self.proxy.clone();
         let session = Session::spawn(
             SessionOptions::default(),
@@ -211,7 +250,7 @@ impl App {
             pane = id.0,
             columns = size.columns,
             rows = size.rows,
-            "new tab"
+            "new pane"
         );
         running.panes.insert(
             id,
@@ -220,9 +259,48 @@ impl App {
                 app_title: None,
             },
         );
-        running.mux.new_tab(id);
+        Ok(id)
+    }
+
+    /// Starts a shell in a new tab, after the active tab.
+    fn new_tab(&mut self) -> anyhow::Result<PaneId> {
+        let running = self.running.as_ref().expect("the window is open");
+        let size = running.grid_for(running.tab_area());
+        let id = self.spawn_pane(size)?;
+        self.running.as_mut().unwrap().mux.new_tab(id);
         self.tab_changed();
         Ok(id)
+    }
+
+    /// Splits the active pane. The new pane gets the focus.
+    fn split(&mut self, direction: Direction) -> anyhow::Result<()> {
+        let running = self.running.as_ref().expect("the window is open");
+        let half = running.pane_area();
+        let half = match direction {
+            Direction::Right => Rect::new(half.x, half.y, half.width / 2.0, half.height),
+            Direction::Down => Rect::new(half.x, half.y, half.width, half.height / 2.0),
+        };
+        let size = running.grid_for(half);
+        let id = self.spawn_pane(size)?;
+        let running = self.running.as_mut().unwrap();
+        running.mux.split_active(id, direction);
+        running.resize_all_panes();
+        self.tab_changed();
+        Ok(())
+    }
+
+    /// Closes one pane now (no question). Returns false when it was the last pane of the last tab.
+    fn close_pane_now(&mut self, pane: PaneId) -> bool {
+        let Some(running) = &mut self.running else {
+            return false;
+        };
+        running.panes.remove(&pane);
+        let alive = running.mux.close_pane(pane) != Closed::LastTab;
+        if alive {
+            running.resize_all_panes();
+            self.tab_changed();
+        }
+        alive
     }
 
     /// Closes a tab now (no question). Returns false when it was the last tab.
@@ -241,16 +319,22 @@ impl App {
         alive
     }
 
-    /// Closes a tab, but asks first when a program runs in it.
-    fn close_tab(&mut self, event_loop: &ActiveEventLoop, tab: TabId) {
+    /// Closes a tab or a pane, but asks first when a program runs in it.
+    fn close(&mut self, event_loop: &ActiveEventLoop, target: CloseTarget) {
         let Some(running) = &self.running else {
             return;
         };
-        let Some(tab_info) = running.mux.tabs().iter().find(|t| t.id == tab) else {
-            return;
+        let panes = match target {
+            CloseTarget::Tab(tab) => {
+                let Some(tab_info) = running.mux.tabs().iter().find(|t| t.id == tab) else {
+                    return;
+                };
+                tab_info.layout.panes()
+            }
+            CloseTarget::Pane(pane) => vec![pane],
         };
         let mut programs: Vec<String> = Vec::new();
-        for pane in tab_info.layout.panes() {
+        for pane in panes {
             if let Some(pid) = running.panes.get(&pane).and_then(|p| p.session.pid()) {
                 for name in running_children(pid) {
                     let name = display_name(&name).to_owned();
@@ -261,15 +345,19 @@ impl App {
             }
         }
         if programs.is_empty() {
-            if !self.close_tab_now(tab) {
+            if !self.close_now(target) {
                 event_loop.exit();
             }
             return;
         }
+        let what = match target {
+            CloseTarget::Tab(_) => "Close this tab?",
+            CloseTarget::Pane(_) => "Close this pane?",
+        };
         self.close_question = Some(CloseQuestion {
-            tab,
+            target,
             lines: vec![
-                "Close this tab?".to_owned(),
+                what.to_owned(),
                 format!("Running: {}", programs.join(", ")),
                 String::new(),
                 "Enter = close, Esc = cancel".to_owned(),
@@ -278,19 +366,20 @@ impl App {
         running.window.request_redraw();
     }
 
+    fn close_now(&mut self, target: CloseTarget) -> bool {
+        match target {
+            CloseTarget::Tab(tab) => self.close_tab_now(tab),
+            CloseTarget::Pane(pane) => self.close_pane_now(pane),
+        }
+    }
+
     /// The active tab or the tab list changed: new window title, new sizes, and a redraw.
     fn tab_changed(&mut self) {
         let Some(running) = &self.running else {
             return;
         };
-        let size = running.grid_size();
-        let cell = cell_px(&running.renderer);
-        // The new active pane may have an old size (for example, the window changed while it was hidden).
-        if let Some(session) = running.session()
-            && session.grid_size() != size
-        {
-            session.resize(size, cell);
-        }
+        // Panes may have an old size (for example, the window changed while their tab was hidden).
+        running.resize_all_panes();
         self.update_window_title();
         if let Some(running) = &self.running {
             running.window.request_redraw();
@@ -357,12 +446,6 @@ impl App {
                 }
                 return;
             }
-            AppAction::CloseTab => {
-                if let Some(tab) = running.mux.active_tab().map(|t| t.id) {
-                    self.close_tab(event_loop, tab);
-                }
-                return;
-            }
             AppAction::NextTab => running.mux.cycle(1),
             AppAction::PrevTab => running.mux.cycle(-1),
             AppAction::SelectTab(i) => running.mux.select(i),
@@ -372,6 +455,41 @@ impl App {
             AppAction::RenameTab => {
                 if let Some(tab) = running.mux.active_tab().map(|t| t.id) {
                     self.start_rename(tab);
+                }
+                return;
+            }
+            AppAction::SplitRight | AppAction::SplitDown => {
+                let direction = if action == AppAction::SplitRight {
+                    Direction::Right
+                } else {
+                    Direction::Down
+                };
+                if let Err(err) = self.split(direction) {
+                    tracing::error!("cannot split: {err:#}");
+                }
+                return;
+            }
+            AppAction::FocusPane(edge) => {
+                let area = running.tab_area();
+                running.mux.focus_direction(edge, area);
+            }
+            AppAction::ResizePane(edge) => {
+                let area = running.tab_area();
+                let cell = running.renderer.cell();
+                let step = match edge {
+                    fterm_mux::Edge::Left | fterm_mux::Edge::Right => cell.width,
+                    fterm_mux::Edge::Up | fterm_mux::Edge::Down => cell.height,
+                };
+                if let Some(pane) = running.mux.active_pane()
+                    && let Some(layout) = running.mux.active_layout_mut()
+                {
+                    layout.move_divider(pane, edge, step, area);
+                }
+            }
+            AppAction::ZoomPane => running.mux.toggle_zoom(),
+            AppAction::ClosePane => {
+                if let Some(pane) = running.mux.active_pane() {
+                    self.close(event_loop, CloseTarget::Pane(pane));
                 }
                 return;
             }
@@ -427,7 +545,7 @@ impl App {
         match &event.logical_key {
             Key::Named(NamedKey::Enter) => {
                 if let Some(question) = self.close_question.take()
-                    && !self.close_tab_now(question.tab)
+                    && !self.close_now(question.target)
                 {
                     event_loop.exit();
                 }
@@ -676,7 +794,7 @@ impl App {
             (MouseButton::Left, Hit::Close(_))
             | (MouseButton::Middle, Hit::Tab(_) | Hit::Close(_)) => {
                 if let Some(tab) = tab_id {
-                    self.close_tab(event_loop, tab);
+                    self.close(event_loop, CloseTarget::Tab(tab));
                 }
             }
             (MouseButton::Left, Hit::NewTab) => {
@@ -686,6 +804,39 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// The divider near the mouse (3 px around the line), with its direction.
+    fn divider_under_mouse(&self) -> Option<(Vec<bool>, Direction)> {
+        let running = self.running.as_ref()?;
+        let tab = running.mux.active_tab()?;
+        if tab.zoomed.is_some() {
+            return None;
+        }
+        let (x, y) = (self.mouse.position.0 as f32, self.mouse.position.1 as f32);
+        tab.layout
+            .dividers(running.tab_area())
+            .into_iter()
+            .find(|d| {
+                let r = d.rect;
+                x >= r.x - 3.0
+                    && x <= r.x + r.width + 3.0
+                    && y >= r.y - 3.0
+                    && y <= r.y + r.height + 3.0
+            })
+            .map(|d| (d.path, d.direction))
+    }
+
+    /// The pane under the mouse in the active tab.
+    fn pane_under_mouse(&self) -> Option<PaneId> {
+        let running = self.running.as_ref()?;
+        let (x, y) = (self.mouse.position.0 as f32, self.mouse.position.1 as f32);
+        running
+            .mux
+            .pane_rects(running.tab_area())
+            .into_iter()
+            .find(|(_, rect)| rect.contains(x, y))
+            .map(|(pane, _)| pane)
     }
 
     fn mouse_button(
@@ -706,6 +857,31 @@ impl App {
                 }
                 return;
             }
+        }
+        // Drag a divider between panes.
+        if button == MouseButton::Left {
+            match state {
+                ElementState::Pressed => {
+                    if let Some((path, _)) = self.divider_under_mouse() {
+                        self.mouse.dragging_divider = Some(path);
+                        return;
+                    }
+                }
+                ElementState::Released => {
+                    if self.mouse.dragging_divider.take().is_some() {
+                        return;
+                    }
+                }
+            }
+        }
+        // A press in another pane gives it the focus first.
+        if state == ElementState::Pressed
+            && let Some(pane) = self.pane_under_mouse()
+            && let Some(running) = &mut self.running
+            && running.mux.active_pane() != Some(pane)
+        {
+            running.mux.focus(pane);
+            self.tab_changed();
         }
         let report_button = match button {
             MouseButton::Left => Some(ReportButton::Left),
@@ -775,6 +951,31 @@ impl App {
             if let Some(running) = &self.running {
                 running.window.request_redraw();
             }
+        }
+
+        // Drag a divider: its ratio follows the mouse.
+        if let Some(path) = self.mouse.dragging_divider.clone() {
+            if let Some(running) = &mut self.running {
+                let area = running.tab_area();
+                let (fx, fy) = (x as f32, y as f32);
+                if let Some(layout) = running.mux.active_layout_mut()
+                    && let Some(ratio) = layout.ratio_at(&path, area, fx, fy)
+                {
+                    layout.set_ratio(&path, ratio);
+                }
+                running.resize_all_panes();
+                running.window.request_redraw();
+            }
+            return;
+        }
+        // The resize arrow over dividers.
+        if let Some(running) = &self.running {
+            let icon = match self.divider_under_mouse() {
+                Some((_, Direction::Right)) => CursorIcon::ColResize,
+                Some((_, Direction::Down)) => CursorIcon::RowResize,
+                None => CursorIcon::Default,
+            };
+            running.window.set_cursor(icon);
         }
 
         if self.app_wants_mouse() {
@@ -930,17 +1131,10 @@ impl App {
         );
     }
 
-    /// Every pane gets the size of the pane area (all tabs, so a tab is right when you open it).
+    /// Every pane of every tab gets the size of its own rect.
     fn resize_all_panes(&self) {
-        let Some(running) = &self.running else {
-            return;
-        };
-        let size = running.grid_size();
-        let cell = cell_px(&running.renderer);
-        for pane in running.panes.values() {
-            if pane.session.grid_size() != size {
-                pane.session.resize(size, cell);
-            }
+        if let Some(running) = &self.running {
+            running.resize_all_panes();
         }
     }
 
@@ -969,16 +1163,32 @@ impl App {
         let top = bar_height(cell);
         let width = size.width as f32;
         let area = Rect::new(0.0, top, width, (size.height as f32 - top).max(0.0));
+        let pane_rects = mux.pane_rects(area);
+        let active_pane = mux.active_pane();
+        let zoomed = mux.active_tab().is_some_and(|t| t.zoomed.is_some());
+        let dividers: Vec<Rect> = match mux.active_tab() {
+            Some(tab) if !zoomed => tab
+                .layout
+                .dividers(area)
+                .into_iter()
+                .map(|d| d.rect)
+                .collect(),
+            _ => Vec::new(),
+        };
+        let active_frame = (pane_rects.len() > 1)
+            .then(|| {
+                pane_rects
+                    .iter()
+                    .find(|(p, _)| Some(*p) == active_pane)
+                    .map(|(_, r)| *r)
+            })
+            .flatten();
         let layout = layout_tabs(mux.tabs().len(), width, cell);
         let active = mux.active_index();
         let editing = renaming.as_ref().and_then(|(tab, text)| {
             let index = mux.tabs().iter().position(|t| t.id == *tab)?;
             Some((index, text.as_str()))
         });
-        let session = mux
-            .active_pane()
-            .and_then(|id| panes.get(&id))
-            .map(|p| &p.session);
         let view = Rect::new(0.0, 0.0, width, size.height as f32);
 
         let result = gpu.frame(|device, queue, target, size| {
@@ -992,9 +1202,14 @@ impl App {
                     cell,
                     width,
                 })?;
-                if let Some(session) = session {
-                    session.with_term(|term| parts.pane(term, area, focused))?;
+                for (id, rect) in &pane_rects {
+                    if let Some(pane) = panes.get(id) {
+                        let is_active = Some(*id) == active_pane;
+                        pane.session
+                            .with_term(|term| parts.pane(term, *rect, focused && is_active))?;
+                    }
                 }
+                parts.pane_chrome(&dividers, active_frame);
                 if let Some(lines) = &question {
                     parts.message_box(lines, view)?;
                 }
@@ -1041,6 +1256,23 @@ impl ApplicationHandler<UserEvent> for App {
         }
         if let Some(running) = &mut self.running {
             running.mux.select(0);
+        }
+        // Dev only: FTERM_SPLITS="right,down" splits the first tab at start (for test scripts).
+        if cfg!(debug_assertions)
+            && let Ok(splits) = std::env::var("FTERM_SPLITS")
+        {
+            for split in splits.split(',') {
+                let direction = match split.trim() {
+                    "right" => Direction::Right,
+                    "down" => Direction::Down,
+                    _ => continue,
+                };
+                if let Err(err) = self.split(direction) {
+                    tracing::error!("cannot split: {err:#}");
+                }
+            }
+        }
+        if let Some(running) = &mut self.running {
             // Dev only: FTERM_RUN="command" types this command into the first tab after start.
             // Test scripts use it, so they do not need to send keys to the window.
             if cfg!(debug_assertions)
@@ -1081,7 +1313,10 @@ impl ApplicationHandler<UserEvent> for App {
                         event_loop.exit();
                     }
                     Closed::Nothing => {}
-                    Closed::Pane | Closed::Tab => self.tab_changed(),
+                    Closed::Pane | Closed::Tab => {
+                        running.resize_all_panes();
+                        self.tab_changed();
+                    }
                 }
             }
         }

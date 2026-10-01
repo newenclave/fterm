@@ -1,5 +1,6 @@
 //! Keyboard: turns a winit key press into bytes for the pty (xterm style).
 
+use fterm_mux::Edge;
 use fterm_term::alacritty_terminal::selection::SelectionType;
 use fterm_term::alacritty_terminal::vi_mode::ViMotion;
 use fterm_term::copy_mode::CopyAction;
@@ -240,7 +241,6 @@ pub fn copy_mode_action(key: &KeyInput) -> Option<CopyAction> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppAction {
     NewTab,
-    CloseTab,
     NextTab,
     PrevTab,
     /// Tab number, from 0.
@@ -249,25 +249,56 @@ pub enum AppAction {
     MoveTabLeft,
     MoveTabRight,
     RenameTab,
+    SplitRight,
+    SplitDown,
+    /// Focus the neighbor pane.
+    FocusPane(Edge),
+    /// Move the nearest divider of the active pane.
+    ResizePane(Edge),
+    ZoomPane,
+    /// Close the active pane (the last pane closes the tab).
+    ClosePane,
 }
 
 /// The tab keys. They use the key position, so they work on every layout.
 pub fn app_action(key: &KeyInput) -> Option<AppAction> {
     use AppAction::*;
-    let (ctrl, shift) = (key.mods.control_key(), key.mods.shift_key());
-    if !ctrl || key.mods.alt_key() {
-        return None;
-    }
+    let (ctrl, shift, alt) = (
+        key.mods.control_key(),
+        key.mods.shift_key(),
+        key.mods.alt_key(),
+    );
     let PhysicalKey::Code(code) = key.physical else {
         return None;
     };
+    // Panes: Alt (+ Shift) and arrows, Alt+Shift+= and Alt+Shift+-.
+    if alt && !ctrl {
+        let edge = match code {
+            KeyCode::ArrowLeft => Some(Edge::Left),
+            KeyCode::ArrowRight => Some(Edge::Right),
+            KeyCode::ArrowUp => Some(Edge::Up),
+            KeyCode::ArrowDown => Some(Edge::Down),
+            _ => None,
+        };
+        return match (code, edge, shift) {
+            (_, Some(edge), false) => Some(FocusPane(edge)),
+            (_, Some(edge), true) => Some(ResizePane(edge)),
+            (KeyCode::Equal, None, true) => Some(SplitRight),
+            (KeyCode::Minus, None, true) => Some(SplitDown),
+            _ => None,
+        };
+    }
+    if !ctrl || alt {
+        return None;
+    }
     let action = match (code, shift) {
         (KeyCode::Tab, false) | (KeyCode::PageDown, false) => NextTab,
         (KeyCode::Tab, true) | (KeyCode::PageUp, false) => PrevTab,
         (KeyCode::PageUp, true) => MoveTabLeft,
         (KeyCode::PageDown, true) => MoveTabRight,
         (KeyCode::KeyT, true) => NewTab,
-        (KeyCode::KeyW, true) => CloseTab,
+        (KeyCode::KeyW, true) => ClosePane,
+        (KeyCode::KeyZ, true) => ZoomPane,
         (KeyCode::KeyR, true) => RenameTab,
         (KeyCode::Digit1, true) => SelectTab(0),
         (KeyCode::Digit2, true) => SelectTab(1),
@@ -581,7 +612,6 @@ mod tests {
     fn tab_keys() {
         use AppAction::*;
         assert_eq!(app_key(KeyCode::KeyT, ch("T"), CTRL_SHIFT), Some(NewTab));
-        assert_eq!(app_key(KeyCode::KeyW, ch("W"), CTRL_SHIFT), Some(CloseTab));
         assert_eq!(app_key(KeyCode::KeyR, ch("R"), CTRL_SHIFT), Some(RenameTab));
         assert_eq!(
             app_key(KeyCode::Tab, named(NamedKey::Tab), CTRL),
@@ -648,5 +678,43 @@ mod tests {
             app_key(KeyCode::PageUp, named(NamedKey::PageUp), SHIFT),
             None
         );
+    }
+
+    const ALT_SHIFT: ModifiersState = ModifiersState::ALT.union(ModifiersState::SHIFT);
+
+    #[test]
+    fn pane_keys() {
+        use AppAction::*;
+        assert_eq!(
+            app_key(KeyCode::Equal, ch("+"), ALT_SHIFT),
+            Some(SplitRight)
+        );
+        assert_eq!(app_key(KeyCode::Minus, ch("_"), ALT_SHIFT), Some(SplitDown));
+        assert_eq!(
+            app_key(KeyCode::ArrowLeft, named(NamedKey::ArrowLeft), ALT),
+            Some(FocusPane(Edge::Left))
+        );
+        assert_eq!(
+            app_key(KeyCode::ArrowDown, named(NamedKey::ArrowDown), ALT),
+            Some(FocusPane(Edge::Down))
+        );
+        assert_eq!(
+            app_key(KeyCode::ArrowRight, named(NamedKey::ArrowRight), ALT_SHIFT),
+            Some(ResizePane(Edge::Right))
+        );
+        assert_eq!(
+            app_key(KeyCode::ArrowUp, named(NamedKey::ArrowUp), ALT_SHIFT),
+            Some(ResizePane(Edge::Up))
+        );
+        assert_eq!(app_key(KeyCode::KeyZ, ch("Z"), CTRL_SHIFT), Some(ZoomPane));
+        // Ctrl+Shift+W closes the active pane now (the last pane closes the tab).
+        assert_eq!(app_key(KeyCode::KeyW, ch("W"), CTRL_SHIFT), Some(ClosePane));
+    }
+
+    #[test]
+    fn alt_alone_with_other_keys_goes_to_the_app() {
+        // Alt+B, Alt+F and others are word moves in shells: they are not fterm keys.
+        assert_eq!(app_key(KeyCode::KeyB, ch("b"), ALT), None);
+        assert_eq!(app_key(KeyCode::Equal, ch("="), ALT), None);
     }
 }

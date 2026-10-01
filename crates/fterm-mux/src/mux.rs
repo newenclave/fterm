@@ -1,6 +1,6 @@
 //! Tabs: which tabs there are, which one is active, and their titles.
 
-use crate::layout::Layout;
+use crate::layout::{Direction, Edge, Layout, Rect};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PaneId(pub u64);
@@ -16,6 +16,8 @@ pub struct Tab {
     pub active_pane: PaneId,
     /// A name from the user. `None` = the title comes from the app or the program.
     pub custom_title: Option<String>,
+    /// One pane that takes the whole tab for now (zoom).
+    pub zoomed: Option<PaneId>,
 }
 
 /// What `close_pane` closed.
@@ -57,6 +59,7 @@ impl Mux {
             layout: Layout::Pane(pane),
             active_pane: pane,
             custom_title: None,
+            zoomed: None,
         };
         let at = if self.tabs.is_empty() {
             0
@@ -102,9 +105,12 @@ impl Mux {
             return Closed::Nothing;
         };
         let tab = &mut self.tabs[index];
-        if tab.layout.remove(pane) {
+        if let Some(neighbor) = tab.layout.remove(pane) {
             if tab.active_pane == pane {
-                tab.active_pane = tab.layout.panes()[0];
+                tab.active_pane = neighbor;
+            }
+            if tab.zoomed == Some(pane) {
+                tab.zoomed = None;
             }
             return Closed::Pane;
         }
@@ -158,6 +164,69 @@ impl Mux {
             self.tabs.swap(self.active, target as usize);
             self.active = target as usize;
         }
+    }
+
+    /// Splits the active pane. `new` gets the second half and the focus.
+    pub fn split_active(&mut self, new: PaneId, direction: Direction) {
+        let active = self.active;
+        if let Some(tab) = self.tabs.get_mut(active)
+            && tab.layout.split(tab.active_pane, new, direction)
+        {
+            tab.active_pane = new;
+            tab.zoomed = None;
+        }
+    }
+
+    /// Gives the focus to `pane` (in the active tab).
+    pub fn focus(&mut self, pane: PaneId) {
+        let active = self.active;
+        if let Some(tab) = self.tabs.get_mut(active)
+            && tab.layout.contains(pane)
+        {
+            tab.active_pane = pane;
+            if tab.zoomed.is_some_and(|z| z != pane) {
+                tab.zoomed = None;
+            }
+        }
+    }
+
+    /// Gives the focus to the neighbor of the active pane toward `edge`.
+    pub fn focus_direction(&mut self, edge: Edge, area: Rect) {
+        let active = self.active;
+        let Some(tab) = self.tabs.get(active) else {
+            return;
+        };
+        if let Some(neighbor) = tab.layout.neighbor(tab.active_pane, edge, area) {
+            self.focus(neighbor);
+        }
+    }
+
+    /// The active pane takes the whole tab, or the tab goes back to all panes.
+    pub fn toggle_zoom(&mut self) {
+        let active = self.active;
+        if let Some(tab) = self.tabs.get_mut(active) {
+            tab.zoomed = match tab.zoomed {
+                Some(_) => None,
+                None if tab.layout.panes().len() > 1 => Some(tab.active_pane),
+                None => None,
+            };
+        }
+    }
+
+    /// The panes of the active tab that are seen now, and their places in `area`.
+    pub fn pane_rects(&self, area: Rect) -> Vec<(PaneId, Rect)> {
+        match self.active_tab() {
+            Some(tab) => match tab.zoomed {
+                Some(pane) => vec![(pane, area)],
+                None => tab.layout.rects(area),
+            },
+            None => Vec::new(),
+        }
+    }
+
+    pub fn active_layout_mut(&mut self) -> Option<&mut Layout> {
+        let active = self.active;
+        self.tabs.get_mut(active).map(|tab| &mut tab.layout)
     }
 
     /// Sets the user's name for a tab. An empty name goes back to the auto title.
@@ -339,5 +408,76 @@ mod tests {
             "user@host: ~/code"
         );
         assert_eq!(tab_title(None, Some("vim notes.txt"), "x"), "vim notes.txt");
+    }
+
+    const AREA: Rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 800.0,
+        height: 600.0,
+    };
+
+    #[test]
+    fn split_gives_the_focus_to_the_new_pane() {
+        let (mut mux, panes) = mux_with(1);
+        let new = mux.new_pane_id();
+        mux.split_active(new, Direction::Right);
+        assert_eq!(mux.active_pane(), Some(new));
+        assert_eq!(mux.tabs()[0].layout.panes(), [panes[0], new]);
+        assert_eq!(mux.pane_tab(new), Some(mux.tabs()[0].id));
+    }
+
+    #[test]
+    fn closing_the_active_pane_focuses_the_neighbor() {
+        let (mut mux, panes) = mux_with(1);
+        let b = mux.new_pane_id();
+        mux.split_active(b, Direction::Right);
+        assert_eq!(mux.close_pane(b), Closed::Pane);
+        assert_eq!(mux.active_pane(), Some(panes[0]));
+        assert_eq!(mux.close_pane(panes[0]), Closed::LastTab);
+    }
+
+    #[test]
+    fn focus_moves_between_neighbors() {
+        let (mut mux, panes) = mux_with(1);
+        let b = mux.new_pane_id();
+        mux.split_active(b, Direction::Right);
+        mux.focus_direction(Edge::Left, AREA);
+        assert_eq!(mux.active_pane(), Some(panes[0]));
+        // Nothing on the left: the focus stays.
+        mux.focus_direction(Edge::Left, AREA);
+        assert_eq!(mux.active_pane(), Some(panes[0]));
+        mux.focus(b);
+        assert_eq!(mux.active_pane(), Some(b));
+        // A pane of another tab cannot get the focus here.
+        mux.focus(PaneId(999));
+        assert_eq!(mux.active_pane(), Some(b));
+    }
+
+    #[test]
+    fn zoom_shows_only_the_active_pane() {
+        let (mut mux, panes) = mux_with(1);
+        let b = mux.new_pane_id();
+        mux.split_active(b, Direction::Right);
+        assert_eq!(mux.pane_rects(AREA).len(), 2);
+        mux.toggle_zoom();
+        assert_eq!(mux.pane_rects(AREA), [(b, AREA)]);
+        mux.toggle_zoom();
+        assert_eq!(mux.pane_rects(AREA).len(), 2);
+        // A split or a focus change ends the zoom.
+        mux.toggle_zoom();
+        mux.focus(panes[0]);
+        assert_eq!(mux.pane_rects(AREA).len(), 2);
+    }
+
+    #[test]
+    fn zoom_ends_when_the_zoomed_pane_closes() {
+        let (mut mux, panes) = mux_with(1);
+        let b = mux.new_pane_id();
+        mux.split_active(b, Direction::Down);
+        mux.toggle_zoom();
+        mux.close_pane(b);
+        assert_eq!(mux.pane_rects(AREA), [(panes[0], AREA)]);
+        assert_eq!(mux.tabs()[0].zoomed, None);
     }
 }

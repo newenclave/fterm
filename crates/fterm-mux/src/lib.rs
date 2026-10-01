@@ -3,5 +3,5 @@
 pub mod layout;
 pub mod mux;
 
-pub use layout::{Direction, Layout, Rect};
+pub use layout::{Direction, Divider, Edge, Layout, Rect};
 pub use mux::{Closed, Mux, PaneId, TabId};

@@ -4,7 +4,7 @@
 | Key or mouse | What it does |
 |---|---|
 | Ctrl + Shift + T, click `+` | New tab (after the active tab). |
-| Ctrl + Shift + W, click `×`, middle click on a tab | Close the tab. If a program runs in it, fterm asks first. |
+| Click `×`, middle click on a tab | Close the tab (all its panes). If a program runs in it, fterm asks first. |
 | Ctrl + Tab, Ctrl + PageDown | Next tab. |
 | Ctrl + Shift + Tab, Ctrl + PageUp | Previous tab. |
 | Ctrl + Shift + 1 … 8 | Go to tab 1 … 8. |
@@ -14,6 +14,19 @@
 | Mouse wheel on the tab bar | Next / previous tab. |
 
 The tab title is your name for the tab, or the title from the program, or the program name.
+
+## Split panes
+| Key or mouse | What it does |
+|---|---|
+| Alt + Shift + `=` | Split the active pane: a new pane on the right. |
+| Alt + Shift + `-` | Split the active pane: a new pane below. |
+| Alt + arrows, click in a pane | Go to the pane on the left / right / above / below. |
+| Alt + Shift + arrows | Move the nearest line of the active pane (one cell per press). |
+| Drag the line between panes | Make panes bigger or smaller. The mouse cursor shows arrows over the line. |
+| Ctrl + Shift + Z | Zoom: the active pane takes the whole tab. Press again to see all panes. |
+| Ctrl + Shift + W | Close the active pane. The last pane closes the tab. If a program runs, fterm asks first. |
+
+Each pane has its own shell, history, selection, and copy mode. The active pane has a colored frame.
 When a shell ends (for example, you type `exit`), only its tab closes. The window closes after the last tab.
 
 ## Scroll

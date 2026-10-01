@@ -138,7 +138,8 @@ Ideas (we pick the order in the Phase 3 plan):
 - Ask before closing a tab with a running app.
 - **Check:** open 5+ tabs with different shells. Switch and close them. No processes stay alive.
 
-### Phase 4b — Split panes
+### Phase 4b — Split panes ✅ (done: split, focus, resize, zoom, close)
+Still to do later: move and swap panes, move a pane to another tab, broadcast input, layouts in the config, API control.
 - Split a pane **right** or **down**, many times: each tab is a tree of panes (like tmux and WezTerm).
   Each pane has its own shell or app, its own scroll history, selection, and copy mode.
 - **Focus:** click a pane, or Alt + arrows. The pane with focus has a colored border;
@@ -223,4 +224,4 @@ Ideas (we pick the order in the Phase 3 plan):
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
 ## Next step
-Write a detailed plan for Phase 4b (split panes) or Phase 3b (images). Then build it.
+Write a detailed plan for Phase 5 (config and profiles) or Phase 3b (images). Then build it.

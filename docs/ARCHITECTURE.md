@@ -33,7 +33,11 @@ processes and real escape codes, and later use it from the CLI and MCP (Phase 7)
 ## Tabs and panes
 
 - `fterm-mux::Mux` keeps the tabs. Each tab has a `Layout`: a tree of panes (`Pane` or `Split`).
-  In Phase 4 a tab has one pane; split panes (Phase 4b) use the same tree.
+  A split has a direction (right or down) and a ratio. `Layout` gives the rects of the panes,
+  the dividers (for drawing and for the mouse), and the neighbor of a pane (for Alt + arrows).
+- Zoom: `Tab::zoomed` shows one pane in the whole tab area; the tree does not change.
+- Every pane has its own grid size. After a split, a close, a drag, a zoom, or a window resize,
+  `resize_all_panes` sends the new size to every session.
 - The app keeps one `Session` per pane (`PaneId`). Events from a session come with its pane id
   (`UserEvent::Term(PaneId, TermEvent)`), so the app knows which tab got output or ended.
 - Before a tab closes, `fterm-term::process::running_children` looks for programs under the shell,

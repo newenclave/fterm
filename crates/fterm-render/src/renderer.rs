@@ -413,6 +413,12 @@ impl FrameParts<'_> {
         Ok(())
     }
 
+    /// Lines between panes, and the frame of the active pane (when there are many panes).
+    pub fn pane_chrome(&mut self, dividers: &[Rect], active: Option<Rect>) {
+        self.quads
+            .extend(crate::panes::build_pane_chrome(dividers, active));
+    }
+
     /// A message box in the middle of `view`, on top of everything.
     pub fn message_box(&mut self, lines: &[String], view: Rect) -> Result<(), AtlasFull> {
         let quads = build_message_box(lines, view, self.cell, &mut *self.glyph)?;
