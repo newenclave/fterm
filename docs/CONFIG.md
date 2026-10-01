@@ -123,6 +123,7 @@ also work on other layouts (for example, Russian).
 | `copy_claude_hooks` | Copy the Claude Code hooks for tab dots (see [CLAUDE.md](CLAUDE.md)). |
 | `toggle_dock`, `panel_events`, `panel_agents`, `focus_dock` | The dock and its panels (see [KEYS.md](KEYS.md)). |
 | `history_commands`, `history_dirs` | The command and folder history (Alt+F8, Alt+F12). |
+| `toggle_remote_control` | API clients may (or may not) read and type into this pane (see [API.md](API.md)). |
 
 ### Lua functions
 A function gets an object `fterm` with these functions:

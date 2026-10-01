@@ -26,6 +26,9 @@ pub const METHODS: &[&str] = &[
     "set_title",
     "notify",
     "panel",
+    "wait_for",
+    "send_message",
+    "read_messages",
     "subscribe",
     "unsubscribe",
 ];
@@ -39,6 +42,7 @@ pub const EVENTS: &[&str] = &[
     "notification",
     "cwd",
     "title",
+    "message",
 ];
 
 /// One request on its way to the app. The app sends the answer on `reply`.
@@ -98,7 +102,9 @@ impl Handler for Bridge {
 
 /// How long a client thread waits for the app. `wait_for` waits as long as it asks (at most one hour).
 pub fn timeout_for(method: &str, params: &Value) -> Duration {
-    const BASE: Duration = Duration::from_secs(30);
+    // Long enough for the user to answer the access question.
+    const BASE: Duration = Duration::from_secs(120);
+    const WAIT_FOR: Duration = Duration::from_secs(30);
     const EXTRA: Duration = Duration::from_secs(5);
     if method != "wait_for" {
         return BASE;
@@ -106,7 +112,7 @@ pub fn timeout_for(method: &str, params: &Value) -> Duration {
     let asked = params
         .get("timeout_ms")
         .and_then(Value::as_f64)
-        .map_or(BASE, |ms| {
+        .map_or(WAIT_FOR, |ms| {
             Duration::from_millis(ms.clamp(0.0, 3_600_000.0) as u64)
         });
     asked + EXTRA
@@ -162,7 +168,8 @@ mod tests {
 
     #[test]
     fn timeouts() {
-        assert_eq!(timeout_for("list", &Value::Null), Duration::from_secs(30));
+        // Long enough for the user to answer the access question.
+        assert_eq!(timeout_for("list", &Value::Null), Duration::from_secs(120));
         assert_eq!(
             timeout_for("wait_for", &json!({"timeout_ms": 60_000})),
             Duration::from_secs(65),

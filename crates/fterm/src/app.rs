@@ -98,6 +98,10 @@ struct Pane {
     agent: Option<AgentState>,
     /// The last command that ended (from shell integration).
     last_command: Option<LastCommand>,
+    /// API clients may read and type into it (with the user's yes). `toggle_remote_control` changes it.
+    remote: bool,
+    /// The API client that opened this pane (it may use it without a question).
+    opened_by: Option<fterm_api::server::ClientId>,
 }
 
 /// Everything that exists only while the window is open.
@@ -340,6 +344,14 @@ pub struct App {
     api_server: Option<fterm_api::server::Server>,
     api_registration: Option<fterm_api::discovery::Registration>,
     api_clients: HashMap<fterm_api::server::ClientId, api_calls::ApiClient>,
+    /// Client names that the user allowed "always" (in this session).
+    api_always: std::collections::HashSet<String>,
+    /// Access questions (one per client); the first one is on the screen.
+    api_questions: std::collections::VecDeque<api_calls::ApiAsk>,
+    /// `wait_for` calls that wait.
+    waits: Vec<api_calls::Wait>,
+    /// Messages between agents, by pane.
+    inbox: crate::inbox::Inbox,
     /// The Events panel was on the screen (and fterm in front) in the last frame.
     /// When it goes away, its events count as read.
     events_seen: bool,
@@ -386,6 +398,10 @@ impl App {
             api_server: None,
             api_registration: None,
             api_clients: HashMap::new(),
+            api_always: std::collections::HashSet::new(),
+            api_questions: std::collections::VecDeque::new(),
+            waits: Vec::new(),
+            inbox: crate::inbox::Inbox::default(),
             center: Center::new(4, true),
             shell_script: shell_script_path(),
             palette: None,
@@ -415,6 +431,16 @@ impl App {
         level: Level,
         source: Source,
     ) {
+        self.api_event(
+            "notification",
+            serde_json::json!({
+                "pane": pane.map(|p| p.0),
+                "title": title,
+                "body": body,
+                "level": level.name(),
+                "source": source.name(),
+            }),
+        );
         let input = NotifyIn {
             title: title.to_owned(),
             body: body.to_owned(),
@@ -537,14 +563,15 @@ impl App {
         }
         tracing::debug!(pane = pane.0, ?previous, ?kind, "agent state");
         self.update_window_title();
-        self.api_event(
-            "agent_state",
-            serde_json::json!({
-                "pane": pane.0,
-                "state": kind.map_or("idle", AgentKind::name),
-                "message": message,
-            }),
-        );
+        let state = kind.map_or("idle", AgentKind::name);
+        let data = serde_json::json!({
+            "event": "agent_state",
+            "pane": pane.0,
+            "state": state,
+            "message": message,
+        });
+        self.api_event("agent_state", data.clone());
+        self.resolve_waits(pane, crate::waits::Happening::Agent(state), data);
         let input = AgentIn {
             pane: pane.0,
             state: kind.map_or("idle", AgentKind::name).to_owned(),
@@ -733,6 +760,7 @@ impl App {
                                 pane,
                                 name: title,
                                 state,
+                                messages: self.inbox.unread(pane),
                             });
                         }
                     }
@@ -1211,6 +1239,8 @@ impl App {
                 shell: ShellState::default(),
                 agent: None,
                 last_command: None,
+                remote: true,
+                opened_by: None,
             },
         );
         Ok(id)
@@ -1245,7 +1275,7 @@ impl App {
 
     /// Closes one pane now (no question). Returns false when it was the last pane of the last tab.
     fn close_pane_now(&mut self, pane: PaneId) -> bool {
-        self.api_event("pane_closed", serde_json::json!({ "pane": pane.0 }));
+        self.api_pane_closed(pane);
         let Some(running) = &mut self.running else {
             return false;
         };
@@ -1709,6 +1739,28 @@ impl App {
             A::OpenConfig => return self.open_config(),
             A::ToggleDock | A::PanelEvents | A::PanelAgents | A::FocusDock => {}
             A::HistoryCommands | A::HistoryDirs => {}
+            A::ToggleRemoteControl => {
+                let Some(pane) = running.mux.active_pane() else {
+                    return;
+                };
+                let Some(p) = running.panes.get_mut(&pane) else {
+                    return;
+                };
+                p.remote = !p.remote;
+                let (title, body) = if p.remote {
+                    (
+                        "Remote control is on",
+                        "Programs can ask to read and type into this pane.",
+                    )
+                } else {
+                    (
+                        "Remote control is off",
+                        "No program can read or type into this pane.",
+                    )
+                };
+                self.notify(Some(pane), title, body, Level::Info, Source::App);
+                return;
+            }
             A::CopyClaudeHooks => {
                 self.copy_text(crate::agent::CLAUDE_HOOKS.to_owned());
                 self.notify(
@@ -2855,9 +2907,8 @@ impl App {
             .map(|(tab, text)| (*tab, text.clone()));
         let hover = self.mouse.tab_hover;
         let question = self
-            .close_question
-            .as_ref()
-            .map(|q| q.lines.clone())
+            .access_question_lines()
+            .or_else(|| self.close_question.as_ref().map(|q| q.lines.clone()))
             .or_else(|| self.message.clone());
         let hovered = self.toast_under_mouse().map(|(id, _)| id);
         let toast_layout = self.toast_layout();
@@ -3124,10 +3175,7 @@ impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         let event = match event {
             UserEvent::Api(request) => return self.api_call(event_loop, request),
-            UserEvent::ApiGone(client) => {
-                self.api_clients.remove(&client);
-                return;
-            }
+            UserEvent::ApiGone(client) => return self.api_client_gone(client),
             other => other,
         };
         let Some(running) = &mut self.running else {
@@ -3146,6 +3194,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if running.mux.active_pane() == Some(pane) {
                     running.window.request_redraw();
                 }
+                self.check_text_waits(pane);
             }
             TermEvent::Title(title) => {
                 if let Some(server) = &self.api_server {
@@ -3202,16 +3251,16 @@ impl ApplicationHandler<UserEvent> for App {
                             took_ms: took.as_millis() as u64,
                         });
                     }
-                    self.api_event(
-                        "command_done",
-                        serde_json::json!({
-                            "pane": pane.0,
-                            "command": command,
-                            "exit": exit,
-                            "took_ms": took.as_millis() as u64,
-                            "cwd": cwd,
-                        }),
-                    );
+                    let data = serde_json::json!({
+                        "event": "command_done",
+                        "pane": pane.0,
+                        "command": command,
+                        "exit": exit,
+                        "took_ms": took.as_millis() as u64,
+                        "cwd": cwd,
+                    });
+                    self.api_event("command_done", data.clone());
+                    self.resolve_waits(pane, crate::waits::Happening::CommandDone, data);
                     self.save_command(pane, command, cwd, exit, took);
                     self.command_done(pane, exit, took);
                 }
@@ -3223,9 +3272,10 @@ impl ApplicationHandler<UserEvent> for App {
             }
             TermEvent::Exit => {
                 tracing::info!(pane = pane.0, "the shell ended");
-                if let Some(server) = &self.api_server {
-                    server.broadcast("pane_closed", serde_json::json!({ "pane": pane.0 }));
-                }
+                self.api_pane_closed(pane);
+                let Some(running) = &mut self.running else {
+                    return;
+                };
                 running.panes.remove(&pane);
                 match running.mux.close_pane(pane) {
                     Closed::LastTab => {
@@ -3263,6 +3313,9 @@ impl ApplicationHandler<UserEvent> for App {
             if let Some(running) = &self.running {
                 running.window.request_redraw();
             }
+        }
+        if let Some(at) = self.expire_waits(now) {
+            wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
         if let Some(until) = self.title_message_until {
             if now >= until {
@@ -3328,6 +3381,20 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Ime(Ime::Commit(text)) => self.ime_commit(&text),
             WindowEvent::ModifiersChanged(mods) => self.mods = mods.state(),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                if !self.api_questions.is_empty() {
+                    let answer = match (&event.logical_key, physical_letter(event.physical_key)) {
+                        (Key::Named(NamedKey::Enter), _) => Some(api_calls::AccessAnswer::Allow),
+                        (_, Some('a')) => Some(api_calls::AccessAnswer::Always),
+                        (Key::Named(NamedKey::Escape), _) | (_, Some('n')) => {
+                            Some(api_calls::AccessAnswer::Deny)
+                        }
+                        _ => None,
+                    };
+                    if let Some(answer) = answer {
+                        self.answer_access(event_loop, answer);
+                    }
+                    return;
+                }
                 if self.close_question.is_some() {
                     self.close_question_key(event_loop, &event);
                     return;

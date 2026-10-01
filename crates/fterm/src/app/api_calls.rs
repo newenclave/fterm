@@ -8,7 +8,10 @@ use fterm_term::input::{lines_text, total_lines};
 use serde_json::{Value, json};
 
 use super::*;
+use crate::access::{Check, Verdict, check};
 use crate::api::{ApiRequest, Bridge, METHODS, bool_param, pane_param, place_param, str_param};
+use crate::inbox::MAX_MESSAGE;
+use crate::waits::{Happening, WaitKind, matches, parse_kind};
 
 /// Who an API client is (from `hello`).
 #[derive(Clone, Debug, Default)]
@@ -16,6 +19,31 @@ pub(super) struct ApiClient {
     pub name: String,
     /// The pane where the client runs (`FTERM_PANE_ID` of `ftermctl`).
     pub pane: Option<PaneId>,
+    /// What the user said: may it use other panes (`None` = not asked yet).
+    pub said: Option<bool>,
+}
+
+/// A `wait_for` that waits.
+pub(super) struct Wait {
+    pub client: ClientId,
+    pub pane: PaneId,
+    pub kind: WaitKind,
+    pub deadline: Instant,
+    pub reply: std::sync::mpsc::Sender<Result<Value, RpcError>>,
+}
+
+/// Requests of one client that wait for the user's answer (may it use other panes?).
+pub(super) struct ApiAsk {
+    pub client: ClientId,
+    pub requests: Vec<ApiRequest>,
+}
+
+/// The answer to the access question.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AccessAnswer {
+    Allow,
+    Always,
+    Deny,
 }
 
 /// The longest history that `get_text` gives.
@@ -68,15 +96,247 @@ impl App {
             .get(&request.client)
             .map(|c| c.name.as_str());
         tracing::debug!(client = request.client, ?name, method = %request.method, "API call");
-        let result = if self.running.is_none() {
-            Err(RpcError::new(
+        if self.running.is_none() {
+            let _ = request.reply.send(Err(RpcError::new(
                 RpcError::INTERNAL,
                 "the window is not open yet",
-            ))
-        } else {
-            self.api_dispatch(event_loop, request.client, &request.method, &request.params)
-        };
+            )));
+            return;
+        }
+        match self.api_access(&request) {
+            Verdict::Allow => {}
+            Verdict::Deny(why) => {
+                let _ = request
+                    .reply
+                    .send(Err(RpcError::new(RpcError::DENIED, why)));
+                return;
+            }
+            Verdict::Ask => return self.ask_access(request),
+        }
+        if request.method == "wait_for" {
+            return self.api_wait_for(request);
+        }
+        let result =
+            self.api_dispatch(event_loop, request.client, &request.method, &request.params);
         let _ = request.reply.send(result);
+    }
+
+    /// May this request run now? Reading or typing into a pane that is not the client's own needs a yes.
+    fn api_access(&self, request: &ApiRequest) -> Verdict {
+        let gated = matches!(
+            request.method.as_str(),
+            "send_text" | "get_text" | "close" | "wait_for" | "read_messages" | "spawn"
+        );
+        if !gated {
+            return Verdict::Allow;
+        }
+        let client = self.api_clients.get(&request.client);
+        let running = self.running.as_ref().expect("checked in api_call");
+        let (own, remote) = if request.method == "spawn" {
+            // A new pane is new power: it needs the same yes as a pane of somebody else.
+            (false, true)
+        } else {
+            match self.target_pane(request.client, &request.params) {
+                // A bad pane id: let the method give the error.
+                Err(_) => return Verdict::Allow,
+                Ok(pane) => {
+                    let p = &running.panes[&pane];
+                    let own = client.and_then(|c| c.pane) == Some(pane)
+                        || p.opened_by == Some(request.client);
+                    (own, p.remote)
+                }
+            }
+        };
+        let name = client.map_or("client", |c| c.name.as_str());
+        check(&Check {
+            own,
+            remote,
+            said: client.and_then(|c| c.said),
+            name,
+            always: &self.api_always,
+            ask: self.config.config.api.ask,
+        })
+    }
+
+    /// Keeps the request and asks the user (one question for each client).
+    fn ask_access(&mut self, request: ApiRequest) {
+        if let Some(ask) = self
+            .api_questions
+            .iter_mut()
+            .find(|a| a.client == request.client)
+        {
+            ask.requests.push(request);
+            return;
+        }
+        self.api_questions.push_back(ApiAsk {
+            client: request.client,
+            requests: vec![request],
+        });
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+            running
+                .window
+                .request_user_attention(Some(winit::window::UserAttentionType::Informational));
+        }
+    }
+
+    /// The lines of the access question that is open now.
+    pub(super) fn access_question_lines(&self) -> Option<Vec<String>> {
+        let ask = self.api_questions.front()?;
+        let client = self.api_clients.get(&ask.client);
+        let name = client.map_or("A program", |c| c.name.as_str());
+        let tab = client.and_then(|c| c.pane).and_then(|pane| {
+            let running = self.running.as_ref()?;
+            running
+                .mux
+                .tabs()
+                .iter()
+                .position(|t| t.layout.contains(pane))
+                .map(|i| i + 1)
+        });
+        Some(crate::access::question(name, tab))
+    }
+
+    /// The user answered the access question: run or refuse the requests that waited.
+    pub(super) fn answer_access(&mut self, event_loop: &ActiveEventLoop, answer: AccessAnswer) {
+        let Some(ask) = self.api_questions.pop_front() else {
+            return;
+        };
+        if let Some(client) = self.api_clients.get_mut(&ask.client) {
+            client.said = Some(answer != AccessAnswer::Deny);
+            if answer == AccessAnswer::Always {
+                self.api_always.insert(client.name.clone());
+            }
+        }
+        for request in ask.requests {
+            self.api_call(event_loop, request);
+        }
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// A client went away: forget it, its waits, and its questions.
+    pub(super) fn api_client_gone(&mut self, client: ClientId) {
+        self.api_clients.remove(&client);
+        self.waits.retain(|w| w.client != client);
+        self.api_questions.retain(|a| a.client != client);
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    fn api_wait_for(&mut self, request: ApiRequest) {
+        let result = (|| {
+            let pane = self.target_pane(request.client, &request.params)?;
+            let event = str_param(&request.params, "event")?
+                .ok_or_else(|| RpcError::invalid_params("give an `event`"))?;
+            let kind = parse_kind(&event, str_param(&request.params, "pattern")?)
+                .map_err(RpcError::invalid_params)?;
+            let ms = request
+                .params
+                .get("timeout_ms")
+                .and_then(Value::as_f64)
+                .unwrap_or(30_000.0)
+                .clamp(0.0, 3_600_000.0);
+            Ok((
+                pane,
+                kind,
+                Instant::now() + Duration::from_millis(ms as u64),
+            ))
+        })();
+        let (pane, kind, deadline) = match result {
+            Ok(wait) => wait,
+            Err(err) => {
+                let _ = request.reply.send(Err(err));
+                return;
+            }
+        };
+        // A text that is on the screen already: no need to wait.
+        if let WaitKind::Text(pattern) = &kind {
+            let running = self.running.as_ref().expect("checked in api_call");
+            let screen = running.panes[&pane].session.screen_text();
+            if screen.contains(pattern.as_str()) {
+                let _ = request
+                    .reply
+                    .send(Ok(json!({ "event": "text", "pane": pane.0 })));
+                return;
+            }
+        }
+        self.waits.push(Wait {
+            client: request.client,
+            pane,
+            kind,
+            deadline,
+            reply: request.reply,
+        });
+    }
+
+    /// Something happened in a pane: answer the waits that waited for it.
+    pub(super) fn resolve_waits(&mut self, pane: PaneId, happening: Happening, data: Value) {
+        if self.waits.is_empty() {
+            return;
+        }
+        let (done, waiting): (Vec<Wait>, Vec<Wait>) = std::mem::take(&mut self.waits)
+            .into_iter()
+            .partition(|w| w.pane == pane && matches(&w.kind, happening));
+        self.waits = waiting;
+        for wait in done {
+            let _ = wait.reply.send(Ok(data.clone()));
+        }
+    }
+
+    /// The screen of a pane changed: check the waits for a text.
+    pub(super) fn check_text_waits(&mut self, pane: PaneId) {
+        if !self
+            .waits
+            .iter()
+            .any(|w| w.pane == pane && matches!(w.kind, WaitKind::Text(_)))
+        {
+            return;
+        }
+        let Some(screen) = self
+            .running
+            .as_ref()
+            .and_then(|r| r.panes.get(&pane))
+            .map(|p| p.session.screen_text())
+        else {
+            return;
+        };
+        self.resolve_waits(
+            pane,
+            Happening::Screen(&screen),
+            json!({ "event": "text", "pane": pane.0 }),
+        );
+    }
+
+    /// Waits whose time is over get a timeout. Returns when the next one ends.
+    pub(super) fn expire_waits(&mut self, now: Instant) -> Option<Instant> {
+        let (over, waiting): (Vec<Wait>, Vec<Wait>) = std::mem::take(&mut self.waits)
+            .into_iter()
+            .partition(|w| w.deadline <= now);
+        self.waits = waiting;
+        for wait in over {
+            let _ = wait
+                .reply
+                .send(Err(RpcError::new(RpcError::TIMEOUT, "the time is over")));
+        }
+        self.waits.iter().map(|w| w.deadline).min()
+    }
+
+    /// A pane closed: its inbox goes, and its waits get an error.
+    pub(super) fn api_pane_closed(&mut self, pane: PaneId) {
+        self.inbox.remove(pane);
+        let (gone, waiting): (Vec<Wait>, Vec<Wait>) = std::mem::take(&mut self.waits)
+            .into_iter()
+            .partition(|w| w.pane == pane);
+        self.waits = waiting;
+        for wait in gone {
+            let _ = wait
+                .reply
+                .send(Err(RpcError::new(RpcError::NOT_FOUND, "the pane closed")));
+        }
+        self.api_event("pane_closed", json!({ "pane": pane.0 }));
     }
 
     fn api_dispatch(
@@ -89,7 +349,7 @@ impl App {
         match method {
             "hello" => self.api_hello(client, params),
             "list" => Ok(self.api_list()),
-            "spawn" => self.api_spawn(params),
+            "spawn" => self.api_spawn(client, params),
             "send_text" => self.api_send_text(client, params),
             "get_text" => self.api_get_text(client, params),
             "focus" => {
@@ -108,6 +368,31 @@ impl App {
                 Ok(json!({}))
             }
             "set_title" => self.api_set_title(client, params),
+            "send_message" => self.api_send_message(client, params),
+            "read_messages" => {
+                let pane = self.target_pane(client, params)?;
+                let unread_only = bool_param(params, "unread_only")?.unwrap_or(true);
+                let mark_read = bool_param(params, "mark_read")?.unwrap_or(true);
+                let messages: Vec<Value> = self
+                    .inbox
+                    .read(pane, unread_only, mark_read)
+                    .into_iter()
+                    .map(|m| {
+                        json!({
+                            "id": m.id,
+                            "from": m.from.map(|p| p.0),
+                            "from_name": m.from_name,
+                            "text": m.text,
+                            "time": m.time,
+                            "read": m.read,
+                        })
+                    })
+                    .collect();
+                if let Some(running) = &self.running {
+                    running.window.request_redraw();
+                }
+                Ok(json!({ "pane": pane.0, "messages": messages }))
+            }
             "notify" => {
                 let title = str_param(params, "title")?.unwrap_or_default();
                 let body = str_param(params, "body")?.unwrap_or_default();
@@ -150,7 +435,14 @@ impl App {
                 .as_ref()
                 .is_some_and(|r| r.panes.contains_key(p))
         });
-        self.api_clients.insert(client, ApiClient { name, pane });
+        self.api_clients.insert(
+            client,
+            ApiClient {
+                name,
+                pane,
+                said: None,
+            },
+        );
         Ok(json!({
             "api_version": fterm_api::API_VERSION,
             "fterm": env!("CARGO_PKG_VERSION"),
@@ -196,6 +488,8 @@ impl App {
             "running": p.shell.is_running(),
             "at_prompt": p.shell.at_prompt(),
             "agent": p.agent.as_ref().map(|a| json!({ "state": a.kind.name(), "message": a.message })),
+            "remote": p.remote,
+            "messages": self.inbox.unread(pane),
             "last_command": p.last_command.as_ref().map(|c| json!({
                 "command": c.command,
                 "exit": c.exit,
@@ -237,7 +531,7 @@ impl App {
         })
     }
 
-    fn api_spawn(&mut self, params: &Value) -> Result<Value, RpcError> {
+    fn api_spawn(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
         let place = place_param(params)?;
         let profile = str_param(params, "profile")?;
         if let Some(cwd) = str_param(params, "cwd")? {
@@ -259,6 +553,9 @@ impl App {
         self.spawn_cwd = None;
         result.map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
         let pane = self.running.as_ref().and_then(|r| r.mux.active_pane());
+        if let Some(p) = pane.and_then(|id| self.running.as_mut()?.panes.get_mut(&id)) {
+            p.opened_by = Some(client);
+        }
         Ok(json!({ "pane": pane.map(|p| p.0) }))
     }
 
@@ -365,5 +662,71 @@ impl App {
         running.window.request_redraw();
         self.update_window_title();
         Ok(json!({}))
+    }
+}
+
+impl App {
+    fn api_send_message(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
+        let to = pane_param(params, "to")?
+            .map(PaneId)
+            .ok_or_else(|| RpcError::invalid_params("give `to` (a pane id)"))?;
+        let text = str_param(params, "text")?.unwrap_or_default();
+        if text.trim().is_empty() {
+            return Err(RpcError::invalid_params("the message is empty"));
+        }
+        if text.len() > MAX_MESSAGE {
+            return Err(RpcError::invalid_params(format!(
+                "the message is longer than {MAX_MESSAGE} bytes"
+            )));
+        }
+        let running = self.running.as_ref().expect("checked in api_call");
+        if !running.panes.contains_key(&to) {
+            return Err(not_found(&format!("pane {}", to.0)));
+        }
+        let sender = self.api_clients.get(&client).cloned().unwrap_or_default();
+        let from_name = if sender.name.is_empty() {
+            "a program".to_owned()
+        } else {
+            sender.name.clone()
+        };
+        let id = self
+            .inbox
+            .send(to, sender.pane, &from_name, &text, now_ms());
+        // The user sees it too (a toast and the count in the Agents panel).
+        let tab = running
+            .mux
+            .tabs()
+            .iter()
+            .position(|t| t.layout.contains(to))
+            .and_then(|i| running.tab_titles().get(i).cloned())
+            .unwrap_or_default();
+        let first_line: String = text
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .take(80)
+            .collect();
+        self.notify(
+            Some(to),
+            &format!("Message for {tab}"),
+            &format!("{from_name}: {first_line}"),
+            Level::Info,
+            Source::Api,
+        );
+        let data = json!({
+            "event": "message",
+            "id": id,
+            "to": to.0,
+            "from": sender.pane.map(|p| p.0),
+            "from_name": from_name,
+            "text": text,
+        });
+        self.api_event("message", data.clone());
+        self.resolve_waits(to, Happening::Message, data);
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+        Ok(json!({ "id": id }))
     }
 }

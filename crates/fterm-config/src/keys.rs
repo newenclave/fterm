@@ -180,11 +180,13 @@ pub enum BuiltinAction {
     HistoryCommands,
     /// The folder history popup (like Alt+F12 in Far).
     HistoryDirs,
+    /// API clients may (not) read and type into the active pane.
+    ToggleRemoteControl,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 37] = [
+    pub const ALL: [BuiltinAction; 38] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -222,6 +224,7 @@ impl BuiltinAction {
         Self::FocusDock,
         Self::HistoryCommands,
         Self::HistoryDirs,
+        Self::ToggleRemoteControl,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -264,6 +267,7 @@ impl BuiltinAction {
             Self::FocusDock => "focus_dock",
             Self::HistoryCommands => "history_commands",
             Self::HistoryDirs => "history_dirs",
+            Self::ToggleRemoteControl => "toggle_remote_control",
         };
         name.to_owned()
     }
@@ -294,6 +298,7 @@ impl BuiltinAction {
             Self::FocusDock => "Focus the dock or the terminal".to_owned(),
             Self::HistoryCommands => "Command history".to_owned(),
             Self::HistoryDirs => "Folder history".to_owned(),
+            Self::ToggleRemoteControl => "Remote control on or off for this pane".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -428,6 +433,12 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_control_action() {
+        let action = BuiltinAction::from_name("toggle_remote_control").unwrap();
+        assert_eq!(action.label(), "Remote control on or off for this pane");
+    }
 
     #[test]
     fn history_actions_and_keys() {

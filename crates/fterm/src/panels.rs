@@ -234,6 +234,8 @@ pub struct AgentEntry<'a> {
     /// The tab title.
     pub name: &'a str,
     pub state: &'a AgentState,
+    /// Unread messages in its inbox.
+    pub messages: usize,
 }
 
 pub fn agent_rows(entries: &[AgentEntry], now: Instant) -> Vec<(DockRow, Option<PaneId>)> {
@@ -251,9 +253,14 @@ pub fn agent_rows(entries: &[AgentEntry], now: Instant) -> Vec<(DockRow, Option<
             } else {
                 e.state.message.clone()
             };
+            let title = if e.messages > 0 {
+                format!("{} · ✉ {}", e.name, e.messages)
+            } else {
+                e.name.to_owned()
+            };
             let row = DockRow {
                 marker: badge_color(e.state.kind),
-                title: e.name.to_owned(),
+                title,
                 detail,
                 right: short_ago(now.saturating_duration_since(e.state.since)),
                 new: !e.state.seen,
@@ -337,11 +344,13 @@ mod tests {
                 pane: PaneId(1),
                 name: "claude",
                 state: &waiting,
+                messages: 0,
             },
             AgentEntry {
                 pane: PaneId(2),
                 name: "api",
                 state: &done,
+                messages: 2,
             },
         ];
         let rows = agent_rows(&entries, t0 + Duration::from_secs(30));
@@ -354,6 +363,10 @@ mod tests {
         assert!(row.new);
         assert_eq!(*pane, Some(PaneId(1)));
         assert_eq!(rows[1].0.detail, "Tests are green");
+        assert_eq!(
+            rows[1].0.title, "api · ✉ 2",
+            "unread messages show in the title"
+        );
         assert!(!rows[1].0.new);
     }
 

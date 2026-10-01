@@ -1,6 +1,7 @@
 // No console window in release builds on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod access;
 mod agent;
 mod api;
 mod app;
@@ -9,12 +10,14 @@ mod close;
 mod gpu;
 mod hints;
 mod history_popup;
+mod inbox;
 mod input;
 mod mouse;
 mod notify;
 mod palette;
 mod panels;
 mod title;
+mod waits;
 
 use tracing_subscriber::EnvFilter;
 use winit::event_loop::{ControlFlow, EventLoop};
