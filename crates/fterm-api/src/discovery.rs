@@ -75,7 +75,7 @@ pub fn instances(dir: &Path) -> Vec<Instance> {
             }
         }
     }
-    alive.sort_by(|a, b| b.started.cmp(&a.started));
+    alive.sort_by_key(|a| std::cmp::Reverse(a.started));
     alive
 }
 

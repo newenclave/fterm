@@ -20,10 +20,19 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::tty;
+#[cfg(windows)]
+use alacritty_terminal::tty::{PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN};
 use alacritty_terminal::vte::ansi;
 use polling::{Event as PollingEvent, Events, PollMode, Poller};
 
 use crate::osc::{OscEvent, PromptMark, Scanner};
+
+// alacritty registers the pty with these poll keys. On Unix they are not public, so here is a copy
+// (alacritty_terminal 0.26, `tty/unix.rs`).
+#[cfg(not(windows))]
+const PTY_READ_WRITE_TOKEN: usize = 0;
+#[cfg(not(windows))]
+const PTY_CHILD_EVENT_TOKEN: usize = 1;
 
 /// Max bytes to read from the pty before the terminal is drawn again.
 const READ_BUFFER_SIZE: usize = 0x10_0000;
@@ -305,7 +314,7 @@ where
 
                     for event in events.iter() {
                         match event.key {
-                            tty::PTY_CHILD_EVENT_TOKEN => {
+                            PTY_CHILD_EVENT_TOKEN => {
                                 if let Some(tty::ChildEvent::Exited(status)) =
                                     self.pty.next_child_event()
                                 {
@@ -313,7 +322,7 @@ where
                                     break 'event_loop;
                                 }
                             }
-                            tty::PTY_READ_WRITE_TOKEN => {
+                            PTY_READ_WRITE_TOKEN => {
                                 if event.is_interrupt() {
                                     continue;
                                 }
