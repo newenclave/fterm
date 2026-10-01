@@ -1,0 +1,18 @@
+[package]
+name = "fterm-api"
+description = "The local API of fterm: JSON-RPC over a named pipe or a unix socket"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+interprocess.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+widestring.workspace = true
+
+[lints]
+workspace = true

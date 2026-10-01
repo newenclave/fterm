@@ -92,6 +92,16 @@ processes and real escape codes, and later use it from the CLI and MCP (Phase 7)
 - The shell scripts send the command text (OSC 633;E). The pty loop runs the parser only up to the end of
   133;B and reads the cursor there (`InputStart`), so fterm knows where the typed text starts.
 
+## The local API (Phase 7)
+- `fterm-api`: JSON-RPC 2.0, one JSON object per line, over a local socket (the `interprocess` crate):
+  a named pipe on Windows (only the owner and the system can open it), a unix socket in a 0700 folder elsewhere.
+- The server has a listener thread and one thread per client, so a slow call (`wait_for`) does not stop
+  other clients. It knows `subscribe` / `unsubscribe` itself; the app answers all other methods.
+- Each window writes `instances/<pid>.json` with its socket, and every pane gets `FTERM_SOCKET`.
+  So `fterm cli` and `fterm mcp` find the right window.
+- MCP clients (Claude Code, OpenCode) speak stdio, not pipes: `fterm mcp` is a small process between them
+  and the pipe.
+
 ## Colors
 
 - `fterm-term/src/colors.rs` has the palette: 16 colors (Catppuccin Mocha), the 256-color table,
