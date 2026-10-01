@@ -8,6 +8,7 @@ fterm is a fast GPU terminal for Windows, Linux, and macOS, with built-in AI too
 - Keys and mouse: [docs/KEYS.md](docs/KEYS.md)
 - Claude Code (tab dots and hooks): [docs/CLAUDE.md](docs/CLAUDE.md)
 - The API for scripts and agents: [docs/API.md](docs/API.md)
+- MCP for Claude Code and other agents: [docs/MCP.md](docs/MCP.md)
 - Config and profiles: [docs/CONFIG.md](docs/CONFIG.md)
 
 ## Font license

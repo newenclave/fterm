@@ -224,7 +224,10 @@ Now the window × (and Alt+F4) closes fterm at once, with all tabs and programs.
 - **Check:** × with only shells closes at once (with `"running"`); with `claude` running it asks; a Lua hook
   that returns `false` keeps the window open and shows the toast.
 
-### Phase 7 — Local API, CLI, and MCP
+### Phase 7 — Local API, CLI, and MCP ✅ (done: the API, `ftermctl`, `ftermctl mcp`, access questions, messages; see [API.md](API.md) and [MCP.md](MCP.md))
+The CLI is a separate console program, `ftermctl` (not `fterm cli`): fterm.exe is a window program,
+so a shell would not wait for it and would not show its output. Later: an HTTP transport for MCP clients
+that want a URL, and saved "always allow" answers.
 - Local API: JSON-RPC over a named pipe (Windows) or a unix socket (Linux/macOS).
 - Commands: `list`, `spawn`, `send-text`, `get-text` (screen, scrollback, output of the last command), `set-title`, `notify`, `subscribe` (stream of events).
 - `fterm cli ...` — the same app, but in CLI mode.
@@ -274,5 +277,5 @@ Now the window × (and Alt+F4) closes fterm at once, with all tabs and programs.
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
 ## Next step
-Choose the next phase: 7 (local API, CLI, and MCP) or 3b (images).
+Choose the next phase: 8 (AI panel), 9 (text to command), or 3b (images).
 Write a detailed plan for it. Then build it.

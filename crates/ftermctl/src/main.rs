@@ -5,13 +5,14 @@
 //! or it takes the newest fterm window.
 
 mod cli;
+mod mcp;
+mod run;
 mod show;
 
 use std::process::ExitCode;
 
 use cli::{Cli, Command};
-use fterm_api::client::Client;
-use fterm_api::discovery::{SOCKET_ENV, find, instances_dir};
+use run::connect;
 use serde_json::{Value, json};
 
 const USAGE: &str = "\
@@ -72,7 +73,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             print!("{USAGE}");
             Ok(ExitCode::SUCCESS)
         }
-        Command::Mcp => Err("the MCP server comes in the next step".to_owned()),
+        Command::Mcp => mcp::serve(cli.window).map(|()| ExitCode::SUCCESS),
         Command::Call { method, params } => {
             let mut client = connect(cli.window)?;
             let answer = client
@@ -109,102 +110,29 @@ fn run_command(
     wait: bool,
     timeout_ms: u64,
 ) -> Result<ExitCode, String> {
-    let mut client = connect(cli.window)?;
-    let mut params = json!({ "text": text, "enter": true });
-    if let Some(pane) = pane {
-        params["pane"] = json!(pane);
-    }
     if !wait {
+        let mut client = connect(cli.window)?;
+        let mut params = json!({ "text": text, "enter": true });
+        if let Some(pane) = pane {
+            params["pane"] = json!(pane);
+        }
         client
             .call("send_text", params)
             .map_err(|err| err.to_string())?;
         return Ok(ExitCode::SUCCESS);
     }
-    // Which pane: ask the window, so the event below can be matched.
-    let target = match pane {
-        Some(pane) => pane,
-        None => target_pane(&mut client)?,
-    };
-    params["pane"] = json!(target);
-    // Subscribe first (on a second connection), so a fast command cannot end before we listen.
-    let mut events = connect(cli.window)?;
-    events
-        .call(
-            "subscribe",
-            json!({ "events": ["command_done", "pane_closed"] }),
-        )
-        .map_err(|err| err.to_string())?;
-    client
-        .call("send_text", params)
-        .map_err(|err| err.to_string())?;
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        loop {
-            match events.next_event() {
-                Ok(event) if event.params["pane"] == json!(target) => {
-                    let _ = done_tx.send(Ok(event));
-                    return;
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    let _ = done_tx.send(Err(err.to_string()));
-                    return;
-                }
-            }
-        }
-    });
-    let event = match done_rx.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
-        Ok(event) => event?,
-        Err(_) => {
-            return Err(format!(
-                "the command did not end in {} s",
-                timeout_ms / 1000
-            ));
-        }
-    };
-    if event.method == "pane_closed" {
-        return Err("the pane closed".to_owned());
-    }
-    let output = client
-        .call(
-            "get_text",
-            json!({ "pane": target, "what": "last_output", "lines": 10_000 }),
-        )
-        .map_err(|err| err.to_string())?;
-    let exit = event.params["exit"].as_i64().unwrap_or(0);
+    let result = run::run_and_wait(cli.window, pane, text, timeout_ms)?;
     if cli.json {
-        let answer = json!({
-            "pane": target,
-            "command": event.params["command"],
-            "exit": exit,
-            "took_ms": event.params["took_ms"],
-            "output": output["text"],
-        });
         println!(
             "{}",
-            serde_json::to_string_pretty(&answer).unwrap_or_default()
+            serde_json::to_string_pretty(&result).unwrap_or_default()
         );
-    } else if let Some(text) = output["text"].as_str().filter(|t| !t.is_empty()) {
-        println!("{text}");
+    } else if let Some(output) = result["output"].as_str().filter(|t| !t.is_empty()) {
+        println!("{output}");
     }
+    let exit = result["exit"].as_i64().unwrap_or(0);
     // Exit codes of a process are 0..=255.
     Ok(ExitCode::from(exit.clamp(0, 255) as u8))
-}
-
-/// The pane that a call without `pane` uses: our own pane, else the active pane.
-fn target_pane(client: &mut Client) -> Result<u64, String> {
-    if let Some(pane) = std::env::var("FTERM_PANE_ID")
-        .ok()
-        .and_then(|p| p.parse().ok())
-    {
-        return Ok(pane);
-    }
-    let list = client
-        .call("list", Value::Null)
-        .map_err(|err| err.to_string())?;
-    list["active_pane"]
-        .as_u64()
-        .ok_or_else(|| "no active pane".to_owned())
 }
 
 fn print_answer(as_json: bool, method: &str, answer: &Value) {
@@ -228,22 +156,4 @@ fn print_answer(as_json: bool, method: &str, answer: &Value) {
             serde_json::to_string_pretty(answer).unwrap_or_default()
         ),
     }
-}
-
-/// Connects to the window and says who we are.
-fn connect(window: Option<u32>) -> Result<Client, String> {
-    let env_socket = std::env::var(SOCKET_ENV).ok();
-    // `--window` wins over the env var.
-    let env_socket = if window.is_some() { None } else { env_socket };
-    let socket = find(&instances_dir(), env_socket.as_deref(), window)
-        .ok_or("no fterm window found (is fterm running?)")?;
-    let mut client =
-        Client::connect(&socket).map_err(|err| format!("cannot connect to {socket}: {err}"))?;
-    let pane: Option<u64> = std::env::var("FTERM_PANE_ID")
-        .ok()
-        .and_then(|p| p.parse().ok());
-    client
-        .call("hello", json!({ "name": "ftermctl", "pane": pane }))
-        .map_err(|err| err.to_string())?;
-    Ok(client)
 }
