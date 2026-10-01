@@ -1,0 +1,16 @@
+[package]
+name = "fterm-ai"
+description = "AI providers for fterm: Anthropic and OpenAI-like chat APIs with streaming"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+keyring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true
+
+[lints]
+workspace = true

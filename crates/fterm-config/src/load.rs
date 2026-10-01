@@ -110,6 +110,99 @@ impl Default for ApiConfig {
     }
 }
 
+/// The protocol of an AI provider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AiKind {
+    Anthropic,
+    /// OpenAI chat completions (OpenAI, OpenRouter, Ollama, LM Studio).
+    OpenAi,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AiProvider {
+    pub name: String,
+    pub kind: AiKind,
+    pub url: String,
+    /// Empty = not set yet (the user must choose one).
+    pub model: String,
+    pub key_env: Option<String>,
+    pub needs_key: bool,
+}
+
+/// `ai = { provider, providers, system, max_tokens }`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AiConfig {
+    pub provider: String,
+    pub providers: Vec<AiProvider>,
+    /// Extra instructions from the user.
+    pub system: String,
+    pub max_tokens: u32,
+}
+
+impl AiConfig {
+    /// The provider to use now.
+    pub fn current(&self) -> Option<&AiProvider> {
+        self.providers.iter().find(|p| p.name == self.provider)
+    }
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        let preset = |name: &str,
+                      kind: AiKind,
+                      url: &str,
+                      model: &str,
+                      key_env: Option<&str>,
+                      needs_key: bool| AiProvider {
+            name: name.to_owned(),
+            kind,
+            url: url.to_owned(),
+            model: model.to_owned(),
+            key_env: key_env.map(str::to_owned),
+            needs_key,
+        };
+        Self {
+            provider: "anthropic".to_owned(),
+            providers: vec![
+                preset(
+                    "anthropic",
+                    AiKind::Anthropic,
+                    "https://api.anthropic.com/v1",
+                    "claude-haiku-4-5-20251001",
+                    None,
+                    true,
+                ),
+                preset(
+                    "ollama",
+                    AiKind::OpenAi,
+                    "http://localhost:11434/v1",
+                    "llama3.2",
+                    None,
+                    false,
+                ),
+                preset(
+                    "openrouter",
+                    AiKind::OpenAi,
+                    "https://openrouter.ai/api/v1",
+                    "",
+                    Some("OPENROUTER_API_KEY"),
+                    true,
+                ),
+                preset(
+                    "openai",
+                    AiKind::OpenAi,
+                    "https://api.openai.com/v1",
+                    "",
+                    Some("OPENAI_API_KEY"),
+                    true,
+                ),
+            ],
+            system: String::new(),
+            max_tokens: 2048,
+        }
+    }
+}
+
 /// What `window_title` gets.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TitleIn {
@@ -259,6 +352,7 @@ pub struct Config {
     pub history: HistoryConfig,
     pub confirm_close: ConfirmClose,
     pub api: ApiConfig,
+    pub ai: AiConfig,
     /// The Lua function `on_notification` (its number), if there is one.
     pub on_notification: Option<usize>,
     /// The Lua function `on_agent` (its number), if there is one.
@@ -289,6 +383,7 @@ impl Default for Config {
             history: HistoryConfig::default(),
             confirm_close: ConfirmClose::default(),
             api: ApiConfig::default(),
+            ai: AiConfig::default(),
             on_notification: None,
             on_agent: None,
             on_history: None,
@@ -718,6 +813,9 @@ impl Reader {
         config.on_history = self.hook(root, "on_history")?;
         config.on_close_window = self.hook(root, "on_close_window")?;
         config.window_title = self.hook(root, "window_title")?;
+        if let Some(table) = table_field(root, "ai", "ai")? {
+            config.ai = ai(&table)?;
+        }
         if let Some(table) = table_field(root, "api", "api")? {
             for key in ["enabled", "ask"] {
                 match table
@@ -870,6 +968,92 @@ impl Reader {
             )),
         }
     }
+}
+
+fn ai(table: &Table) -> Result<AiConfig, String> {
+    let mut ai = AiConfig::default();
+    if let Some(system) = string_field(table, "system", "ai.system")? {
+        ai.system = system;
+    }
+    if let Some(n) = number_field(table, "max_tokens", "ai.max_tokens")? {
+        if !(1.0..=200_000.0).contains(&n) {
+            return Err(format!(
+                "ai.max_tokens: must be between 1 and 200000, got {n}"
+            ));
+        }
+        ai.max_tokens = n as u32;
+    }
+    if let Some(providers) = table_field(table, "providers", "ai.providers")? {
+        for pair in providers.pairs::<String, Table>() {
+            let (name, p) = pair.map_err(|err| format!("ai.providers: {err}"))?;
+            let path = format!("ai.providers.{name}");
+            let mut provider = ai
+                .providers
+                .iter()
+                .find(|x| x.name == name)
+                .cloned()
+                .unwrap_or(AiProvider {
+                    name: name.clone(),
+                    kind: AiKind::OpenAi,
+                    url: String::new(),
+                    model: String::new(),
+                    key_env: None,
+                    needs_key: true,
+                });
+            if let Some(kind) = string_field(&p, "kind", &format!("{path}.kind"))? {
+                provider.kind = match kind.as_str() {
+                    "anthropic" => AiKind::Anthropic,
+                    "openai" => AiKind::OpenAi,
+                    other => {
+                        return Err(format!(
+                            "{path}.kind: must be \"anthropic\" or \"openai\", got `{other}`"
+                        ));
+                    }
+                };
+            }
+            if let Some(url) = string_field(&p, "url", &format!("{path}.url"))? {
+                provider.url = url;
+            }
+            if let Some(model) = string_field(&p, "model", &format!("{path}.model"))? {
+                provider.model = model;
+            }
+            match p
+                .get::<Value>("key")
+                .map_err(|err| format!("{path}.key: {err}"))?
+            {
+                Value::Nil => {}
+                Value::Boolean(on) => provider.needs_key = on,
+                Value::String(env) => {
+                    provider.key_env = Some(env.to_string_lossy());
+                    provider.needs_key = true;
+                }
+                other => {
+                    return Err(format!(
+                        "{path}.key: false (no key) or the name of an env var, got {}",
+                        other.type_name()
+                    ));
+                }
+            }
+            if provider.url.is_empty() {
+                return Err(format!("{path}: give a `url` (and a `model`)"));
+            }
+            match ai.providers.iter_mut().find(|x| x.name == name) {
+                Some(old) => *old = provider,
+                None => ai.providers.push(provider),
+            }
+        }
+    }
+    if let Some(name) = string_field(table, "provider", "ai.provider")? {
+        if !ai.providers.iter().any(|p| p.name == name) {
+            let names: Vec<&str> = ai.providers.iter().map(|p| p.name.as_str()).collect();
+            return Err(format!(
+                "ai.provider: no provider `{name}` (there are: {})",
+                names.join(", ")
+            ));
+        }
+        ai.provider = name;
+    }
+    Ok(ai)
 }
 
 fn history(table: &Table) -> Result<HistoryConfig, String> {
@@ -1644,6 +1828,80 @@ mod tests {
             None,
             "nil = the default"
         );
+    }
+
+    #[test]
+    fn ai_defaults() {
+        let ai = load("return {}").config.ai;
+        assert_eq!(ai.provider, "anthropic");
+        assert_eq!(ai.max_tokens, 2048);
+        let p = ai.current().unwrap();
+        assert_eq!(
+            (p.name.as_str(), p.kind, p.model.as_str()),
+            ("anthropic", AiKind::Anthropic, "claude-haiku-4-5-20251001")
+        );
+        assert!(p.needs_key);
+        let ollama = ai.providers.iter().find(|p| p.name == "ollama").unwrap();
+        assert_eq!(
+            (ollama.kind, ollama.url.as_str()),
+            (AiKind::OpenAi, "http://localhost:11434/v1")
+        );
+        assert!(!ollama.needs_key, "a local server needs no key");
+        assert!(ai.providers.iter().any(|p| p.name == "openrouter"));
+    }
+
+    #[test]
+    fn ai_from_the_config() {
+        let ai = load(
+            r#"return { ai = {
+              provider = "ollama",
+              system = "Answer in Russian.",
+              max_tokens = 500,
+              providers = {
+                ollama = { model = "qwen2.5-coder" },
+                anthropic = { model = "claude-sonnet-5" },
+                lmstudio = { kind = "openai", url = "http://localhost:1234/v1", model = "local", key = false },
+              },
+            } }"#,
+        )
+        .config
+        .ai;
+        assert_eq!(ai.provider, "ollama");
+        assert_eq!(ai.system, "Answer in Russian.");
+        assert_eq!(ai.max_tokens, 500);
+        let ollama = ai.current().unwrap();
+        assert_eq!(ollama.model, "qwen2.5-coder");
+        assert_eq!(
+            ollama.url, "http://localhost:11434/v1",
+            "the rest of the preset stays"
+        );
+        let anthropic = ai.providers.iter().find(|p| p.name == "anthropic").unwrap();
+        assert_eq!(anthropic.model, "claude-sonnet-5");
+        let lm = ai.providers.iter().find(|p| p.name == "lmstudio").unwrap();
+        assert_eq!(
+            (lm.kind, lm.url.as_str(), lm.needs_key),
+            (AiKind::OpenAi, "http://localhost:1234/v1", false)
+        );
+    }
+
+    #[test]
+    fn bad_ai_config() {
+        for (source, part) in [
+            (r#"return { ai = { provider = "nope" } }"#, "ai.provider"),
+            (
+                r#"return { ai = { providers = { x = { kind = "openai" } } } }"#,
+                "ai.providers.x",
+            ),
+            (
+                r#"return { ai = { providers = { x = { kind = "smoke", url = "u", model = "m" } } } }"#,
+                "ai.providers.x.kind",
+            ),
+        ] {
+            let Err(err) = load_str(source, "t") else {
+                panic!("{source} must fail");
+            };
+            assert!(err.contains(part), "{err}");
+        }
     }
 
     #[test]
