@@ -6,12 +6,26 @@
 __FTERM_LOADED=1
 __fterm_running=
 
+# The VS Code escape for OSC 633;E: `\` -> `\\`, `;` -> `\x3b`, a new line -> `\x0a`.
+__fterm_escape() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//;/\\x3b}
+  s=${s//$'\n'/\\x0a}
+  printf '%s' "$s"
+}
+
 __fterm_preexec() {
   # The DEBUG trap runs for every command; only the first one after the prompt counts.
   [ -n "$COMP_LINE" ] && return
   [ "$BASH_COMMAND" = "$PROMPT_COMMAND" ] && return
   if [ -z "$__fterm_running" ]; then
     __fterm_running=1
+    # The whole line, for the history (BASH_COMMAND is only one part of it).
+    local line
+    line=$(HISTTIMEFORMAT= builtin history 1)
+    line=${line#*[0-9]  }
+    [ -n "$line" ] && printf '\033]633;E;%s\007' "$(__fterm_escape "$line")"
     printf '\033]133;C\007'
   fi
 }

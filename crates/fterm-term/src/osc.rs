@@ -14,6 +14,11 @@ pub enum OscEvent {
     Prompt(PromptMark),
     /// An agent state from a hook: OSC 777;fterm-agent;<state>;<message>.
     Agent { state: String, message: String },
+    /// The command line that the user typed (OSC 633;E, the VS Code format). It comes before 133;C.
+    CommandLine(String),
+    /// Not from the shell: the pty loop adds it right after 133;B. The place of the cursor at that moment,
+    /// where the typed text starts. `line` counts from the top of the history (history size + screen line).
+    InputStart { line: usize, column: usize },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,9 +58,18 @@ enum State {
 impl Scanner {
     /// Reads `bytes` and adds the events it finds to `out`.
     pub fn feed(&mut self, bytes: &[u8], out: &mut Vec<OscEvent>) {
+        let mut at = Vec::new();
+        self.feed_at(bytes, &mut at);
+        out.extend(at.into_iter().map(|(_, event)| event));
+    }
+
+    /// Like `feed`, but each event comes with the offset just after its sequence in `bytes`.
+    /// So the parser can run up to that place first (for example, to know where the cursor is at 133;B).
+    pub fn feed_at(&mut self, bytes: &[u8], out: &mut Vec<(usize, OscEvent)>) {
         const ESC: u8 = 0x1b;
         const BEL: u8 = 0x07;
-        for &b in bytes {
+        for (i, &b) in bytes.iter().enumerate() {
+            let end = i + 1;
             self.state = match (self.state, b) {
                 (State::Ground, ESC) => State::Escape,
                 (State::Ground, _) => State::Ground,
@@ -65,7 +79,7 @@ impl Scanner {
                 }
                 (State::Escape, ESC) => State::Escape,
                 (State::Escape, _) => State::Ground,
-                (State::Osc, BEL) => self.finish(out),
+                (State::Osc, BEL) => self.finish(end, out),
                 (State::Osc, ESC) => State::OscEscape,
                 (State::Osc, _) if self.payload.len() >= MAX_OSC => {
                     self.payload.clear();
@@ -75,7 +89,7 @@ impl Scanner {
                     self.payload.push(b);
                     State::Osc
                 }
-                (State::OscEscape, b'\\') => self.finish(out),
+                (State::OscEscape, b'\\') => self.finish(end, out),
                 // ESC in the middle ends the OSC without a result; it can start a new one.
                 (State::OscEscape, b']') => {
                     self.payload.clear();
@@ -90,10 +104,10 @@ impl Scanner {
         }
     }
 
-    fn finish(&mut self, out: &mut Vec<OscEvent>) -> State {
+    fn finish(&mut self, end: usize, out: &mut Vec<(usize, OscEvent)>) -> State {
         let payload = String::from_utf8_lossy(&self.payload);
         if let Some(event) = parse(&payload) {
-            out.push(event);
+            out.push((end, event));
         }
         self.payload.clear();
         State::Ground
@@ -139,7 +153,13 @@ fn parse(payload: &str) -> Option<OscEvent> {
                 _ => None,
             }
         }
-        "133" => {
+        "633" if rest.starts_with("E;") => {
+            // E;<command>[;<nonce>]: `;` in the command is written as \x3b, so the first `;` ends it.
+            let command = rest[2..].split(';').next().unwrap_or_default();
+            Some(OscEvent::CommandLine(unescape_vscode(command)))
+        }
+        // VS Code sends the same A/B/C/D marks with 633.
+        "133" | "633" => {
             let mut parts = rest.split(';');
             let mark = match parts.next()? {
                 "A" => PromptMark::PromptStart,
@@ -152,6 +172,33 @@ fn parse(payload: &str) -> Option<OscEvent> {
         }
         _ => None,
     }
+}
+
+/// The VS Code escape: `\\` is `\`, `\xNN` is the byte NN. Anything else stays as it is.
+fn unescape_vscode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            if bytes.get(i + 1) == Some(&b'\\') {
+                out.push(b'\\');
+                i += 2;
+                continue;
+            }
+            if bytes.get(i + 1) == Some(&b'x')
+                && let Some(hex) = text.get(i + 2..i + 4)
+                && let Ok(byte) = u8::from_str_radix(hex, 16)
+            {
+                out.push(byte);
+                i += 4;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// `file://host/home/me/my%20code` -> `/home/me/my code`; `file://pc/C:/x` -> `C:/x`.
@@ -202,6 +249,58 @@ mod tests {
             scanner.feed(chunk, &mut out);
         }
         out
+    }
+
+    #[test]
+    fn command_line_from_633_e() {
+        // The VS Code format: `\\` is `\`, `\x3b` is `;`, `\x0a` is a new line.
+        let seq: &[u8] = b"\x1b]633;E;git commit -m \"a\\x3bb\" C:\\\\x\\x0ay\x07";
+        assert_eq!(
+            scan(&[seq]),
+            [OscEvent::CommandLine(
+                "git commit -m \"a;b\" C:\\x\ny".into()
+            )]
+        );
+        // A nonce after the command (VS Code sends one) is not part of the command.
+        assert_eq!(
+            scan(&[b"\x1b]633;E;ls -la;abc123\x07"]),
+            [OscEvent::CommandLine("ls -la".into())]
+        );
+        // A broken escape stays as it is.
+        assert_eq!(
+            scan(&[b"\x1b]633;E;echo \\xZZ\x07"]),
+            [OscEvent::CommandLine("echo \\xZZ".into())]
+        );
+    }
+
+    #[test]
+    fn vs_code_marks_are_prompt_marks() {
+        assert_eq!(
+            scan(&[b"\x1b]633;A\x07\x1b]633;B\x07\x1b]633;C\x07\x1b]633;D;3\x07"]),
+            [
+                OscEvent::Prompt(PromptMark::PromptStart),
+                OscEvent::Prompt(PromptMark::CommandStart),
+                OscEvent::Prompt(PromptMark::CommandExecuted),
+                OscEvent::Prompt(PromptMark::CommandFinished(Some(3))),
+            ]
+        );
+    }
+
+    #[test]
+    fn events_know_where_they_end() {
+        let mut scanner = Scanner::default();
+        let mut out = Vec::new();
+        let bytes: &[u8] = b"ab\x1b]133;A\x07PS> \x1b]133;B\x1b\\x";
+        scanner.feed_at(bytes, &mut out);
+        assert_eq!(
+            out,
+            [
+                (10, OscEvent::Prompt(PromptMark::PromptStart)),
+                (23, OscEvent::Prompt(PromptMark::CommandStart)),
+            ]
+        );
+        assert_eq!(&bytes[..10], b"ab\x1b]133;A\x07");
+        assert_eq!(bytes[23], b'x');
     }
 
     fn notify(title: Option<&str>, body: &str) -> OscEvent {

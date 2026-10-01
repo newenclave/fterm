@@ -7,7 +7,13 @@ use crate::osc::{OscEvent, PromptMark};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ShellEvent {
     /// A command ended. `took` is from the start of the command (OSC 133 C) to its end (D).
-    CommandDone { exit: Option<i32>, took: Duration },
+    /// `command` is its text (OSC 633;E) and `cwd` the folder where it started, when the shell tells them.
+    CommandDone {
+        exit: Option<i32>,
+        took: Duration,
+        command: Option<String>,
+        cwd: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -16,6 +22,12 @@ pub struct ShellState {
     pub cwd: Option<String>,
     /// When the running command started.
     running_since: Option<Instant>,
+    /// The running command: its text and the folder where it started.
+    running: (Option<String>, Option<String>),
+    /// The text of the next command (633;E comes just before 133;C).
+    typed: Option<String>,
+    /// Where the typed text starts (history line, column), while the shell waits for a command.
+    input_start: Option<(usize, usize)>,
 }
 
 impl ShellState {
@@ -26,19 +38,47 @@ impl ShellState {
                 self.cwd = Some(dir.clone());
                 None
             }
+            OscEvent::Prompt(PromptMark::PromptStart | PromptMark::CommandStart) => {
+                self.input_start = None;
+                None
+            }
+            OscEvent::InputStart { line, column } => {
+                self.input_start = Some((*line, *column));
+                None
+            }
+            OscEvent::CommandLine(text) => {
+                self.typed = Some(text.clone());
+                None
+            }
             OscEvent::Prompt(PromptMark::CommandExecuted) => {
                 self.running_since = Some(now);
+                self.running = (self.typed.take(), self.cwd.clone());
+                self.input_start = None;
                 None
             }
             OscEvent::Prompt(PromptMark::CommandFinished(exit)) => {
                 let since = self.running_since.take()?;
+                let (command, cwd) = std::mem::take(&mut self.running);
                 Some(ShellEvent::CommandDone {
                     exit: *exit,
                     took: now.saturating_duration_since(since),
+                    command,
+                    cwd,
                 })
             }
             _ => None,
         }
+    }
+
+    /// Where the typed text starts: (line from the top of the history, column).
+    /// `None` when a command runs, or the shell has no integration.
+    pub fn input_start(&self) -> Option<(usize, usize)> {
+        self.input_start
+    }
+
+    /// The shell waits for a command, and we know where the typed text starts.
+    pub fn at_prompt(&self) -> bool {
+        self.input_start.is_some() && !self.is_running()
     }
 
     /// True while a command runs (between OSC 133 C and D).
@@ -171,10 +211,68 @@ mod tests {
             done,
             Some(ShellEvent::CommandDone {
                 exit: Some(1),
-                took: Duration::from_secs(12)
+                took: Duration::from_secs(12),
+                command: None,
+                cwd: None,
             })
         );
         assert!(!shell.is_running());
+    }
+
+    #[test]
+    fn the_command_text_and_the_folder_come_with_the_end() {
+        let mut shell = ShellState::default();
+        let t0 = Instant::now();
+        shell.apply(&OscEvent::Cwd("C:/work".into()), t0);
+        shell.apply(&mark(PromptMark::CommandStart), t0);
+        shell.apply(&OscEvent::CommandLine("cargo test".into()), t0);
+        shell.apply(&mark(PromptMark::CommandExecuted), t0);
+        // The folder can change while the command runs (`cd`): the command ran in the old one.
+        shell.apply(&OscEvent::Cwd("C:/other".into()), t0);
+        let done = shell.apply(&mark(PromptMark::CommandFinished(Some(0))), t0);
+        assert_eq!(
+            done,
+            Some(ShellEvent::CommandDone {
+                exit: Some(0),
+                took: Duration::ZERO,
+                command: Some("cargo test".into()),
+                cwd: Some("C:/work".into()),
+            })
+        );
+        // The next command has no text until its own 633;E.
+        shell.apply(&mark(PromptMark::CommandExecuted), t0);
+        let Some(ShellEvent::CommandDone { command, .. }) =
+            shell.apply(&mark(PromptMark::CommandFinished(None)), t0)
+        else {
+            panic!("a command ended");
+        };
+        assert_eq!(command, None);
+    }
+
+    #[test]
+    fn the_input_start_is_known_only_at_the_prompt() {
+        let mut shell = ShellState::default();
+        let t0 = Instant::now();
+        assert_eq!(shell.input_start(), None);
+        shell.apply(&mark(PromptMark::CommandStart), t0);
+        shell.apply(
+            &OscEvent::InputStart {
+                line: 40,
+                column: 7,
+            },
+            t0,
+        );
+        assert_eq!(shell.input_start(), Some((40, 7)));
+        assert!(shell.at_prompt());
+        shell.apply(&mark(PromptMark::CommandExecuted), t0);
+        assert_eq!(shell.input_start(), None, "the command runs: no typing now");
+        assert!(!shell.at_prompt());
+        shell.apply(&mark(PromptMark::CommandFinished(Some(0))), t0);
+        shell.apply(&mark(PromptMark::PromptStart), t0);
+        assert!(
+            !shell.at_prompt(),
+            "the prompt is drawn, but there is no input place yet"
+        );
     }
 
     #[test]

@@ -16,13 +16,14 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{self, Event, EventListener, WindowSize};
+use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi;
 use polling::{Event as PollingEvent, Events, PollMode, Poller};
 
-use crate::osc::{OscEvent, Scanner};
+use crate::osc::{OscEvent, PromptMark, Scanner};
 
 /// Max bytes to read from the pty before the terminal is drawn again.
 const READ_BUFFER_SIZE: usize = 0x10_0000;
@@ -107,6 +108,7 @@ where
         let mut unprocessed = 0;
         let mut processed = 0;
         let mut osc = Vec::new();
+        let mut found = Vec::new();
 
         // Reserve the next terminal lock for pty reading.
         let _terminal_lease = Some(self.terminal.lease());
@@ -137,9 +139,28 @@ where
                 }),
             };
 
-            // Our OSC sequences first (the scanner only reads), then the parser.
-            self.scanner.feed(&buf[..unprocessed], &mut osc);
-            state.parser.advance(&mut **terminal, &buf[..unprocessed]);
+            // Our OSC sequences first (the scanner only reads), then the parser. At 133;B the parser
+            // runs only up to the end of that sequence, so we can read where the typed text starts.
+            found.clear();
+            self.scanner.feed_at(&buf[..unprocessed], &mut found);
+            let mut from = 0;
+            for (end, event) in found.drain(..) {
+                let input_start = event == OscEvent::Prompt(PromptMark::CommandStart);
+                osc.push(event);
+                if input_start {
+                    state.parser.advance(&mut **terminal, &buf[from..end]);
+                    from = end;
+                    let grid = terminal.grid();
+                    let cursor = grid.cursor.point;
+                    osc.push(OscEvent::InputStart {
+                        line: (grid.history_size() as i32 + cursor.line.0).max(0) as usize,
+                        column: cursor.column.0,
+                    });
+                }
+            }
+            state
+                .parser
+                .advance(&mut **terminal, &buf[from..unprocessed]);
 
             processed += unprocessed;
             unprocessed = 0;

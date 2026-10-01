@@ -239,7 +239,8 @@ end,
 ## Shell integration
 With shell integration, the shell tells fterm:
 - the current folder (OSC 7). New tabs and splits start in the folder of the active pane;
-- when a command starts and ends, and its exit code (OSC 133).
+- when a command starts and ends, and its exit code (OSC 133);
+- the text of each command (OSC 633;E, the same as VS Code), for the command history.
 
 **PowerShell** (5.1 and 7): fterm loads its script by itself (after your profile). Your prompt does not change.
 Turn it off with `shell_integration = false`.

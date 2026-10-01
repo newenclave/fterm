@@ -2503,7 +2503,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.notify(Some(pane), &title, body, Level::Info, Source::Terminal);
                 } else if let OscEvent::Agent { state, message } = &osc {
                     self.agent_state(event_loop, pane, state, message);
-                } else if let Some(ShellEvent::CommandDone { exit, took }) = done {
+                } else if let Some(ShellEvent::CommandDone { exit, took, .. }) = done {
                     tracing::debug!(pane = pane.0, ?exit, ?took, "command done");
                     self.command_done(pane, exit, took);
                 }

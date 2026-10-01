@@ -6,8 +6,19 @@
 typeset -g __FTERM_LOADED=1
 typeset -g __fterm_running=
 
+# The VS Code escape for OSC 633;E: `\` -> `\\`, `;` -> `\x3b`, a new line -> `\x0a`.
+__fterm_escape() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//;/\\x3b}
+  s=${s//$'\n'/\\x0a}
+  printf '%s' "$s"
+}
+
 __fterm_preexec() {
   __fterm_running=1
+  # $1 is the line that the user typed (for the history).
+  [[ -n "$1" ]] && printf '\033]633;E;%s\007' "$(__fterm_escape "$1")"
   printf '\033]133;C\007'
 }
 

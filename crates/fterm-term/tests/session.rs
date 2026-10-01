@@ -227,6 +227,7 @@ fn powershell_integration_sends_cwd_and_exit_codes() {
     let options = SessionOptions::command("powershell.exe", args);
     let (session, rx) = spawn(options);
     session.write(b"cmd /c exit 3\r".to_vec());
+    session.write(b"echo 'a;b\\c'\r".to_vec());
     session.write(b"exit\r".to_vec());
     let osc: Vec<OscEvent> = events_until_exit(&session, &rx)
         .into_iter()
@@ -245,4 +246,50 @@ fn powershell_integration_sends_cwd_and_exit_codes() {
         osc.contains(&OscEvent::Prompt(PromptMark::CommandFinished(Some(3)))),
         "{osc:?}"
     );
+    // The command text comes before the command runs (633;E, then 133;C).
+    let line = osc
+        .iter()
+        .position(|e| *e == OscEvent::CommandLine("cmd /c exit 3".into()));
+    let executed = osc
+        .iter()
+        .position(|e| *e == OscEvent::Prompt(PromptMark::CommandExecuted));
+    assert!(line.is_some() && line < executed, "{osc:?}");
+    assert!(
+        osc.contains(&OscEvent::CommandLine("echo 'a;b\\c'".into())),
+        "`;` and the backslash survive the escape: {osc:?}"
+    );
+}
+
+#[test]
+fn input_start_is_the_cell_after_the_prompt() {
+    // Many lines first, so the history is not empty and the place has to count it.
+    let script = if cfg!(windows) {
+        r#"$e=[char]27; $b=[char]7; 1..30 | % { Write-Host "line $_" }; Write-Host -NoNewline "abc$e]133;B${b}def"; Start-Sleep -Milliseconds 300"#
+    } else {
+        r#"for i in $(seq 30); do echo line $i; done; printf 'abc]133;Bdef'; sleep 0.3"#
+    };
+    let options = if cfg!(windows) {
+        SessionOptions::command("powershell.exe", ["-NoProfile", "-Command", script])
+    } else {
+        SessionOptions::command("sh", ["-c", script])
+    };
+    let (session, rx) = spawn(options);
+    let events = events_until_exit(&session, &rx);
+    let start = events
+        .iter()
+        .find_map(|e| match e {
+            TermEvent::Osc(OscEvent::InputStart { line, column }) => Some((*line, *column)),
+            _ => None,
+        })
+        .expect("an InputStart event");
+    assert_eq!(start.1, 3, "after `abc`");
+    let text = session.with_term(|term| {
+        use fterm_term::alacritty_terminal::index::{Column, Line};
+        let grid = term.grid();
+        let row = &grid[Line(start.0 as i32 - grid.history_size() as i32)];
+        (0..3)
+            .map(|c| row[Column(start.1 + c)].c)
+            .collect::<String>()
+    });
+    assert_eq!(text, "def");
 }

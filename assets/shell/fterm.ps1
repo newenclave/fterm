@@ -41,10 +41,28 @@ function Global:Prompt {
     return $out
 }
 
-# OSC 133 C (the command starts) when Enter is pressed, so fterm knows how long a command runs.
+# The VS Code escape for OSC 633;E: `\` -> `\\`, `;` and control chars -> `\xNN`.
+function Global:__FtermEscape([string]$text) {
+    $sb = [System.Text.StringBuilder]::new()
+    foreach ($c in $text.ToCharArray()) {
+        if ($c -eq '\') { [void]$sb.Append('\\') }
+        elseif ($c -eq ';' -or [int]$c -lt 32) { [void]$sb.Append('\x{0:x2}' -f [int]$c) }
+        else { [void]$sb.Append($c) }
+    }
+    $sb.ToString()
+}
+
+# When Enter is pressed: the command text (OSC 633;E, for the history) and
+# OSC 133 C (the command starts), so fterm knows how long a command runs.
 if (Get-Module PSReadLine) {
     Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
+        $line = $null
+        $cursor = $null
+        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
         [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
-        [Console]::Write("$([char]27)]133;C$([char]7)")
+        $e = [char]27
+        $b = [char]7
+        if ($line.Trim()) { [Console]::Write("$e]633;E;$(__FtermEscape $line)$b") }
+        [Console]::Write("$e]133;C$b")
     }
 }
