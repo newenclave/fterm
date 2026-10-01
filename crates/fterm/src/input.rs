@@ -236,6 +236,53 @@ pub fn copy_mode_action(key: &KeyInput) -> Option<CopyAction> {
     }
 }
 
+/// Actions of fterm itself (tabs). They do not go to the shell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppAction {
+    NewTab,
+    CloseTab,
+    NextTab,
+    PrevTab,
+    /// Tab number, from 0.
+    SelectTab(usize),
+    LastTab,
+    MoveTabLeft,
+    MoveTabRight,
+    RenameTab,
+}
+
+/// The tab keys. They use the key position, so they work on every layout.
+pub fn app_action(key: &KeyInput) -> Option<AppAction> {
+    use AppAction::*;
+    let (ctrl, shift) = (key.mods.control_key(), key.mods.shift_key());
+    if !ctrl || key.mods.alt_key() {
+        return None;
+    }
+    let PhysicalKey::Code(code) = key.physical else {
+        return None;
+    };
+    let action = match (code, shift) {
+        (KeyCode::Tab, false) | (KeyCode::PageDown, false) => NextTab,
+        (KeyCode::Tab, true) | (KeyCode::PageUp, false) => PrevTab,
+        (KeyCode::PageUp, true) => MoveTabLeft,
+        (KeyCode::PageDown, true) => MoveTabRight,
+        (KeyCode::KeyT, true) => NewTab,
+        (KeyCode::KeyW, true) => CloseTab,
+        (KeyCode::KeyR, true) => RenameTab,
+        (KeyCode::Digit1, true) => SelectTab(0),
+        (KeyCode::Digit2, true) => SelectTab(1),
+        (KeyCode::Digit3, true) => SelectTab(2),
+        (KeyCode::Digit4, true) => SelectTab(3),
+        (KeyCode::Digit5, true) => SelectTab(4),
+        (KeyCode::Digit6, true) => SelectTab(5),
+        (KeyCode::Digit7, true) => SelectTab(6),
+        (KeyCode::Digit8, true) => SelectTab(7),
+        (KeyCode::Digit9, true) => LastTab,
+        _ => return None,
+    };
+    Some(action)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,5 +563,90 @@ mod tests {
             Some(b"\x1b\r".to_vec())
         );
         assert_eq!(press(named(NamedKey::Enter), NONE), Some(b"\r".to_vec()));
+    }
+
+    fn app_key(physical: KeyCode, logical: Key, mods: ModifiersState) -> Option<AppAction> {
+        let key = KeyInput {
+            logical: &logical,
+            physical: PhysicalKey::Code(physical),
+            text: None,
+            mods,
+        };
+        app_action(&key)
+    }
+
+    const CTRL_SHIFT: ModifiersState = ModifiersState::CONTROL.union(ModifiersState::SHIFT);
+
+    #[test]
+    fn tab_keys() {
+        use AppAction::*;
+        assert_eq!(app_key(KeyCode::KeyT, ch("T"), CTRL_SHIFT), Some(NewTab));
+        assert_eq!(app_key(KeyCode::KeyW, ch("W"), CTRL_SHIFT), Some(CloseTab));
+        assert_eq!(app_key(KeyCode::KeyR, ch("R"), CTRL_SHIFT), Some(RenameTab));
+        assert_eq!(
+            app_key(KeyCode::Tab, named(NamedKey::Tab), CTRL),
+            Some(NextTab)
+        );
+        assert_eq!(
+            app_key(KeyCode::Tab, named(NamedKey::Tab), CTRL_SHIFT),
+            Some(PrevTab)
+        );
+        assert_eq!(
+            app_key(KeyCode::PageDown, named(NamedKey::PageDown), CTRL),
+            Some(NextTab)
+        );
+        assert_eq!(
+            app_key(KeyCode::PageUp, named(NamedKey::PageUp), CTRL),
+            Some(PrevTab)
+        );
+        assert_eq!(
+            app_key(KeyCode::PageUp, named(NamedKey::PageUp), CTRL_SHIFT),
+            Some(MoveTabLeft)
+        );
+        assert_eq!(
+            app_key(KeyCode::PageDown, named(NamedKey::PageDown), CTRL_SHIFT),
+            Some(MoveTabRight)
+        );
+    }
+
+    #[test]
+    fn tab_number_keys() {
+        // Shift+1 gives "!" as the char, so the key position is used.
+        assert_eq!(
+            app_key(KeyCode::Digit1, ch("!"), CTRL_SHIFT),
+            Some(AppAction::SelectTab(0))
+        );
+        assert_eq!(
+            app_key(KeyCode::Digit8, ch("*"), CTRL_SHIFT),
+            Some(AppAction::SelectTab(7))
+        );
+        assert_eq!(
+            app_key(KeyCode::Digit9, ch("("), CTRL_SHIFT),
+            Some(AppAction::LastTab)
+        );
+    }
+
+    #[test]
+    fn tab_keys_work_on_the_russian_layout() {
+        // The "T" key gives "Е" on the Russian layout.
+        assert_eq!(
+            app_key(KeyCode::KeyT, ch("Е"), CTRL_SHIFT),
+            Some(AppAction::NewTab)
+        );
+    }
+
+    #[test]
+    fn other_keys_are_not_tab_keys() {
+        assert_eq!(
+            app_key(KeyCode::KeyT, ch("t"), CTRL),
+            None,
+            "Ctrl+T goes to the app"
+        );
+        assert_eq!(app_key(KeyCode::KeyT, ch("T"), SHIFT), None);
+        assert_eq!(app_key(KeyCode::Tab, named(NamedKey::Tab), NONE), None);
+        assert_eq!(
+            app_key(KeyCode::PageUp, named(NamedKey::PageUp), SHIFT),
+            None
+        );
     }
 }

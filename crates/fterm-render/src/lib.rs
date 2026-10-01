@@ -5,6 +5,8 @@ pub mod builtin;
 pub mod color;
 pub mod font;
 pub mod frame;
+pub mod overlay;
 mod renderer;
+pub mod tabbar;
 
-pub use renderer::Renderer;
+pub use renderer::{FrameParts, Renderer};

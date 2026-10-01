@@ -11,8 +11,10 @@ anyhow.workspace = true
 bytemuck.workspace = true
 cosmic-text.workspace = true
 etagere.workspace = true
+fterm-mux.workspace = true
 fterm-term.workspace = true
 tracing.workspace = true
+unicode-width.workspace = true
 wgpu.workspace = true
 
 [lints]

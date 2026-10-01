@@ -10,7 +10,9 @@ use crate::atlas::{AtlasFull, AtlasGlyph, GlyphAtlas, GlyphKey};
 use crate::builtin::{BrailleStyle, builtin_glyph, is_builtin};
 use crate::color::{linear, text_alpha};
 use crate::font::{CellMetrics, Fonts, GlyphImage, ImageKind};
-use crate::frame::{FrameInput, Instance, build_frame};
+use crate::frame::{FrameInput, Instance, Rect, build_frame};
+use crate::overlay::build_message_box;
+use crate::tabbar::{TabBarInput, build_tab_bar};
 
 const ATLAS_START_SIZE: u32 = 1024;
 /// Color emoji are rare, so this atlas starts small.
@@ -238,22 +240,22 @@ impl Renderer {
         Ok(())
     }
 
-    /// Draws the terminal into `view`. `size` is the view size in pixels.
-    pub fn render<T: EventListener>(
+    /// Draws one frame into `view`. `size` is the view size in pixels.
+    /// `build` adds the parts of the frame (tab bar, panes, message box). It can run more than
+    /// once: when a glyph atlas gets full, the atlas grows and the frame is built again.
+    pub fn render(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         view: &wgpu::TextureView,
         size: (u32, u32),
-        term: &Term<T>,
-        focused: bool,
+        mut build: impl FnMut(&mut FrameParts) -> Result<(), AtlasFull>,
     ) {
-        let view_size = (size.0 as f32, size.1 as f32);
-        let quads = self.build(device, queue, term, focused, view_size);
-        let background = linear(
-            self.palette
-                .get(NamedColor::Background as usize, term.colors()),
-        );
+        let quads = self.build(device, queue, &mut build);
+        let background = linear(self.palette.get(
+            NamedColor::Background as usize,
+            &fterm_term::alacritty_terminal::term::color::Colors::default(),
+        ));
 
         if quads.len() > self.instance_capacity {
             self.instance_capacity = quads.len().next_power_of_two();
@@ -303,27 +305,19 @@ impl Renderer {
     }
 
     /// Builds the quads. When an atlas is full, it grows and we try again.
-    fn build<T: EventListener>(
+    fn build(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        term: &Term<T>,
-        focused: bool,
-        view_size: (f32, f32),
+        build: &mut impl FnMut(&mut FrameParts) -> Result<(), AtlasFull>,
     ) -> Vec<Instance> {
         for _ in 0..4 {
-            let input = FrameInput {
-                cell: self.fonts.cell(),
-                padding: self.padding,
-                palette: &self.palette,
-                focused,
-                view: view_size,
-            };
+            let (cell, padding) = (self.fonts.cell(), self.padding);
             let (mask, color, fonts) = (&mut self.mask, &mut self.color, &mut self.fonts);
-            let (braille, gamma) = (self.braille, &self.gamma);
+            let (braille, gamma, palette) = (self.braille, &self.gamma, &self.palette);
             // True when the color atlas was the full one.
             let mut full_color = false;
-            let result = build_frame(term, &input, &mut |key| {
+            let mut glyph = |key: &GlyphKey| {
                 if let Some(glyph) = mask.atlas.cached(key).or_else(|| color.atlas.cached(key)) {
                     return Ok(glyph);
                 }
@@ -335,9 +329,18 @@ impl Renderer {
                     }
                     image => mask.get(queue, key, image),
                 }
-            });
+            };
+            let mut parts = FrameParts {
+                quads: Vec::new(),
+                glyph: &mut glyph,
+                cell,
+                padding,
+                palette,
+            };
+            let result = build(&mut parts);
+            let quads = parts.quads;
             match result {
-                Ok(quads) => return quads,
+                Ok(()) => return quads,
                 Err(AtlasFull) => {
                     let atlas = if full_color {
                         &mut self.color
@@ -368,6 +371,53 @@ impl Renderer {
             &self.color,
             &self.sampler,
         );
+    }
+}
+
+/// The parts of one frame. The app adds them in drawing order (later parts are on top).
+pub struct FrameParts<'a> {
+    quads: Vec<Instance>,
+    glyph: &'a mut dyn FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
+    cell: CellMetrics,
+    padding: f32,
+    palette: &'a Palette,
+}
+
+impl FrameParts<'_> {
+    pub fn cell(&self) -> CellMetrics {
+        self.cell
+    }
+
+    /// A terminal pane in `area` (window pixels).
+    pub fn pane<T: EventListener>(
+        &mut self,
+        term: &Term<T>,
+        area: Rect,
+        focused: bool,
+    ) -> Result<(), AtlasFull> {
+        let input = FrameInput {
+            cell: self.cell,
+            padding: self.padding,
+            palette: self.palette,
+            focused,
+            area,
+        };
+        let quads = build_frame(term, &input, &mut self.glyph)?;
+        self.quads.extend(quads);
+        Ok(())
+    }
+
+    pub fn tab_bar(&mut self, input: &TabBarInput) -> Result<(), AtlasFull> {
+        let quads = build_tab_bar(input, &mut *self.glyph)?;
+        self.quads.extend(quads);
+        Ok(())
+    }
+
+    /// A message box in the middle of `view`, on top of everything.
+    pub fn message_box(&mut self, lines: &[String], view: Rect) -> Result<(), AtlasFull> {
+        let quads = build_message_box(lines, view, self.cell, &mut *self.glyph)?;
+        self.quads.extend(quads);
+        Ok(())
     }
 }
 

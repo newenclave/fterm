@@ -73,3 +73,32 @@ fn resize_changes_the_grid_size() {
     assert_eq!((columns, rows), (100, 30));
     session.write(b"exit\r".to_vec());
 }
+
+#[test]
+fn session_knows_its_shell_pid_and_program() {
+    let options = if cfg!(windows) {
+        SessionOptions::command("cmd.exe", ["/k"])
+    } else {
+        SessionOptions::command("sh", Vec::<String>::new())
+    };
+    let (session, _rx) = spawn(options);
+    let pid = session.pid().expect("no pid");
+    assert!(pid > 0);
+    let expected = if cfg!(windows) { "cmd" } else { "sh" };
+    assert_eq!(session.program(), expected);
+
+    // Run a program in the shell: it shows up as a child of the shell.
+    let (command, name) = if cfg!(windows) {
+        ("ping -n 5 127.0.0.1\r", "ping")
+    } else {
+        ("sleep 5\r", "sleep")
+    };
+    session.write(command.as_bytes().to_vec());
+    std::thread::sleep(Duration::from_millis(1500));
+    let children = fterm_term::process::running_children(pid);
+    assert!(
+        children.iter().any(|c| c.to_lowercase().starts_with(name)),
+        "{children:?}"
+    );
+    session.write(b"\x03exit\r".to_vec());
+}

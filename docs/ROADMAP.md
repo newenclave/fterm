@@ -130,9 +130,11 @@ Ideas (we pick the order in the Phase 3 plan):
 - `fterm cli image file.png` and an MCP tool: they send images over the local API (Phase 7), not over ConPTY.
 - **Check:** `yazi` shows image previews, `chafa`/`imgcat` work, an agent shows a picture.
 
-### Phase 4 — Tabs
+### Phase 4 — Tabs ✅ (done)
 - Model: window → tabs → panes. A tab has a tree of panes (from the start, so splits fit in later).
-- Tab bar with `egui`. Hot keys. Tab title from the app (OSC 0/2). Rename tabs.
+- Tab bar drawn with our own renderer (egui comes later, for real widgets). Hot keys.
+  Tab title from the app (OSC 0/2). Rename tabs.
+- Later: drag tabs with the mouse; new tabs open in the folder of the current tab (needs OSC 7, Phase 6).
 - Ask before closing a tab with a running app.
 - **Check:** open 5+ tabs with different shells. Switch and close them. No processes stay alive.
 
@@ -221,4 +223,4 @@ Ideas (we pick the order in the Phase 3 plan):
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
 ## Next step
-Write a detailed plan for Phase 3b (images) or Phase 4 (tabs). Then build it.
+Write a detailed plan for Phase 4b (split panes) or Phase 3b (images). Then build it.

@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 arboard.workspace = true
+fterm-mux.workspace = true
 fterm-render.workspace = true
 fterm-term.workspace = true
 open.workspace = true

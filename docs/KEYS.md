@@ -1,5 +1,21 @@
 # Keys and mouse
 
+## Tabs
+| Key or mouse | What it does |
+|---|---|
+| Ctrl + Shift + T, click `+` | New tab (after the active tab). |
+| Ctrl + Shift + W, click `×`, middle click on a tab | Close the tab. If a program runs in it, fterm asks first. |
+| Ctrl + Tab, Ctrl + PageDown | Next tab. |
+| Ctrl + Shift + Tab, Ctrl + PageUp | Previous tab. |
+| Ctrl + Shift + 1 … 8 | Go to tab 1 … 8. |
+| Ctrl + Shift + 9 | Go to the last tab. |
+| Ctrl + Shift + PageUp / PageDown | Move the tab left / right. |
+| Ctrl + Shift + R, double click on a tab | Rename the tab. Enter = save, Esc = cancel. An empty name = the automatic title again. |
+| Mouse wheel on the tab bar | Next / previous tab. |
+
+The tab title is your name for the tab, or the title from the program, or the program name.
+When a shell ends (for example, you type `exit`), only its tab closes. The window closes after the last tab.
+
 ## Scroll
 | Key or mouse | What it does |
 |---|---|

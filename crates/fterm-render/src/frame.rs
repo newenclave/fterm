@@ -12,6 +12,7 @@ use fterm_term::colors::{Palette, cell_colors};
 use crate::atlas::{AtlasFull, AtlasGlyph, GlyphKey};
 use crate::color::linear;
 use crate::font::CellMetrics;
+pub use fterm_mux::Rect;
 
 /// A filled rectangle (background, cursor, underline).
 pub const KIND_SOLID: u32 = 0;
@@ -39,8 +40,8 @@ pub struct FrameInput<'a> {
     pub padding: f32,
     pub palette: &'a Palette,
     pub focused: bool,
-    /// Size of the view (window) in pixels.
-    pub view: (f32, f32),
+    /// Where the pane is in the window, in pixels. The padding is inside it.
+    pub area: Rect,
 }
 
 /// Background of selected cells (Catppuccin Mocha "surface2").
@@ -79,8 +80,8 @@ pub fn build_frame<T: EventListener>(
     let offset = content.display_offset as i32;
     let origin = |col: usize, row: i32| {
         (
-            input.padding + col as f32 * cell.width,
-            input.padding + row as f32 * cell.height,
+            input.area.x + input.padding + col as f32 * cell.width,
+            input.area.y + input.padding + row as f32 * cell.height,
         )
     };
     let line = (cell.height / 16.0).round().max(1.0);
@@ -100,6 +101,11 @@ pub fn build_frame<T: EventListener>(
     });
 
     let mut backgrounds = Vec::new();
+    // The app changed the background color (OSC 11): paint the whole pane with it.
+    if overrides[NamedColor::Background as usize].is_some() {
+        let a = input.area;
+        backgrounds.push(solid([a.x, a.y, a.width, a.height], linear(default_bg)));
+    }
     let mut glyphs = Vec::new();
     let mut lines = Vec::new();
     let mut cursor_width = cell.width;
@@ -202,7 +208,7 @@ pub fn build_frame<T: EventListener>(
         let (x, y) = origin(col, row);
         cursor_back.push(solid([x, y, cell.width, h], linear(COPY_CURSOR)));
     }
-    if let Some(indicator) = scroll_indicator(term, content.display_offset, input.view) {
+    if let Some(indicator) = scroll_indicator(term, content.display_offset, input.area) {
         cursor_front.push(indicator);
     }
 
@@ -219,8 +225,9 @@ pub fn build_frame<T: EventListener>(
 fn scroll_indicator<T: EventListener>(
     term: &Term<T>,
     display_offset: usize,
-    (view_width, view_height): (f32, f32),
+    area: Rect,
 ) -> Option<Instance> {
+    let (view_width, view_height) = (area.width, area.height);
     if display_offset == 0 {
         return None;
     }
@@ -232,8 +239,8 @@ fn scroll_indicator<T: EventListener>(
     let top = (view_height * (history - display_offset as f32) / total).min(view_height - height);
     Some(solid(
         [
-            view_width - SCROLL_INDICATOR_WIDTH,
-            top.max(0.0),
+            area.x + view_width - SCROLL_INDICATOR_WIDTH,
+            area.y + top.max(0.0),
             SCROLL_INDICATOR_WIDTH,
             height,
         ],
@@ -270,8 +277,13 @@ mod tests {
         baseline: 15.0,
     };
     const PADDING: f32 = 4.0;
-    /// 10x3 cells + padding.
-    const VIEW: (f32, f32) = (108.0, 68.0);
+    /// 10x3 cells + padding, at the top-left of the window.
+    const AREA: Rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 108.0,
+        height: 68.0,
+    };
     /// Every glyph in the fake atlas has this place and size.
     const GLYPH: AtlasGlyph = AtlasGlyph {
         x: 3,
@@ -298,7 +310,7 @@ mod tests {
             padding: PADDING,
             palette: &palette,
             focused,
-            view: VIEW,
+            area: AREA,
         };
         let mut keys = Vec::new();
         let quads = build_frame(&term, &input, &mut |key| {
@@ -426,7 +438,7 @@ mod tests {
             padding: PADDING,
             palette: &palette,
             focused: true,
-            view: VIEW,
+            area: AREA,
         };
         let quads = build_frame(&term, &input, &mut |key| {
             Ok(Some(AtlasGlyph {
@@ -523,7 +535,7 @@ mod tests {
             padding: PADDING,
             palette: &palette,
             focused: true,
-            view: VIEW,
+            area: AREA,
         };
         let got = build_frame(&term, &input, &mut |_| Err(AtlasFull));
         assert_eq!(got, Err(AtlasFull));
@@ -536,7 +548,7 @@ mod tests {
             padding: PADDING,
             palette: &palette,
             focused: true,
-            view: VIEW,
+            area: AREA,
         };
         build_frame(term, &input, &mut |_| Ok(Some(GLYPH))).unwrap()
     }
@@ -617,9 +629,13 @@ mod tests {
         let rects = rects_with_color(&build(&term), SCROLL_INDICATOR);
         assert_eq!(rects.len(), 1);
         let [x, y, w, h] = rects[0];
-        assert_eq!(x + w, VIEW.0, "at the right edge");
+        assert_eq!(x + w, AREA.width, "at the right edge");
         assert_eq!(w, SCROLL_INDICATOR_WIDTH);
-        assert!(y >= 0.0 && y + h <= VIEW.1 && h >= 4.0, "{:?}", rects[0]);
+        assert!(
+            y >= 0.0 && y + h <= AREA.height && h >= 4.0,
+            "{:?}",
+            rects[0]
+        );
     }
 
     #[test]
@@ -629,5 +645,63 @@ mod tests {
         term.scroll_display(Scroll::Top);
         let rects = rects_with_color(&build(&term), SCROLL_INDICATOR);
         assert_eq!(rects[0][1], 0.0);
+    }
+
+    #[test]
+    fn pane_at_an_offset_moves_everything() {
+        let term = term_with(b"ab");
+        let palette = Palette::default();
+        let area = Rect::new(200.0, 30.0, 108.0, 68.0);
+        let input = FrameInput {
+            cell: CELL,
+            padding: PADDING,
+            palette: &palette,
+            focused: true,
+            area,
+        };
+        let moved = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let at_origin = build(&term);
+        assert_eq!(moved.len(), at_origin.len());
+        for (m, o) in moved.iter().zip(&at_origin) {
+            assert_eq!(m.rect[0], o.rect[0] + 200.0);
+            assert_eq!(m.rect[1], o.rect[1] + 30.0);
+        }
+    }
+
+    #[test]
+    fn scroll_indicator_is_at_the_right_edge_of_the_pane() {
+        let text: Vec<String> = (0..30).map(|i| i.to_string()).collect();
+        let mut term = term_with(text.join("\r\n").as_bytes());
+        term.scroll_display(Scroll::Delta(5));
+        let palette = Palette::default();
+        let area = Rect::new(200.0, 30.0, 108.0, 68.0);
+        let input = FrameInput {
+            cell: CELL,
+            padding: PADDING,
+            palette: &palette,
+            focused: true,
+            area,
+        };
+        let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let rects = rects_with_color(&quads, SCROLL_INDICATOR);
+        let [x, y, w, h] = rects[0];
+        assert_eq!(x + w, 308.0);
+        assert!(y >= 30.0 && y + h <= 98.0);
+    }
+
+    #[test]
+    fn pane_with_an_app_background_fills_its_area() {
+        // OSC 11 sets the background color: the pane paints its whole area with it.
+        let term = term_with(b"\x1b]11;rgb:10/20/30\x07x");
+        let quads = build(&term);
+        let fill = rects_with_color(
+            &quads,
+            Rgb {
+                r: 0x10,
+                g: 0x20,
+                b: 0x30,
+            },
+        );
+        assert_eq!(fill.first(), Some(&[0.0, 0.0, 108.0, 68.0]));
     }
 }

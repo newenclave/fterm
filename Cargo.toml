@@ -17,12 +17,15 @@ cosmic-text = "0.19"
 etagere = "0.3"
 open = "5"
 pollster = "1"
+sysinfo = { version = "0.36", default-features = false, features = ["system"] }
 tracing = "0.1"
+unicode-width = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wgpu = "30"
 winit = "0.30.13"
 
 # Our own crates.
+fterm-mux = { path = "crates/fterm-mux" }
 fterm-render = { path = "crates/fterm-render" }
 fterm-term = { path = "crates/fterm-term" }
 

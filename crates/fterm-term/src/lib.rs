@@ -4,6 +4,7 @@
 pub mod colors;
 pub mod copy_mode;
 pub mod links;
+pub mod process;
 pub mod select;
 pub mod session;
 pub mod size;

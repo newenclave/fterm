@@ -82,6 +82,10 @@ pub struct Session {
     size: Mutex<GridSize>,
     /// The user's selection. It is kept here, so the terminal cannot remove it.
     selection: Mutex<StickySelection>,
+    /// The shell process.
+    pid: Option<u32>,
+    /// The program name without folder and `.exe` (for the default tab title).
+    program: String,
 }
 
 impl Session {
@@ -107,6 +111,7 @@ impl Session {
             None => (default_shell(), options.args),
         };
         tracing::info!(%program, ?args, "starting session");
+        let program_name = program_name(&program);
         let pty_options = tty::Options {
             shell: Some(tty::Shell::new(program, args)),
             working_directory: None,
@@ -120,6 +125,10 @@ impl Session {
             escape_args: true,
         };
         let pty = tty::new(&pty_options, window_size(size, cell), 0)?;
+        #[cfg(windows)]
+        let pid = pty.child_watcher().pid().map(|pid| pid.get());
+        #[cfg(unix)]
+        let pid = Some(pty.child().id());
         let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, true, false)?;
         let sender = event_loop.channel();
         let _ = listener.sender.set(sender.clone());
@@ -130,6 +139,8 @@ impl Session {
             notifier: Mutex::new(Notifier(sender)),
             size: Mutex::new(size),
             selection: Mutex::new(StickySelection::default()),
+            pid,
+            program: program_name,
         })
     }
 
@@ -145,6 +156,16 @@ impl Session {
             .lock()
             .unwrap()
             .on_resize(window_size(size, cell));
+    }
+
+    /// The shell process id.
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
+    }
+
+    /// The program name, for example `pwsh` or `cmd`.
+    pub fn program(&self) -> &str {
+        &self.program
     }
 
     pub fn grid_size(&self) -> GridSize {
@@ -217,6 +238,16 @@ fn window_size(size: GridSize, (cell_width, cell_height): (u16, u16)) -> WindowS
         num_cols: size.columns as u16,
         cell_width,
         cell_height,
+    }
+}
+
+/// `C:\Windows\cmd.exe` -> `cmd`, `/bin/zsh` -> `zsh`.
+fn program_name(program: &str) -> String {
+    let file = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let lower = file.to_ascii_lowercase();
+    match lower.strip_suffix(".exe") {
+        Some(_) => file[..file.len() - 4].to_owned(),
+        None => file.to_owned(),
     }
 }
 

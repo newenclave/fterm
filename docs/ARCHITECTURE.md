@@ -5,7 +5,8 @@
 | Crate | What it does | GPU? |
 |---|---|---|
 | `fterm-term` | Runs the shell in a pty. Keeps the text grid. Colors. Grid size. | No |
-| `fterm-render` | Font, glyph atlas, and drawing the grid with wgpu. | Yes |
+| `fterm-mux` | Tabs and the tree of panes in each tab. A pure model. | No |
+| `fterm-render` | Font, glyph atlas, tab bar, and drawing with wgpu. | Yes |
 | `fterm` | The app: window, keys, events. It connects the other crates. | Yes |
 
 `fterm-term` has no GPU and no window code. So we can test it with real
@@ -29,6 +30,17 @@ processes and real escape codes, and later use it from the CLI and MCP (Phase 7)
 - The window thread draws only when something changes (`ControlFlow::Wait`).
 - `Session::with_term` holds the lock only while we build one frame.
 
+## Tabs and panes
+
+- `fterm-mux::Mux` keeps the tabs. Each tab has a `Layout`: a tree of panes (`Pane` or `Split`).
+  In Phase 4 a tab has one pane; split panes (Phase 4b) use the same tree.
+- The app keeps one `Session` per pane (`PaneId`). Events from a session come with its pane id
+  (`UserEvent::Term(PaneId, TermEvent)`), so the app knows which tab got output or ended.
+- Before a tab closes, `fterm-term::process::running_children` looks for programs under the shell,
+  and fterm asks the user when it finds some.
+- The tab bar is drawn with our own renderer (`tabbar.rs`), not with a UI library.
+  egui comes later, for the command palette and the AI panel.
+
 ## One frame
 
 1. `frame::build_frame` goes over the cells and makes a list of quads (`Instance`):
@@ -42,7 +54,8 @@ processes and real escape codes, and later use it from the CLI and MCP (Phase 7)
      made smaller (or, for emoji, bigger) to fit into its 1 or 2 cells.
 4. There are two atlases: **mask** (R8, normal text and builtin chars) and **color** (RGBA, emoji).
    When an atlas is full, it grows 2 times and the frame is built again.
-5. `renderer.rs` sends the quads to the GPU and draws all of them with one draw call.
+5. `renderer.rs` builds one frame from parts (`FrameParts`): the tab bar, the panes, and a message box
+   on top. Then it sends all quads to the GPU and draws them with one draw call.
 6. `shader.wgsl` has three kinds of quads: solid (`0`), glyph (`1`, mask × text color), color glyph (`2`).
 
 ## Colors

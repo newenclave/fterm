@@ -35,7 +35,8 @@ WGPU_BACKEND=gl cargo run
 ```
 
 ## Test scripts (debug builds only)
-`FTERM_RUN` types a command into the shell when fterm starts:
+`FTERM_TABS=3` opens 3 tabs at start.
+`FTERM_RUN` types a command into the shell of the first tab when fterm starts:
 
 ```powershell
 $env:FTERM_RUN = "Get-Content -Encoding utf8 docs\samples\unicode-test.txt"; cargo run
