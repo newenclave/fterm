@@ -224,6 +224,22 @@ Now the window × (and Alt+F4) closes fterm at once, with all tabs and programs.
 - **Check:** × with only shells closes at once (with `"running"`); with `claude` running it asks; a Lua hook
   that returns `false` keeps the window open and shows the toast.
 
+### Phase 6d — WSL (an idea from the user)
+- **Profiles:** fterm finds the WSL distros (`wsl.exe -l -q`) and makes a profile for each one
+  (`wsl.exe -d Ubuntu --cd ~`), like Windows Terminal.
+- **Shell integration in WSL:** fterm starts bash or zsh with its script (it still loads your `~/.bashrc`),
+  so OSC 7 and OSC 133 work there with no setup.
+- **Folders:** a WSL pane tells Linux paths (`/home/me`). A new tab or split from it opens the same distro
+  in the same folder (not a Windows shell). A Windows pane can open `\\wsl$\Ubuntu\home\me` as a WSL pane.
+- **History:** each folder and command knows its "world" (Windows, or WSL with the distro name),
+  so Alt+F12 does not offer `/home/...` to PowerShell or `C:\...` to bash, and `cd` uses the right form.
+- **API and MCP from WSL:** Linux cannot open the Windows named pipe, but WSL can run `.exe` files.
+  fterm sets `WSLENV=FTERM_SOCKET/u:FTERM_PANE_ID/u`, so these vars go into WSL, and `ftermctl.exe`
+  (and `ftermctl.exe mcp` for Claude Code that runs in WSL) works there.
+- Claude Code hooks in WSL work as they are (the escape sequences go through the terminal).
+- **Check:** open Ubuntu from the profile list; `cd /tmp`, then split: the new pane is Ubuntu in `/tmp`;
+  Alt+F12 in Ubuntu shows only Linux folders; Claude Code in WSL uses the fterm MCP tools.
+
 ### Phase 7 — Local API, CLI, and MCP ✅ (done: the API, `ftermctl`, `ftermctl mcp`, access questions, messages; see [API.md](API.md) and [MCP.md](MCP.md))
 The CLI is a separate console program, `ftermctl` (not `fterm cli`): fterm.exe is a window program,
 so a shell would not wait for it and would not show its output. Later: an HTTP transport for MCP clients
