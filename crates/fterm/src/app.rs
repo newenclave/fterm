@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use fterm_config::keys::{Action, BuiltinAction, SpawnWhere};
 use fterm_config::load::{
-    AgentIn, AgentOut, ApiCall, DockPlace, HistoryIn, LoadedConfig, NotifyIn, NotifyOut, OsNotify,
-    SAMPLE_CONFIG, ToastPosition, config_path, load_file,
+    AgentIn, AgentOut, ApiCall, CloseIn, DockPlace, HistoryIn, LoadedConfig, NotifyIn, NotifyOut,
+    OsNotify, SAMPLE_CONFIG, ToastPosition, config_path, load_file,
 };
 use fterm_config::profiles::{Profile, detect_profiles, launch_command, path_extension, which};
 use fterm_history::{CommandFilter, CommandRecord, History, Limits, now_ms, should_save};
@@ -31,7 +31,7 @@ use fterm_term::copy_mode::{self, CopyAction, CopyResult};
 use fterm_term::input::typed_input;
 use fterm_term::links::url_at;
 use fterm_term::osc::OscEvent;
-use fterm_term::process::{display_name, running_children};
+use fterm_term::process::{display_name, is_shell, running_children};
 use fterm_term::session::{Session, SessionOptions, TermEvent};
 use fterm_term::shell::{ShellEvent, ShellState, install_scripts, is_powershell, powershell_args};
 use fterm_term::size::GridSize;
@@ -44,6 +44,7 @@ use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::agent::{AgentKind, AgentState, badge_color, notification_for, tab_badge};
 use crate::clipboard::{Clipboard, paste_bytes};
+use crate::close::{CloseDecision, WindowState, decide, decide_again};
 use crate::gpu::Gpu;
 use crate::history_popup::{
     HistoryPopup, PopupKind, PopupRow, cd_command, command_rows, dir_rows, replace_input,
@@ -255,6 +256,8 @@ struct MouseState {
 enum CloseTarget {
     Tab(TabId),
     Pane(PaneId),
+    /// The whole window (its ×, Alt+F4, or the last tab).
+    Window,
 }
 
 /// One line of the command palette to draw: (label, key, is it selected).
@@ -316,6 +319,8 @@ pub struct App {
     hint_cache: RefCell<Option<HintCache>>,
     /// Grows when a command is saved, so the hint cache knows it is old.
     history_changes: u64,
+    /// When `on_close_window` last stopped the close. A second × soon after it asks instead.
+    close_stopped_at: Option<Instant>,
     /// The Events panel was on the screen (and fterm in front) in the last frame.
     /// When it goes away, its events count as read.
     events_seen: bool,
@@ -358,6 +363,7 @@ impl App {
             spawn_cwd: None,
             hint_cache: RefCell::new(None),
             history_changes: 0,
+            close_stopped_at: None,
             center: Center::new(4, true),
             shell_script: shell_script_path(),
             palette: None,
@@ -1229,10 +1235,119 @@ impl App {
     }
 
     /// Closes a tab or a pane, but asks first when a program runs in it.
+    /// The programs that run in a pane: its own program when it is not a shell (for example `claude`),
+    /// else the programs that run in its shell.
+    fn pane_programs(running: &Running, pane: PaneId) -> Vec<String> {
+        let Some(p) = running.panes.get(&pane) else {
+            return Vec::new();
+        };
+        if !is_shell(p.session.program()) {
+            let file = p
+                .session
+                .program()
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or_default();
+            return vec![display_name(file).to_owned()];
+        }
+        p.session
+            .pid()
+            .map(running_children)
+            .unwrap_or_default()
+            .iter()
+            .map(|name| display_name(name).to_owned())
+            .collect()
+    }
+
+    /// What runs in the whole window (for the close question and `on_close_window`).
+    fn window_state(&self) -> WindowState {
+        let Some(running) = &self.running else {
+            return WindowState::default();
+        };
+        let titles = running.tab_titles();
+        let mut state = WindowState {
+            tabs: running.mux.tabs().len(),
+            ..WindowState::default()
+        };
+        for (i, tab) in running.mux.tabs().iter().enumerate() {
+            for pane in tab.layout.panes() {
+                state.panes += 1;
+                for program in Self::pane_programs(running, pane) {
+                    if !state.running.contains(&(i + 1, program.clone())) {
+                        state.running.push((i + 1, program));
+                    }
+                }
+                if let Some(agent) = running.panes.get(&pane).and_then(|p| p.agent.as_ref()) {
+                    let name = titles.get(i).cloned().unwrap_or_default();
+                    state
+                        .agents
+                        .push((i + 1, name, agent.kind.name().to_owned()));
+                }
+            }
+        }
+        state
+    }
+
+    /// The window ×: close at once, ask first, or do nothing (by `confirm_close` and `on_close_window`).
+    fn close_window(&mut self, event_loop: &ActiveEventLoop) {
+        let state = self.window_state();
+        let input = CloseIn {
+            tabs: state.tabs,
+            panes: state.panes,
+            running: state.running.clone(),
+            agents: state.agents.clone(),
+        };
+        let hook = match self.config.on_close_window(&input) {
+            Ok(answer) => answer,
+            Err(err) => {
+                tracing::warn!("on_close_window: {err}");
+                self.notify(None, "Lua error", &err, Level::Error, Source::App);
+                None
+            }
+        };
+        let again = self
+            .close_stopped_at
+            .take()
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(5));
+        let rule = if again { decide_again } else { decide };
+        match rule(&state, self.config.config.confirm_close, hook) {
+            CloseDecision::Now => event_loop.exit(),
+            CloseDecision::Ask(lines) => {
+                self.close_question = Some(CloseQuestion {
+                    target: CloseTarget::Window,
+                    lines,
+                });
+                if let Some(running) = &self.running {
+                    running.window.request_redraw();
+                }
+            }
+            CloseDecision::Stop => {
+                self.close_stopped_at = Some(Instant::now());
+                self.notify(
+                    None,
+                    "fterm stays open",
+                    "Closing was stopped by on_close_window in your config. Press × again to close anyway.",
+                    Level::Info,
+                    Source::App,
+                );
+            }
+        }
+    }
+
     fn close(&mut self, event_loop: &ActiveEventLoop, target: CloseTarget) {
         let Some(running) = &self.running else {
             return;
         };
+        // Closing the last tab (or its last pane) closes the window: the window rule asks.
+        let last_tab = running.mux.tabs().len() == 1;
+        let last = match target {
+            CloseTarget::Window => true,
+            CloseTarget::Tab(_) => last_tab,
+            CloseTarget::Pane(_) => last_tab && running.panes.len() == 1,
+        };
+        if last {
+            return self.close_window(event_loop);
+        }
         let panes = match target {
             CloseTarget::Tab(tab) => {
                 let Some(tab_info) = running.mux.tabs().iter().find(|t| t.id == tab) else {
@@ -1241,15 +1356,13 @@ impl App {
                 tab_info.layout.panes()
             }
             CloseTarget::Pane(pane) => vec![pane],
+            CloseTarget::Window => return,
         };
         let mut programs: Vec<String> = Vec::new();
         for pane in panes {
-            if let Some(pid) = running.panes.get(&pane).and_then(|p| p.session.pid()) {
-                for name in running_children(pid) {
-                    let name = display_name(&name).to_owned();
-                    if !programs.contains(&name) {
-                        programs.push(name);
-                    }
+            for name in Self::pane_programs(running, pane) {
+                if !programs.contains(&name) {
+                    programs.push(name);
                 }
             }
         }
@@ -1261,7 +1374,7 @@ impl App {
         }
         let what = match target {
             CloseTarget::Tab(_) => "Close this tab?",
-            CloseTarget::Pane(_) => "Close this pane?",
+            CloseTarget::Pane(_) | CloseTarget::Window => "Close this pane?",
         };
         self.close_question = Some(CloseQuestion {
             target,
@@ -1275,10 +1388,12 @@ impl App {
         running.window.request_redraw();
     }
 
+    /// Closes it. `false` = nothing is left: the window closes.
     fn close_now(&mut self, target: CloseTarget) -> bool {
         match target {
             CloseTarget::Tab(tab) => self.close_tab_now(tab),
             CloseTarget::Pane(pane) => self.close_pane_now(pane),
+            CloseTarget::Window => false,
         }
     }
 
@@ -3049,7 +3164,13 @@ impl ApplicationHandler<UserEvent> for App {
         }
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                // A question is open already: a second × closes for real.
+                match self.close_question.as_ref().map(|q| q.target) {
+                    Some(CloseTarget::Window) => event_loop.exit(),
+                    _ => self.close(event_loop, CloseTarget::Window),
+                }
+            }
             WindowEvent::Resized(size) => {
                 let running = self.running.as_mut().unwrap();
                 running.gpu.resize(size);

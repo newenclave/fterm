@@ -271,6 +271,34 @@ on_history = function(h)
 end,
 ```
 
+## Closing the window
+The window × (and Alt+F4, and closing the last tab) asks first when something runs:
+
+```lua
+confirm_close = "running",   -- the default: ask when a program runs in a pane, or an agent works or waits
+                             -- "always" = always ask, "never" = never ask
+```
+
+A pane "runs something" when a program runs in its shell (for example `cargo build`), or when the pane
+itself is not a shell (for example a `claude` profile).
+
+### on_close_window
+This function decides before the rule. `info` has `tabs`, `panes`, `running` (a list of `{ tab, program }`),
+and `agents` (a list of `{ tab, name, state }`). Return `true` to close at once, `false` to keep the window
+open, or `nil` for the `confirm_close` rule.
+
+```lua
+on_close_window = function(info)
+  for _, a in ipairs(info.agents) do
+    if a.state == "working" then return false end   -- never close while an agent works
+  end
+  if #info.running == 0 then return true end        -- only idle shells: close without a question
+end,
+```
+
+When the function says `false`, a toast tells you. Press × again in the next 5 seconds to get the normal
+question, so a wrong function can never lock the window.
+
 ## Shell integration
 With shell integration, the shell tells fterm:
 - the current folder (OSC 7). New tabs and splits start in the folder of the active pane;

@@ -37,6 +37,27 @@ pub fn display_name(name: &str) -> &str {
     }
 }
 
+/// True for shells (`powershell`, `cmd`, `bash`, ...): a pane with only its shell runs nothing.
+/// Takes a program name or a path, with or without `.exe`.
+pub fn is_shell(program: &str) -> bool {
+    let file = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let name = display_name(file).to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "powershell"
+            | "pwsh"
+            | "cmd"
+            | "bash"
+            | "zsh"
+            | "sh"
+            | "fish"
+            | "nu"
+            | "wsl"
+            | "dash"
+            | "ksh"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::process::{Child, Command, Stdio};
@@ -88,6 +109,34 @@ mod tests {
         let children = running_children(lonely.id());
         let _ = lonely.kill();
         assert!(children.is_empty(), "{children:?}");
+    }
+
+    #[test]
+    fn shells_and_programs() {
+        for shell in [
+            "powershell.exe",
+            "pwsh",
+            "cmd.exe",
+            "C:\\Windows\\System32\\CMD.EXE",
+            "bash",
+            "/bin/zsh",
+            "sh",
+            "fish",
+            "nu",
+            "wsl.exe",
+        ] {
+            assert!(is_shell(shell), "{shell}");
+        }
+        for program in [
+            "claude",
+            "claude.cmd",
+            "node.exe",
+            "vim",
+            "ollama",
+            "opencode",
+        ] {
+            assert!(!is_shell(program), "{program}");
+        }
     }
 
     #[test]

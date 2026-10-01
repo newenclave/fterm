@@ -24,6 +24,11 @@ The key of each action is on the right.
 
 The tab title is your name for the tab, or the title from the program, or the program name.
 
+## The window
+| Key or mouse | What it does |
+|---|---|
+| The window ×, Alt + F4 | Close fterm. When a program or an agent runs, fterm asks first (Enter = close, Esc = stay). See `confirm_close` in [CONFIG.md](CONFIG.md). |
+
 ## Split panes
 | Key or mouse | What it does |
 |---|---|

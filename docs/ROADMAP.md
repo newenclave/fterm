@@ -209,7 +209,7 @@ An idea from the user. Shell integration (Phase 6) already tells us the folder (
 - **Check:** cd into 5 folders in 2 tabs, Alt+F12 shows all 5, Enter goes there. Run commands, close fterm,
   open it again: Alt+F8 shows them with exit codes.
 
-### Phase 6c — Close the window safely (an idea from the user)
+### Phase 6c — Close the window safely (an idea from the user) ✅ (done)
 Now the window × (and Alt+F4) closes fterm at once, with all tabs and programs. It must ask first.
 - The × of the window asks: "Close fterm? 3 tabs, 5 panes. claude works in tab 2, cargo runs in tab 3."
   Enter = close, Esc = stay. It uses the same box as "close the tab".
@@ -274,5 +274,5 @@ Now the window × (and Alt+F4) closes fterm at once, with all tabs and programs.
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
 ## Next step
-Choose the next phase: 6c (close the window safely), 7 (local API, CLI, and MCP), or 3b (images).
+Choose the next phase: 7 (local API, CLI, and MCP) or 3b (images).
 Write a detailed plan for it. Then build it.

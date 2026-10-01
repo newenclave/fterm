@@ -4,6 +4,7 @@
 mod agent;
 mod app;
 mod clipboard;
+mod close;
 mod gpu;
 mod hints;
 mod history_popup;

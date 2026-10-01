@@ -93,6 +93,27 @@ pub struct HistoryIn {
     pub shell: String,
 }
 
+/// When the window × asks first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ConfirmClose {
+    /// Only when a program or a working agent runs in some pane.
+    #[default]
+    Running,
+    Always,
+    Never,
+}
+
+/// What runs in the window, for `on_close_window`. Tab numbers start at 1.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CloseIn {
+    pub tabs: usize,
+    pub panes: usize,
+    /// (tab, program).
+    pub running: Vec<(usize, String)>,
+    /// (tab, name, state).
+    pub agents: Vec<(usize, String, String)>,
+}
+
 /// The panel names.
 pub const PANEL_NAMES: [&str; 2] = ["events", "agents"];
 
@@ -206,12 +227,15 @@ pub struct Config {
     pub notifications: NotificationConfig,
     pub panels: PanelsConfig,
     pub history: HistoryConfig,
+    pub confirm_close: ConfirmClose,
     /// The Lua function `on_notification` (its number), if there is one.
     pub on_notification: Option<usize>,
     /// The Lua function `on_agent` (its number), if there is one.
     pub on_agent: Option<usize>,
     /// The Lua function `on_history` (its number), if there is one.
     pub on_history: Option<usize>,
+    /// The Lua function `on_close_window` (its number), if there is one.
+    pub on_close_window: Option<usize>,
 }
 
 impl Default for Config {
@@ -230,9 +254,11 @@ impl Default for Config {
             notifications: NotificationConfig::default(),
             panels: PanelsConfig::default(),
             history: HistoryConfig::default(),
+            confirm_close: ConfirmClose::default(),
             on_notification: None,
             on_agent: None,
             on_history: None,
+            on_close_window: None,
         }
     }
 }
@@ -375,6 +401,50 @@ impl LoadedConfig {
                 Value::Table(out) => Ok(out.get::<Option<String>>("cmd")?),
                 other => Err(mlua::Error::runtime(format!(
                     "on_history must return a table, false, or nil, got {}",
+                    other.type_name()
+                ))),
+            }
+        };
+        run().map_err(|err| err.to_string())
+    }
+
+    /// Asks `on_close_window` (if the config has it): `Some(true)` = close now, `Some(false)` = do not close,
+    /// `None` = the `confirm_close` rule.
+    pub fn on_close_window(&self, input: &CloseIn) -> Result<Option<bool>, String> {
+        let (Some(index), Some(lua), Some(api)) =
+            (self.config.on_close_window, &self._lua, &self.api)
+        else {
+            return Ok(None);
+        };
+        let Some(function) = self.functions.get(index) else {
+            return Err(format!("no Lua function number {index}"));
+        };
+        let run = || -> mlua::Result<Option<bool>> {
+            let info = lua.create_table()?;
+            info.set("tabs", input.tabs)?;
+            info.set("panes", input.panes)?;
+            let running = lua.create_table()?;
+            for (i, (tab, program)) in input.running.iter().enumerate() {
+                let row = lua.create_table()?;
+                row.set("tab", *tab)?;
+                row.set("program", program.as_str())?;
+                running.set(i + 1, row)?;
+            }
+            info.set("running", running)?;
+            let agents = lua.create_table()?;
+            for (i, (tab, name, state)) in input.agents.iter().enumerate() {
+                let row = lua.create_table()?;
+                row.set("tab", *tab)?;
+                row.set("name", name.as_str())?;
+                row.set("state", state.as_str())?;
+                agents.set(i + 1, row)?;
+            }
+            info.set("agents", agents)?;
+            match function.call::<Value>((info, api.clone()))? {
+                Value::Nil => Ok(None),
+                Value::Boolean(close) => Ok(Some(close)),
+                other => Err(mlua::Error::runtime(format!(
+                    "on_close_window must return true, false, or nil, got {}",
                     other.type_name()
                 ))),
             }
@@ -581,6 +651,19 @@ impl Reader {
         config.on_notification = self.hook(root, "on_notification")?;
         config.on_agent = self.hook(root, "on_agent")?;
         config.on_history = self.hook(root, "on_history")?;
+        config.on_close_window = self.hook(root, "on_close_window")?;
+        if let Some(text) = string_field(root, "confirm_close", "confirm_close")? {
+            config.confirm_close = match text.as_str() {
+                "running" => ConfirmClose::Running,
+                "always" => ConfirmClose::Always,
+                "never" => ConfirmClose::Never,
+                other => {
+                    return Err(format!(
+                        "confirm_close: must be \"running\", \"always\", or \"never\", got `{other}`"
+                    ));
+                }
+            };
+        }
         if let Some(table) = table_field(root, "history", "history")? {
             config.history = history(&table)?;
         }
@@ -1428,6 +1511,71 @@ mod tests {
             message: "Allow Bash?".into(),
             name: "claude".into(),
         }
+    }
+
+    #[test]
+    fn confirm_close_values() {
+        assert_eq!(
+            load("return {}").config.confirm_close,
+            ConfirmClose::Running
+        );
+        for (text, value) in [
+            ("running", ConfirmClose::Running),
+            ("always", ConfirmClose::Always),
+            ("never", ConfirmClose::Never),
+        ] {
+            let source = format!("return {{ confirm_close = \"{text}\" }}");
+            assert_eq!(load(&source).config.confirm_close, value);
+        }
+        let Err(err) = load_str(r#"return { confirm_close = "maybe" }"#, "t") else {
+            panic!("a bad value");
+        };
+        assert!(err.contains("confirm_close"), "{err}");
+    }
+
+    fn close_in() -> CloseIn {
+        CloseIn {
+            tabs: 2,
+            panes: 3,
+            running: vec![(2, "cargo".into())],
+            agents: vec![(1, "claude".into(), "working".into())],
+        }
+    }
+
+    #[test]
+    fn without_on_close_window_the_rule_decides() {
+        assert_eq!(
+            load("return {}").on_close_window(&close_in()).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn on_close_window_sees_what_runs() {
+        let loaded = load(
+            r#"return { on_close_window = function(info)
+              for _, a in ipairs(info.agents) do
+                if a.state == "working" and a.tab == 1 and a.name == "claude" then return false end
+              end
+              if info.tabs == 2 and info.panes == 3 and info.running[1].program == "cargo" then return true end
+            end }"#,
+        );
+        assert_eq!(loaded.on_close_window(&close_in()).unwrap(), Some(false));
+        let no_agents = CloseIn {
+            agents: vec![],
+            ..close_in()
+        };
+        assert_eq!(loaded.on_close_window(&no_agents).unwrap(), Some(true));
+        let other = CloseIn {
+            tabs: 5,
+            agents: vec![],
+            ..close_in()
+        };
+        assert_eq!(
+            loaded.on_close_window(&other).unwrap(),
+            None,
+            "nil = the rule"
+        );
     }
 
     #[test]
