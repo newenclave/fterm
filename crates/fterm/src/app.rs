@@ -1664,6 +1664,21 @@ impl App {
         if action == A::SetAiKey {
             return self.start_key_prompt();
         }
+        if action == A::ExplainError {
+            return self.explain_error();
+        }
+        if action == A::AskAiSelection {
+            return self.ask_ai_selection();
+        }
+        // Ctrl+C in the AI panel copies the last command (or the last answer).
+        if action == A::Copy
+            && self
+                .running
+                .as_ref()
+                .is_some_and(|r| r.dock.focused && r.dock.showing(PanelKind::Ai))
+        {
+            return self.ai_copy();
+        }
         // Ctrl+V in the AI panel goes into its input, not into the terminal.
         if action == A::Paste
             && self
@@ -1787,7 +1802,7 @@ impl App {
             A::OpenConfig => return self.open_config(),
             A::ToggleDock | A::PanelEvents | A::PanelAgents | A::FocusDock => {}
             A::HistoryCommands | A::HistoryDirs => {}
-            A::PanelAi | A::SetAiKey => {}
+            A::PanelAi | A::SetAiKey | A::ExplainError | A::AskAiSelection => {}
             A::ToggleRemoteControl => {
                 let Some(pane) = running.mux.active_pane() else {
                     return;
@@ -2937,11 +2952,12 @@ impl App {
                 let (input, cursor) = self.ai.input.layout(width);
                 let rows = fterm_render::dock::chat_rows(layout, cell, input.len());
                 let max_scroll = lines.len().saturating_sub(rows);
-                Some((lines, input, cursor, self.ai_title(), max_scroll))
+                let chips: Vec<String> = self.ai.context.iter().map(|c| c.label()).collect();
+                Some((lines, input, cursor, self.ai_title(), max_scroll, chips))
             }
             _ => None,
         };
-        if let Some((_, _, _, _, max_scroll)) = &ai_view {
+        if let Some((_, _, _, _, max_scroll, _)) = &ai_view {
             self.ai.scroll = self.ai.scroll.min(*max_scroll);
         }
         let ai_scroll = self.ai.scroll;
@@ -3135,15 +3151,18 @@ impl App {
                             focused: dock_focused && focused,
                             empty: dock_empty,
                             hints: dock_hints,
-                            chat: ai_view.as_ref().map(|(lines, input, cursor, title, _)| {
-                                fterm_render::dock::ChatView {
-                                    lines,
-                                    scroll: ai_scroll,
-                                    input,
-                                    cursor: (dock_focused && focused).then_some(*cursor),
-                                    title,
-                                }
-                            }),
+                            chat: ai_view.as_ref().map(
+                                |(lines, input, cursor, title, _, chips)| {
+                                    fterm_render::dock::ChatView {
+                                        lines,
+                                        scroll: ai_scroll,
+                                        input,
+                                        cursor: (dock_focused && focused).then_some(*cursor),
+                                        title,
+                                        chips,
+                                    }
+                                },
+                            ),
                         },
                         layout,
                     )?;

@@ -141,6 +141,20 @@ It has service panels: **Events** (all notifications) and **Agents** (every pane
 
 New events have a bright title. They count as read when the Events panel goes away (or fterm goes to the back).
 
+## The AI panel
+| Key | What it does |
+|---|---|
+| Ctrl + Shift + I | Open the AI panel (press again to close the dock). |
+| Ctrl + Shift + X | Explain the last error: the last command and its output go to the AI. |
+| Enter / Shift + Enter | Send / a new line. |
+| Esc | Stop the answer; again = back to the terminal. |
+| Ctrl + Shift + Enter | Put the last command of the answer into the prompt (it does not run). |
+| Ctrl + C | Copy the last command of the answer. |
+| Alt + O / Alt + S | Add the last output / the selection to the next question. |
+| Up (empty input), PageUp, PageDown, Ctrl + L | The last question, scroll, a new chat. |
+
+See [AI.md](AI.md).
+
 ## Typing
 | Key | What it does |
 |---|---|

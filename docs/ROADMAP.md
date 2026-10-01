@@ -264,7 +264,7 @@ that want a URL, and saved "always allow" answers.
 - **Check:** `claude mcp add fterm -- fterm mcp`. Claude opens a tab, runs `cargo test`, and reads the result.
   Two Claude sessions in two panes send messages to each other.
 
-### Phase 8 — AI panel
+### Phase 8 — AI panel ✅ (done: Anthropic and OpenAI-like providers with streaming, the AI panel, context chips, "Explain the last error", commands from answers; see [AI.md](AI.md))
 - `fterm-ai`: one interface for many providers:
   Anthropic API, OpenAI-like APIs (OpenAI, OpenRouter, LM Studio, Ollama `/v1`), and Ollama.
 - Answers come as a stream. API keys live in `keyring`.
@@ -293,5 +293,5 @@ that want a URL, and saved "always allow" answers.
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
 ## Next step
-Choose the next phase: 8 (AI panel), 9 (text to command), or 3b (images).
+Choose the next phase: 9 (text to command), 6d (WSL), or 3b (images).
 Write a detailed plan for it. Then build it.

@@ -128,6 +128,12 @@ pub const INPUT_BG: Rgb = Rgb {
     g: 0x27,
     b: 0x3a,
 };
+/// The background of a context chip.
+pub const CHIP_BG: Rgb = Rgb {
+    r: 0x3a,
+    g: 0x3c,
+    b: 0x55,
+};
 /// The input box grows up to this many lines.
 pub const MAX_INPUT_ROWS: usize = 6;
 
@@ -142,6 +148,8 @@ pub struct ChatView<'a> {
     pub cursor: Option<(usize, usize)>,
     /// The provider and the model, on the right of the panel tabs.
     pub title: &'a str,
+    /// What goes with the next question ("output (42 lines)"), over the input.
+    pub chips: &'a [String],
 }
 
 /// The height of the input box for this many lines.
@@ -151,7 +159,8 @@ fn input_height(cell: CellMetrics, input_lines: usize) -> f32 {
 
 /// How many chat lines fit above an input box with `input_lines` lines.
 pub fn chat_rows(layout: &DockLayout, cell: CellMetrics, input_lines: usize) -> usize {
-    let free = layout.list.height - input_height(cell, input_lines) - cell.height * 0.5;
+    // One line more for the chips (it is always kept, so the chat does not jump).
+    let free = layout.list.height - input_height(cell, input_lines) - cell.height * 1.5;
     (free / cell.height).floor().max(0.0) as usize
 }
 
@@ -494,6 +503,28 @@ fn build_chat(
         height,
     );
     quads.push(solid(input, INPUT_BG));
+    // The chips over it, side by side.
+    let mut x = list.x + 2.0;
+    let chip_y = input.y - cell.height - 2.0;
+    let end = list.x + list.width;
+    for (i, chip) in chat.chips.iter().enumerate() {
+        let w = (chip.chars().map(char_cells).sum::<usize>() + 2) as f32 * cell.width;
+        let rest = chat.chips.len() - i - 1;
+        // Keep room for a `+N` chip when more chips come after this one.
+        let room_after = if rest > 0 { 5.0 * cell.width } else { 0.0 };
+        if x + w + room_after > end {
+            let more = format!("+{}", chat.chips.len() - i);
+            let w = (more.chars().count() + 2) as f32 * cell.width;
+            if x + w <= end {
+                quads.push(solid(Rect::new(x, chip_y, w, cell.height), CHIP_BG));
+                push_text(text, &more, x + cell.width, chip_y, cell, BOX_TEXT, glyph)?;
+            }
+            break;
+        }
+        quads.push(solid(Rect::new(x, chip_y, w, cell.height), CHIP_BG));
+        push_text(text, chip, x + cell.width, chip_y, cell, BOX_TEXT, glyph)?;
+        x += w + cell.width * 0.5;
+    }
     let first = chat.input.len().saturating_sub(MAX_INPUT_ROWS);
     for (n, line) in chat.input.iter().skip(first).enumerate() {
         let y = input.y + cell.height * 0.25 + n as f32 * cell.height;
@@ -771,6 +802,7 @@ mod tests {
             input: &input,
             cursor: Some((0, 2)),
             title: "anthropic · haiku",
+            chips: &[],
         });
         let found = colors(&quads);
         assert!(
@@ -822,6 +854,7 @@ mod tests {
             input: &input,
             cursor: None,
             title: "",
+            chips: &[],
         };
         let red = |quads: &[Instance]| {
             quads
@@ -834,5 +867,58 @@ mod tests {
         assert!(rows > 5 && rows < 200);
         let (_, quads) = chat_quads(view(200 - rows));
         assert!(red(&quads), "scrolled to the top: the first line shows");
+    }
+
+    #[test]
+    fn chips_show_over_the_input() {
+        let input = [String::new()];
+        let chips = ["output (42 lines)".to_owned(), "selection".to_owned()];
+        let (layout, quads) = chat_quads(ChatView {
+            lines: &[],
+            scroll: 0,
+            input: &input,
+            cursor: None,
+            title: "",
+            chips: &chips,
+        });
+        let chip_bgs: Vec<&Instance> = quads
+            .iter()
+            .filter(|q| q.kind == KIND_SOLID && q.color == linear_color(CHIP_BG))
+            .collect();
+        assert_eq!(chip_bgs.len(), 2, "one box for each chip");
+        assert!(chip_bgs[0].rect[0] < chip_bgs[1].rect[0], "side by side");
+        let input_top = quads
+            .iter()
+            .find(|q| q.kind == KIND_SOLID && q.color == linear_color(INPUT_BG))
+            .unwrap()
+            .rect[1];
+        assert!(
+            chip_bgs[0].rect[1] + chip_bgs[0].rect[3] <= input_top + 0.5,
+            "over the input"
+        );
+        assert!(chip_bgs[0].rect[1] >= layout.list.y);
+    }
+
+    #[test]
+    fn chips_that_do_not_fit_show_as_a_count() {
+        let input = [String::new()];
+        let chips = [
+            "output (42 lines)".to_owned(),
+            "last command (exit 1)".to_owned(),
+            "selection (3 lines)".to_owned(),
+        ];
+        let (_, quads) = chat_quads(ChatView {
+            lines: &[],
+            scroll: 0,
+            input: &input,
+            cursor: None,
+            title: "",
+            chips: &chips,
+        });
+        let boxes = quads
+            .iter()
+            .filter(|q| q.kind == KIND_SOLID && q.color == linear_color(CHIP_BG))
+            .count();
+        assert_eq!(boxes, 2, "the first chip and a `+2` chip");
     }
 }

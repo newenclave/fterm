@@ -12,7 +12,37 @@ next to Events and Agents.
 - When the answer is ready and the panel is not on the screen (or fterm is in the back), a toast tells you.
 
 With every question fterm sends: your OS, the shell of the active pane, and its folder.
-Nothing else from your terminal goes out (more context comes in the next step, and only when you add it).
+Nothing else from your terminal goes out, unless you add it (see Context).
+
+## Context
+Chips over the input show what goes with the next question. Only what you see there goes out.
+
+| Key | What it does |
+|---|---|
+| `Ctrl+Shift+X` (**Explain the last error**) | Sends the last command, its exit code, and its output with the question "Why did this command fail?" at once. |
+| **Ask AI about the selection** (palette) | Opens the panel with the selected text as a chip. You write the question. |
+| `Alt+O` (in the panel) | Adds the last command and its output. |
+| `Alt+S` (in the panel) | Adds the selected text. |
+| `Backspace` in an empty input | Takes away the last chip. |
+
+A long output goes with its last 200 lines. The last command and its output need shell integration
+(PowerShell has it by itself; see [CONFIG.md](CONFIG.md)).
+
+## Commands from answers
+- `Ctrl+Shift+Enter` puts the last command of the answer (its last code block) into the prompt of the active pane,
+  in place of what you typed there. It does not run: you read it and press Enter yourself.
+- `Ctrl+C` (in the panel) copies that command (or the whole last answer when it has no code).
+
+## Hide secrets: on_ai_request
+This function sees every question before it goes out. `r` has `question`, `text` (what goes out: the context
+and the question), `provider`, and `model`. Return `false` to not send it, or return `r` with a changed `text`.
+
+```lua
+on_ai_request = function(r)
+  r.text = r.text:gsub("password=%S+", "password=***"):gsub("ghp_%w+", "ghp_***")
+  return r
+end,
+```
 
 ## The provider and the key
 The default is **Anthropic** with **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`): fast and cheap.

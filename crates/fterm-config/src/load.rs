@@ -203,6 +203,17 @@ impl Default for AiConfig {
     }
 }
 
+/// A question before it goes to the AI (for `on_ai_request`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AiRequestIn {
+    /// What the user typed.
+    pub question: String,
+    /// What goes out: the context from the terminal and the question.
+    pub text: String,
+    pub provider: String,
+    pub model: String,
+}
+
 /// What `window_title` gets.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TitleIn {
@@ -363,6 +374,8 @@ pub struct Config {
     pub on_close_window: Option<usize>,
     /// The Lua function `window_title` (its number), if there is one.
     pub window_title: Option<usize>,
+    /// The Lua function `on_ai_request` (its number), if there is one.
+    pub on_ai_request: Option<usize>,
 }
 
 impl Default for Config {
@@ -389,6 +402,7 @@ impl Default for Config {
             on_history: None,
             on_close_window: None,
             window_title: None,
+            on_ai_request: None,
         }
     }
 }
@@ -612,6 +626,36 @@ impl LoadedConfig {
         run().map_err(|err| err.to_string())
     }
 
+    /// Asks `on_ai_request` (if the config has it) about a question. `None` = do not send it;
+    /// `Some(text)` = send this text.
+    pub fn on_ai_request(&self, input: &AiRequestIn) -> Result<Option<String>, String> {
+        let (Some(index), Some(lua), Some(api)) =
+            (self.config.on_ai_request, &self._lua, &self.api)
+        else {
+            return Ok(Some(input.text.clone()));
+        };
+        let Some(function) = self.functions.get(index) else {
+            return Err(format!("no Lua function number {index}"));
+        };
+        let run = || -> mlua::Result<Option<String>> {
+            let r = lua.create_table()?;
+            r.set("question", input.question.as_str())?;
+            r.set("text", input.text.as_str())?;
+            r.set("provider", input.provider.as_str())?;
+            r.set("model", input.model.as_str())?;
+            match function.call::<Value>((r, api.clone()))? {
+                Value::Nil | Value::Boolean(true) => Ok(Some(input.text.clone())),
+                Value::Boolean(false) => Ok(None),
+                Value::Table(out) => Ok(out.get::<Option<String>>("text")?),
+                other => Err(mlua::Error::runtime(format!(
+                    "on_ai_request must return a table, false, or nil, got {}",
+                    other.type_name()
+                ))),
+            }
+        };
+        run().map_err(|err| err.to_string())
+    }
+
     /// Runs the Lua function `index` (from `Action::Lua`) and returns what it asked fterm to do.
     pub fn call(&self, index: usize) -> Result<Vec<ApiCall>, String> {
         let (Some(function), Some(api)) = (self.functions.get(index), &self.api) else {
@@ -813,6 +857,7 @@ impl Reader {
         config.on_history = self.hook(root, "on_history")?;
         config.on_close_window = self.hook(root, "on_close_window")?;
         config.window_title = self.hook(root, "window_title")?;
+        config.on_ai_request = self.hook(root, "on_ai_request")?;
         if let Some(table) = table_field(root, "ai", "ai")? {
             config.ai = ai(&table)?;
         }
@@ -1828,6 +1873,45 @@ mod tests {
             None,
             "nil = the default"
         );
+    }
+
+    fn ai_in() -> AiRequestIn {
+        AiRequestIn {
+            question: "why?".into(),
+            text: "<terminal>token=abc</terminal>\n\nwhy?".into(),
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5-20251001".into(),
+        }
+    }
+
+    #[test]
+    fn without_on_ai_request_the_text_goes_as_it_is() {
+        assert_eq!(
+            load("return {}").on_ai_request(&ai_in()).unwrap(),
+            Some(ai_in().text)
+        );
+    }
+
+    #[test]
+    fn on_ai_request_can_stop_or_change_the_text() {
+        let loaded = load(
+            r#"return { on_ai_request = function(r)
+              if r.question == "secret" then return false end
+              if r.provider == "anthropic" and r.model:find("haiku") then
+                r.text = r.text:gsub("token=%w+", "token=***")
+                return r
+              end
+            end }"#,
+        );
+        assert_eq!(
+            loaded.on_ai_request(&ai_in()).unwrap().as_deref(),
+            Some("<terminal>token=***</terminal>\n\nwhy?")
+        );
+        let secret = AiRequestIn {
+            question: "secret".into(),
+            ..ai_in()
+        };
+        assert_eq!(loaded.on_ai_request(&secret).unwrap(), None);
     }
 
     #[test]

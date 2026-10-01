@@ -186,11 +186,15 @@ pub enum BuiltinAction {
     PanelAi,
     /// Ask for the API key of the AI provider and save it in the key store.
     SetAiKey,
+    /// Send the last command, its exit code, and its output to the AI: "why did it fail?".
+    ExplainError,
+    /// Open the AI panel with the selected text as context.
+    AskAiSelection,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 40] = [
+    pub const ALL: [BuiltinAction; 42] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -231,6 +235,8 @@ impl BuiltinAction {
         Self::ToggleRemoteControl,
         Self::PanelAi,
         Self::SetAiKey,
+        Self::ExplainError,
+        Self::AskAiSelection,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -276,6 +282,8 @@ impl BuiltinAction {
             Self::ToggleRemoteControl => "toggle_remote_control",
             Self::PanelAi => "panel_ai",
             Self::SetAiKey => "set_ai_key",
+            Self::ExplainError => "explain_error",
+            Self::AskAiSelection => "ask_ai_selection",
         };
         name.to_owned()
     }
@@ -309,6 +317,8 @@ impl BuiltinAction {
             Self::ToggleRemoteControl => "Remote control on or off for this pane".to_owned(),
             Self::PanelAi => "AI panel".to_owned(),
             Self::SetAiKey => "Set the AI key".to_owned(),
+            Self::ExplainError => "Explain the last error (AI)".to_owned(),
+            Self::AskAiSelection => "Ask AI about the selection".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -395,6 +405,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+shift+a", "panel_agents"),
     ("ctrl+shift+o", "focus_dock"),
     ("ctrl+shift+i", "panel_ai"),
+    ("ctrl+shift+x", "explain_error"),
     ("alt+f8", "history_commands"),
     ("alt+f12", "history_dirs"),
 ];
@@ -444,6 +455,24 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ai_context_actions() {
+        let keys = Keymap::with_defaults();
+        assert_eq!(
+            keys.get(&chord("ctrl+shift+x")),
+            Some(&Action::Builtin(BuiltinAction::ExplainError))
+        );
+        assert_eq!(
+            BuiltinAction::ExplainError.label(),
+            "Explain the last error (AI)"
+        );
+        assert_eq!(BuiltinAction::AskAiSelection.name(), "ask_ai_selection");
+        assert_eq!(
+            BuiltinAction::AskAiSelection.label(),
+            "Ask AI about the selection"
+        );
+    }
 
     #[test]
     fn ai_actions_and_keys() {

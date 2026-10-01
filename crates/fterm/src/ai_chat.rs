@@ -276,13 +276,106 @@ pub fn wrap(line: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// The most lines of an output or a selection that go with a question (the end of it).
+pub const MAX_CONTEXT_LINES: usize = 200;
+
+/// Something from the terminal that goes with the next question. The user sees it as a chip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ContextItem {
+    /// The last command and its exit code.
+    Command { command: String, exit: Option<i32> },
+    /// The output of the last command.
+    Output(String),
+    /// The selected text.
+    Selection(String),
+}
+
+impl ContextItem {
+    /// The text of the chip: "output (42 lines)".
+    pub fn label(&self) -> String {
+        let lines = |text: &str| {
+            let n = text.lines().count().max(1);
+            if n == 1 {
+                "1 line".to_owned()
+            } else {
+                format!("{n} lines")
+            }
+        };
+        match self {
+            Self::Command {
+                exit: Some(code), ..
+            } => format!("last command (exit {code})"),
+            Self::Command { exit: None, .. } => "last command".to_owned(),
+            Self::Output(text) => format!("output ({})", lines(text)),
+            Self::Selection(text) => format!("selection ({})", lines(text)),
+        }
+    }
+}
+
+/// The text that goes to the AI: the context (in tags, so the model knows what is what), then the question.
+pub fn build_message(question: &str, context: &[ContextItem]) -> String {
+    if context.is_empty() {
+        return question.to_owned();
+    }
+    // The end of a long text (the end of an output says most).
+    let tail = |text: &str| {
+        let lines: Vec<&str> = text.lines().collect();
+        let cut = lines.len().saturating_sub(MAX_CONTEXT_LINES);
+        let mut out = String::new();
+        if cut > 0 {
+            out.push_str(&format!("(the first {cut} lines are left out)\n"));
+        }
+        out.push_str(&lines[cut..].join("\n"));
+        out
+    };
+    let mut text = String::from("<terminal>\n");
+    for item in context {
+        match item {
+            ContextItem::Command { command, exit } => {
+                text.push_str(&format!("The last command: {command}"));
+                if let Some(code) = exit {
+                    text.push_str(&format!(" (exit code {code})"));
+                }
+                text.push('\n');
+            }
+            ContextItem::Output(output) => {
+                text.push_str(&format!("Its output:\n```text\n{}\n```\n", tail(output)));
+            }
+            ContextItem::Selection(selection) => {
+                text.push_str(&format!(
+                    "The selected text:\n```text\n{}\n```\n",
+                    tail(selection)
+                ));
+            }
+        }
+    }
+    text.push_str("</terminal>\n\n");
+    text.push_str(question);
+    text
+}
+
+/// The last code block of the last answer (for "put into the terminal" and "copy").
+pub fn last_code_block(turns: &[Turn]) -> Option<String> {
+    let answer = turns.iter().rev().find(|t| !t.user)?;
+    blocks(&answer.text)
+        .into_iter()
+        .rev()
+        .find_map(|b| match b {
+            Block::Code { code, .. } if !code.trim().is_empty() => Some(code),
+            _ => None,
+        })
+}
+
 /// One turn of the chat.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Turn {
     pub user: bool,
+    /// What the chat shows.
     pub text: String,
     pub error: Option<String>,
     pub streaming: bool,
+    /// What goes to the AI when it is not `text` (a question with its context).
+    pub sent: Option<String>,
 }
 
 /// The chat of the AI panel: its turns, the input, the scroll, and the running request.
@@ -297,13 +390,27 @@ pub struct Session {
     next_id: u64,
     /// The last question (Up in an empty input brings it back).
     pub last_question: Option<String>,
+    /// What goes with the next question (the chips over the input).
+    pub context: Vec<ContextItem>,
 }
 
 impl Session {
     /// Starts a question: a user turn and an empty answer that streams. Returns the request id,
     /// or `None` when the text is empty or a request runs.
+    #[cfg(test)]
     pub fn ask(&mut self, text: &str) -> Option<u64> {
-        let text = text.trim();
+        self.start(text, text, None)
+    }
+
+    /// Like `ask`, but the chat shows `display` and the AI gets `sent` (the question with its context).
+    /// Up in the input brings back only the first line of `display` (the question).
+    pub fn ask_with(&mut self, display: &str, sent: String) -> Option<u64> {
+        let question = display.lines().next().unwrap_or_default().to_owned();
+        self.start(display, &question, Some(sent))
+    }
+
+    fn start(&mut self, display: &str, question: &str, sent: Option<String>) -> Option<u64> {
+        let text = display.trim();
         if text.is_empty() || self.running.is_some() {
             return None;
         }
@@ -313,15 +420,17 @@ impl Session {
             text: text.to_owned(),
             error: None,
             streaming: false,
+            sent,
         });
         self.turns.push(Turn {
             user: false,
             text: String::new(),
             error: None,
             streaming: true,
+            sent: None,
         });
         self.running = Some(self.next_id);
-        self.last_question = Some(text.to_owned());
+        self.last_question = Some(question.trim().to_owned());
         self.scroll = 0;
         Some(self.next_id)
     }
@@ -338,7 +447,7 @@ impl Session {
                 Some(a) if a.streaming => {
                     out.push(fterm_ai::Message {
                         role: fterm_ai::Role::User,
-                        content: turn.text.clone(),
+                        content: turn.sent.clone().unwrap_or_else(|| turn.text.clone()),
                     });
                 }
                 // A failed answer: the pair is not sent.
@@ -346,7 +455,7 @@ impl Session {
                 Some(a) => {
                     out.push(fterm_ai::Message {
                         role: fterm_ai::Role::User,
-                        content: turn.text.clone(),
+                        content: turn.sent.clone().unwrap_or_else(|| turn.text.clone()),
                     });
                     out.push(fterm_ai::Message {
                         role: fterm_ai::Role::Assistant,
@@ -661,5 +770,101 @@ mod tests {
         assert!(text.contains("```"), "it asks for commands in code blocks");
         assert!(text.ends_with("Answer in Russian."));
         assert!(!system_prompt("Linux", "bash", None, "").contains("folder"));
+    }
+
+    #[test]
+    fn chip_labels() {
+        let cmd = ContextItem::Command {
+            command: "cargo build".into(),
+            exit: Some(101),
+        };
+        assert_eq!(cmd.label(), "last command (exit 101)");
+        assert_eq!(
+            ContextItem::Command {
+                command: "x".into(),
+                exit: None
+            }
+            .label(),
+            "last command"
+        );
+        assert_eq!(
+            ContextItem::Output("a\nb\nc".into()).label(),
+            "output (3 lines)"
+        );
+        assert_eq!(
+            ContextItem::Selection("one".into()).label(),
+            "selection (1 line)"
+        );
+    }
+
+    #[test]
+    fn a_message_with_context() {
+        let context = [
+            ContextItem::Command {
+                command: "cargo build".into(),
+                exit: Some(101),
+            },
+            ContextItem::Output("error[E0425]: cannot find value `x`".into()),
+        ];
+        let text = build_message("Why?", &context);
+        assert!(text.starts_with("<terminal>"), "{text}");
+        assert!(text.contains("The last command: cargo build (exit code 101)"));
+        assert!(text.contains("```text\nerror[E0425]: cannot find value `x`\n```"));
+        assert!(text.ends_with("</terminal>\n\nWhy?"));
+        assert_eq!(
+            build_message("Why?", &[]),
+            "Why?",
+            "no context: only the question"
+        );
+    }
+
+    #[test]
+    fn a_long_output_keeps_its_end() {
+        let long: Vec<String> = (0..500).map(|i| format!("line {i}")).collect();
+        let text = build_message("?", &[ContextItem::Output(long.join("\n"))]);
+        assert!(text.contains("line 499"));
+        assert!(!text.contains("line 299\n"), "only the last 200 lines");
+        assert!(text.contains("line 300"));
+        assert!(text.contains("(the first 300 lines are left out)"));
+    }
+
+    #[test]
+    fn the_last_code_block() {
+        let turn = |user: bool, text: &str| Turn {
+            user,
+            text: text.into(),
+            error: None,
+            streaming: false,
+            sent: None,
+        };
+        let turns = [
+            turn(true, "q"),
+            turn(
+                false,
+                "First:\n```bash\nls\n```\nThen:\n```bash\nls -la\n```",
+            ),
+        ];
+        assert_eq!(last_code_block(&turns).as_deref(), Some("ls -la"));
+        assert_eq!(last_code_block(&[turn(false, "no code")]), None);
+        assert_eq!(last_code_block(&[]), None);
+    }
+
+    #[test]
+    fn the_chat_shows_the_question_and_the_api_gets_the_context() {
+        let mut s = Session::default();
+        let id = s
+            .ask_with(
+                "why?\n+ output (2 lines)",
+                "<terminal>...</terminal>\n\nwhy?".into(),
+            )
+            .unwrap();
+        assert_eq!(s.turns[0].text, "why?\n+ output (2 lines)");
+        assert_eq!(s.messages()[0].content, "<terminal>...</terminal>\n\nwhy?");
+        answer(&mut s, id, "because");
+        assert_eq!(
+            s.last_question.as_deref(),
+            Some("why?"),
+            "Up brings back the question, not the chips"
+        );
     }
 }

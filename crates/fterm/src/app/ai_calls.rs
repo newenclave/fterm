@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use fterm_ai::{AiError, Chat, Event, Kind, Provider, keys, stream};
 
 use super::*;
-use crate::ai_chat::{InputBox, system_prompt};
+use crate::ai_chat::{ContextItem, InputBox, build_message, last_code_block, system_prompt};
 
 impl App {
     /// The provider from the config, as `fterm_ai` wants it.
@@ -46,10 +46,53 @@ impl App {
 
     /// Sends the text of the input box.
     pub(super) fn ai_send(&mut self) {
-        let text = self.ai.input.take();
-        let Some(id) = self.ai.ask(&text) else {
-            // Empty, or an answer runs: keep the text.
-            self.ai.input.set(&text);
+        let question = self.ai.input.take();
+        if question.trim().is_empty() || self.ai.running.is_some() {
+            self.ai.input.set(&question);
+            return;
+        }
+        let context = std::mem::take(&mut self.ai.context);
+        let mut sent = build_message(question.trim(), &context);
+        // on_ai_request in the config can stop it or change the text (for example, to hide secrets).
+        let (provider_name, model) = self
+            .config
+            .config
+            .ai
+            .current()
+            .map(|p| (p.name.clone(), p.model.clone()))
+            .unwrap_or_default();
+        let request = fterm_config::load::AiRequestIn {
+            question: question.trim().to_owned(),
+            text: sent.clone(),
+            provider: provider_name,
+            model,
+        };
+        match self.config.on_ai_request(&request) {
+            Ok(Some(text)) => sent = text,
+            Ok(None) => {
+                self.ai.input.set(&question);
+                self.ai.context = context;
+                self.notify(
+                    None,
+                    "The question was not sent",
+                    "on_ai_request in your config stopped it.",
+                    Level::Info,
+                    Source::App,
+                );
+                return;
+            }
+            Err(err) => {
+                self.ai.input.set(&question);
+                self.ai.context = context;
+                self.notify(None, "Lua error", &err, Level::Error, Source::App);
+                return;
+            }
+        }
+        let mut display = question.trim().to_owned();
+        for item in &context {
+            display.push_str(&format!("\n+ {}", item.label()));
+        }
+        let Some(id) = self.ai.ask_with(&display, sent) else {
             return;
         };
         let provider = match self.ai_provider() {
@@ -133,7 +176,12 @@ impl App {
     pub(super) fn ai_key(&mut self, event: &KeyEvent) {
         let shift = self.mods.shift_key();
         let rows = self.ai_rows();
+        let ctrl = self.mods.control_key();
+        let alt = self.mods.alt_key();
+        let letter = physical_letter(event.physical_key);
         match &event.logical_key {
+            // Ctrl+Shift+Enter: put the last command of the answer into the prompt (it does not run).
+            Key::Named(NamedKey::Enter) if ctrl && shift => return self.ai_put_code(),
             Key::Named(NamedKey::Enter) if shift => self.ai.input.insert("\n"),
             Key::Named(NamedKey::Enter) => return self.ai_send(),
             Key::Named(NamedKey::Escape) => {
@@ -146,6 +194,10 @@ impl App {
                         }
                     }
                 }
+            }
+            // Backspace in an empty input takes away the last chip.
+            Key::Named(NamedKey::Backspace) if self.ai.input.text.is_empty() => {
+                self.ai.context.pop();
             }
             Key::Named(NamedKey::Backspace) => self.ai.input.backspace(),
             Key::Named(NamedKey::Delete) => self.ai.input.delete(),
@@ -162,6 +214,9 @@ impl App {
             Key::Named(NamedKey::PageDown) => {
                 self.ai.scroll = self.ai.scroll.saturating_sub(rows.max(1))
             }
+            // Alt+O: the last command and its output; Alt+S: the selection.
+            _ if alt && letter == Some('o') => self.ai_add_output(),
+            _ if alt && letter == Some('s') => self.ai_add_selection(),
             // Ctrl+L: a new chat (like clearing a terminal).
             _ if self.mods.control_key() && physical_letter(event.physical_key) == Some('l') => {
                 if let Some(stop) = self.ai_stop.take() {
@@ -187,6 +242,165 @@ impl App {
         }
         if let Some(running) = &self.running {
             running.window.request_redraw();
+        }
+    }
+
+    /// The last command of the active pane and its output, as context.
+    fn pane_context(&self) -> Vec<ContextItem> {
+        let Some(pane) = self.running.as_ref().and_then(Running::active_pane) else {
+            return Vec::new();
+        };
+        let mut items = Vec::new();
+        if let Some(last) = &pane.last_command {
+            items.push(ContextItem::Command {
+                command: last
+                    .command
+                    .clone()
+                    .unwrap_or_else(|| "(unknown)".to_owned()),
+                exit: last.exit,
+            });
+        }
+        let output = pane.session.with_term(|term| {
+            let total = fterm_term::input::total_lines(term);
+            pane.shell
+                .last_output(total)
+                .map(|(start, end)| fterm_term::input::lines_text(term, start, end))
+        });
+        if let Some(output) = output.filter(|o| !o.trim().is_empty()) {
+            items.push(ContextItem::Output(output.trim_end().to_owned()));
+        }
+        items
+    }
+
+    /// Adds context items (one of each kind: a new one takes the place of an old one).
+    fn add_context(&mut self, items: Vec<ContextItem>) {
+        for item in items {
+            let same = |a: &ContextItem| std::mem::discriminant(a) == std::mem::discriminant(&item);
+            self.ai.context.retain(|c| !same(c));
+            self.ai.context.push(item);
+        }
+        self.redraw_ai();
+    }
+
+    fn ai_add_output(&mut self) {
+        let items = self.pane_context();
+        if items.is_empty() {
+            return self.notify(
+                None,
+                "No command output",
+                "It needs shell integration (see CONFIG.md).",
+                Level::Info,
+                Source::App,
+            );
+        }
+        self.add_context(items);
+    }
+
+    fn ai_add_selection(&mut self) {
+        let text = self
+            .running
+            .as_ref()
+            .and_then(Running::session)
+            .and_then(|s| s.with_term(|term| term.selection_to_string()))
+            .filter(|t| !t.trim().is_empty());
+        match text {
+            Some(text) => self.add_context(vec![ContextItem::Selection(text)]),
+            None => self.notify(None, "Nothing is selected", "", Level::Info, Source::App),
+        }
+    }
+
+    /// `explain_error`: the last command and its output go to the AI with a question, at once.
+    pub(super) fn explain_error(&mut self) {
+        let items = self.pane_context();
+        let exit = items.iter().find_map(|i| match i {
+            ContextItem::Command { exit, .. } => Some(*exit),
+            _ => None,
+        });
+        let Some(exit) = exit else {
+            return self.notify(
+                None,
+                "No last command",
+                "It needs shell integration (see CONFIG.md).",
+                Level::Info,
+                Source::App,
+            );
+        };
+        self.open_ai_panel();
+        self.add_context(items);
+        let question = match exit {
+            Some(0) => "Explain this output.",
+            _ => "Why did this command fail, and how do I fix it?",
+        };
+        self.ai.input.set(question);
+        self.ai_send();
+    }
+
+    /// `ask_ai_selection`: the selection goes into the context; the user writes the question.
+    pub(super) fn ask_ai_selection(&mut self) {
+        self.open_ai_panel();
+        self.ai_add_selection();
+    }
+
+    fn open_ai_panel(&mut self) {
+        if let Some(running) = &mut self.running {
+            running.dock.open = true;
+            running.dock.active = PanelKind::Ai;
+            running.dock.focused = true;
+        }
+        self.dock_changed();
+    }
+
+    /// Puts the last code block of the answer into the prompt of the active pane (not run).
+    fn ai_put_code(&mut self) {
+        let Some(code) = last_code_block(&self.ai.turns) else {
+            return self.notify(
+                None,
+                "No command in the answer",
+                "",
+                Level::Info,
+                Source::App,
+            );
+        };
+        let Some(pane) = self.running.as_ref().and_then(Running::active_pane) else {
+            return;
+        };
+        if pane.shell.is_running() {
+            self.copy_text(code);
+            return self.notify(
+                None,
+                "A program runs in this pane",
+                "The command is copied. Paste it where you need it.",
+                Level::Info,
+                Source::App,
+            );
+        }
+        let typed = pane
+            .shell
+            .input_start()
+            .and_then(|start| pane.session.with_term(|term| typed_input(term, start)))
+            .map(|i| i.text)
+            .unwrap_or_default();
+        // A block of many lines goes as one line for the shell to see it all (PowerShell and bash keep it).
+        let text = code.trim_end().to_owned();
+        self.type_into_prompt(&typed, &text, false);
+        if let Some(running) = &mut self.running {
+            running.dock.focused = false;
+            running.window.request_redraw();
+        }
+    }
+
+    /// Copy in the AI panel: the last code block, else the last answer.
+    pub(super) fn ai_copy(&mut self) {
+        let text = last_code_block(&self.ai.turns).or_else(|| {
+            self.ai
+                .turns
+                .iter()
+                .rev()
+                .find(|t| !t.user)
+                .map(|t| t.text.clone())
+        });
+        if let Some(text) = text.filter(|t| !t.is_empty()) {
+            self.copy_text(text);
         }
     }
 
