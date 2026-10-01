@@ -47,6 +47,9 @@ return {
   -- history = { enabled = true, commands = 10000, dirs = 500, ignore_space = true, hints = false },
   -- on_history = function(h) if h.cmd:find("token") then return false end end,
 
+  -- The window title. The default is "[2/5] title — ⏳ 1 waiting" (like WezTerm).
+  -- window_title = function(t) return t.title .. " (" .. t.tab .. "/" .. t.tabs .. ")" end,
+
   -- The window x asks first when a program or an agent runs: "running" (default), "always", "never".
   -- confirm_close = "running",
   -- on_close_window = function(info) if #info.running == 0 then return true end end,

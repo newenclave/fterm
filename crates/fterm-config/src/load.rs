@@ -110,6 +110,19 @@ impl Default for ApiConfig {
     }
 }
 
+/// What `window_title` gets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleIn {
+    pub tab: usize,
+    pub tabs: usize,
+    pub title: String,
+    pub agent: Option<String>,
+    pub waiting: usize,
+    pub failed: usize,
+    /// The title that fterm would show.
+    pub default: String,
+}
+
 /// When the window × asks first.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ConfirmClose {
@@ -254,6 +267,8 @@ pub struct Config {
     pub on_history: Option<usize>,
     /// The Lua function `on_close_window` (its number), if there is one.
     pub on_close_window: Option<usize>,
+    /// The Lua function `window_title` (its number), if there is one.
+    pub window_title: Option<usize>,
 }
 
 impl Default for Config {
@@ -278,6 +293,7 @@ impl Default for Config {
             on_agent: None,
             on_history: None,
             on_close_window: None,
+            window_title: None,
         }
     }
 }
@@ -464,6 +480,36 @@ impl LoadedConfig {
                 Value::Boolean(close) => Ok(Some(close)),
                 other => Err(mlua::Error::runtime(format!(
                     "on_close_window must return true, false, or nil, got {}",
+                    other.type_name()
+                ))),
+            }
+        };
+        run().map_err(|err| err.to_string())
+    }
+
+    /// Asks `window_title` (if the config has it) for the window title. `None` = the default title.
+    pub fn window_title(&self, input: &TitleIn) -> Result<Option<String>, String> {
+        let (Some(index), Some(lua), Some(api)) = (self.config.window_title, &self._lua, &self.api)
+        else {
+            return Ok(None);
+        };
+        let Some(function) = self.functions.get(index) else {
+            return Err(format!("no Lua function number {index}"));
+        };
+        let run = || -> mlua::Result<Option<String>> {
+            let t = lua.create_table()?;
+            t.set("tab", input.tab)?;
+            t.set("tabs", input.tabs)?;
+            t.set("title", input.title.as_str())?;
+            t.set("agent", input.agent.as_deref())?;
+            t.set("waiting", input.waiting)?;
+            t.set("failed", input.failed)?;
+            t.set("default", input.default.as_str())?;
+            match function.call::<Value>((t, api.clone()))? {
+                Value::Nil => Ok(None),
+                Value::String(text) => Ok(Some(text.to_string_lossy())),
+                other => Err(mlua::Error::runtime(format!(
+                    "window_title must return a string or nil, got {}",
                     other.type_name()
                 ))),
             }
@@ -671,6 +717,7 @@ impl Reader {
         config.on_agent = self.hook(root, "on_agent")?;
         config.on_history = self.hook(root, "on_history")?;
         config.on_close_window = self.hook(root, "on_close_window")?;
+        config.window_title = self.hook(root, "window_title")?;
         if let Some(table) = table_field(root, "api", "api")? {
             for key in ["enabled", "ask"] {
                 match table
@@ -1548,6 +1595,55 @@ mod tests {
             message: "Allow Bash?".into(),
             name: "claude".into(),
         }
+    }
+
+    fn title_in() -> TitleIn {
+        TitleIn {
+            tab: 2,
+            tabs: 3,
+            title: "claude".into(),
+            agent: Some("working".into()),
+            waiting: 1,
+            failed: 0,
+            default: "[2/3] claude — ⏳ 1 waiting".into(),
+        }
+    }
+
+    #[test]
+    fn without_window_title_the_default_is_used() {
+        assert_eq!(load("return {}").window_title(&title_in()).unwrap(), None);
+    }
+
+    #[test]
+    fn window_title_makes_the_title() {
+        let loaded = load(
+            r#"return { window_title = function(t)
+              if t.agent == "working" then return "◐ " .. t.title .. " (" .. t.tab .. "/" .. t.tabs .. ")" end
+              if t.waiting > 0 then return t.default end
+            end }"#,
+        );
+        assert_eq!(
+            loaded.window_title(&title_in()).unwrap().as_deref(),
+            Some("◐ claude (2/3)")
+        );
+        let idle = TitleIn {
+            agent: None,
+            ..title_in()
+        };
+        assert_eq!(
+            loaded.window_title(&idle).unwrap().as_deref(),
+            Some("[2/3] claude — ⏳ 1 waiting")
+        );
+        let quiet = TitleIn {
+            agent: None,
+            waiting: 0,
+            ..title_in()
+        };
+        assert_eq!(
+            loaded.window_title(&quiet).unwrap(),
+            None,
+            "nil = the default"
+        );
     }
 
     #[test]

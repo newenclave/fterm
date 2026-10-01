@@ -271,6 +271,22 @@ on_history = function(h)
 end,
 ```
 
+## The window title
+Like WezTerm, the window title shows the tab number and the number of tabs, then the title of the active tab:
+`[2/5] claude`. With one tab there is no number. When agents in **other** tabs wait for you or failed,
+the title says so: `[2/5] claude — ⏳ 1 waiting · ✗ 1 failed`. So you see it in the taskbar too.
+
+### window_title
+Make your own title. `t` has `tab`, `tabs`, `title`, `agent` (the state in the active tab, or nil),
+`waiting`, `failed`, and `default` (the title fterm would show). Return a string, or `nil` for the default.
+
+```lua
+window_title = function(t)
+  if t.waiting > 0 then return "⏳ " .. t.default end
+  return t.title .. "  (" .. t.tab .. "/" .. t.tabs .. ")"
+end,
+```
+
 ## Closing the window
 The window × (and Alt+F4, and closing the last tab) asks first when something runs:
 

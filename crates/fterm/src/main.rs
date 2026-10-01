@@ -14,6 +14,7 @@ mod mouse;
 mod notify;
 mod palette;
 mod panels;
+mod title;
 
 use tracing_subscriber::EnvFilter;
 use winit::event_loop::{ControlFlow, EventLoop};

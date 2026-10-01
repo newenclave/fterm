@@ -536,6 +536,7 @@ impl App {
             return;
         }
         tracing::debug!(pane = pane.0, ?previous, ?kind, "agent state");
+        self.update_window_title();
         self.api_event(
             "agent_state",
             serde_json::json!({
@@ -1456,20 +1457,59 @@ impl App {
         if self.title_message_until.is_some() {
             return;
         }
+        running.window.set_title(&self.window_title());
+    }
+
+    /// `[tab/tabs] title — ⏳ 1 waiting`, or what `window_title` in the config says.
+    fn window_title(&self) -> String {
+        let Some(running) = &self.running else {
+            return "fterm".to_owned();
+        };
+        let active = running.mux.active_index();
         let titles = running.tab_titles();
-        let title = titles
-            .get(running.mux.active_index())
-            .map_or("fterm", String::as_str);
-        running.window.set_title(title);
+        let badges = running.tab_badges();
+        let others = || {
+            badges
+                .iter()
+                .enumerate()
+                .filter(move |(i, _)| *i != active)
+                .filter_map(|(_, b)| *b)
+        };
+        let info = crate::title::TitleInfo {
+            tab: active + 1,
+            tabs: running.mux.tabs().len(),
+            title: titles.get(active).cloned().unwrap_or_default(),
+            agent: running
+                .active_pane()
+                .and_then(|p| p.agent.as_ref())
+                .map(|a| a.kind.name().to_owned()),
+            waiting: others().filter(|k| *k == AgentKind::Waiting).count(),
+            failed: others().filter(|k| *k == AgentKind::Error).count(),
+        };
+        let default = crate::title::default_title(&info);
+        let input = fterm_config::load::TitleIn {
+            tab: info.tab,
+            tabs: info.tabs,
+            title: info.title,
+            agent: info.agent,
+            waiting: info.waiting,
+            failed: info.failed,
+            default: default.clone(),
+        };
+        match self.config.window_title(&input) {
+            Ok(Some(title)) => title,
+            Ok(None) => default,
+            Err(err) => {
+                tracing::warn!("window_title: {err}");
+                default
+            }
+        }
     }
 
     /// Shows a short message in the window title.
     fn title_message(&mut self, message: &str) {
+        let title = self.window_title();
         if let Some(running) = &self.running {
-            let titles = running.tab_titles();
-            let title = titles
-                .get(running.mux.active_index())
-                .map_or("fterm", String::as_str);
             running.window.set_title(&format!("{title} — {message}"));
             self.title_message_until = Some(Instant::now() + TITLE_MESSAGE);
         }
