@@ -120,8 +120,15 @@ Ideas (we pick the order in the Phase 3 plan):
   no broken lines, and no frame chars.
 
 ### Phase 3b — Images in the terminal
-- First a test: which image protocols get through ConPTY (Kitty, Sixel, iTerm2)?
-  A new `conpty.dll` + `OpenConsole.exe` from Windows Terminal may be needed.
+- First a test: which image protocols get through ConPTY (Kitty, Sixel, iTerm2)? ✅ (done, 2026-10-01,
+  with the ConPTY of Windows 11 26200):
+  - iTerm2 (OSC 1337) gets through, in its place in the output;
+  - Sixel (DCS) and Kitty (APC) are removed by ConPTY;
+  - ConPTY does not know that an image takes lines, so its cursor and ours go apart after an image
+    (PSReadLine moves the cursor to absolute places).
+  So images in the terminal need the new `conpty.dll` + `OpenConsole.exe` (NuGet `Microsoft.Windows.Console.ConPTY`, MIT)
+  next to `fterm.exe`. The user does not want extra files for now: images wait. On Linux and macOS there is no ConPTY,
+  so images can come there first.
 - Our own pty read loop, so we can catch image sequences before the parser.
   It also reads the pty until the end of the stream after the process ends. ✅ (done in Phase 6.0: `io_loop.rs`)
 - iTerm2 (OSC 1337) and Sixel first, then the Kitty graphics protocol.
