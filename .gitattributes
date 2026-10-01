@@ -1,0 +1,4 @@
+# bash and zsh break on CRLF; fterm embeds these scripts as they are in the checkout.
+*.bash text eol=lf
+*.zsh text eol=lf
+*.sh text eol=lf
