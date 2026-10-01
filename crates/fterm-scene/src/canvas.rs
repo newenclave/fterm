@@ -38,7 +38,7 @@ pub struct Cell {
 /// The dot bits of a cell (tank_rs): left column `0x01 0x02 0x04 0x40`, right column `0x08 0x10 0x20 0x80`.
 const BITS: [[u8; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Canvas {
     cols: usize,
     rows: usize,
@@ -47,6 +47,8 @@ pub struct Canvas {
     colors: Vec<Option<Rgb>>,
     /// The color for the next shapes and text.
     pen: Option<Rgb>,
+    /// The height of a dot / its width on the screen (circles use it to be round).
+    aspect: f32,
 }
 
 impl Canvas {
@@ -59,7 +61,22 @@ impl Canvas {
             text: vec![None; n],
             colors: vec![None; n],
             pen: None,
+            aspect: 1.0,
         }
+    }
+
+    /// The height of a dot / its width on the screen (the pane knows it from its cell size).
+    /// A wrong value is 1 (square dots).
+    pub fn set_aspect(&mut self, aspect: f32) {
+        self.aspect = if aspect.is_finite() && aspect > 0.0 {
+            aspect.clamp(0.25, 4.0)
+        } else {
+            1.0
+        };
+    }
+
+    pub fn aspect(&self) -> f32 {
+        self.aspect
     }
 
     /// The cell and the bit of a dot, when the dot is on the canvas.
@@ -190,65 +207,63 @@ impl Canvas {
         }
     }
 
-    /// A circle around `cx`, `cy` with the radius `r` (in dots).
+    /// A circle around `cx`, `cy` with the radius `r` (in dots, up and down). It is round on the
+    /// screen: across, the radius is `r × aspect` dots.
     pub fn circle(&mut self, cx: i32, cy: i32, r: i32, fill: bool) {
         if r < 0 {
             return;
         }
         let (w, h) = (self.width() as i64, self.height() as i64);
-        let (cx64, cy64, r64) = (i64::from(cx), i64::from(cy), i64::from(r));
+        let (cx64, cy64) = (i64::from(cx), i64::from(cy));
+        let ry = f64::from(r);
+        let rx = ry * f64::from(self.aspect);
+        let (rxi, ryi) = (rx.round() as i64, i64::from(r));
         // Only the dots of the canvas that the circle can touch.
         let dots_in_box = || {
-            let (x0, x1) = ((cx64 - r64).max(0), (cx64 + r64).min(w - 1));
-            let (y0, y1) = ((cy64 - r64).max(0), (cy64 + r64).min(h - 1));
+            let (x0, x1) = ((cx64 - rxi).max(0), (cx64 + rxi).min(w - 1));
+            let (y0, y1) = ((cy64 - ryi).max(0), (cy64 + ryi).min(h - 1));
             (y0..=y1).flat_map(move |y| (x0..=x1).map(move |x| (x, y)))
         };
+        // How far a dot is, where 1 is the edge of the circle.
+        let reach = |x: i64, y: i64, grow: f64| {
+            let dx = (x - cx64) as f64 / (rx + grow).max(f64::MIN_POSITIVE);
+            let dy = (y - cy64) as f64 / (ry + grow).max(f64::MIN_POSITIVE);
+            (dx * dx + dy * dy).sqrt()
+        };
         if fill {
-            let r2 = r64 * r64 + r64;
             for (x, y) in dots_in_box() {
-                let (dx, dy) = (x - cx64, y - cy64);
-                if dx * dx + dy * dy <= r2 {
+                if reach(x, y, 0.5) <= 1.0 {
                     self.set(x as i32, y as i32);
                 }
             }
             return;
         }
-        if r64 > 2 * (w + h) {
-            // A big circle: each dot of the canvas is on it when its distance rounds to `r`.
-            // In i128: (2r)² does not fit in i64 for a big `r`.
-            let r128 = i128::from(r64);
-            let (inner, outer) = ((2 * r128 - 1).pow(2), (2 * r128 + 1).pow(2));
+        if rxi.max(ryi) > 2 * (w + h) {
+            // A big circle: a dot of the canvas is on it when it is at most half a dot from the edge.
+            let thin = rx.min(ry);
             for (x, y) in dots_in_box() {
-                let (dx, dy) = (i128::from(x - cx64), i128::from(y - cy64));
-                let d4 = 4 * (dx * dx + dy * dy);
-                if (inner..outer).contains(&d4) {
+                if ((reach(x, y, 0.0) - 1.0) * thin).abs() <= 0.5 {
                     self.set(x as i32, y as i32);
                 }
             }
             return;
         }
-        // The midpoint circle: one eighth, mirrored.
-        let (mut x, mut y, mut err) = (r, 0, 1 - r);
-        while x >= y {
-            for (px, py) in [
-                (x, y),
-                (y, x),
-                (-y, x),
-                (-x, y),
-                (-x, -y),
-                (-y, -x),
-                (y, -x),
-                (x, -y),
-            ] {
-                self.set(cx.saturating_add(px), cy.saturating_add(py));
+        // One quarter, mirrored, with lines between its points: no gaps, and the same on all sides.
+        let steps = ((rx + ry) * 2.0).ceil().max(4.0) as usize;
+        let mut last: Option<(i64, i64)> = None;
+        for i in 0..=steps {
+            let t = std::f64::consts::FRAC_PI_2 * i as f64 / steps as f64;
+            let point = ((rx * t.cos()).round() as i64, (ry * t.sin()).round() as i64);
+            let from = last.unwrap_or(point);
+            for (sx, sy) in [(1, 1), (-1, 1), (1, -1), (-1, -1)] {
+                self.line(
+                    clamp(cx64 + sx * from.0),
+                    clamp(cy64 + sy * from.1),
+                    clamp(cx64 + sx * point.0),
+                    clamp(cy64 + sy * point.1),
+                );
             }
-            y += 1;
-            if err < 0 {
-                err += 2 * y + 1;
-            } else {
-                x -= 1;
-                err += 2 * (y - x) + 1;
-            }
+            last = Some(point);
         }
     }
 
@@ -277,6 +292,7 @@ impl Canvas {
     pub fn clear(&mut self) {
         *self = Self {
             pen: self.pen,
+            aspect: self.aspect,
             ..Self::new(self.cols, self.rows)
         };
     }
@@ -285,6 +301,7 @@ impl Canvas {
     pub fn resize(&mut self, cols: usize, rows: usize) {
         let mut new = Self {
             pen: self.pen,
+            aspect: self.aspect,
             ..Self::new(cols, rows)
         };
         for row in 0..rows.min(self.rows) {
@@ -468,6 +485,47 @@ mod tests {
         c.circle(7, 7, 4, true);
         assert!(c.get(7, 7) && c.get(9, 9));
         assert!(!c.get(11, 11));
+    }
+
+    #[test]
+    fn a_circle_is_round_on_the_screen() {
+        // Dots twice as tall as wide: a round circle is twice as wide in dots.
+        let mut c = Canvas::new(16, 4);
+        c.set_aspect(2.0);
+        c.circle(15, 7, 4, false);
+        for p in [(23, 7), (7, 7), (15, 3), (15, 11)] {
+            assert!(c.get(p.0, p.1), "{p:?}");
+        }
+        assert!(!c.get(19, 7), "inside is empty");
+        for (x, y) in dots(&c) {
+            assert!(c.get(30 - x, y) && c.get(x, 14 - y), "{x},{y}");
+        }
+        // No gaps: each column between the ends has a dot.
+        for x in 7..=23 {
+            assert!((0..16).any(|y| c.get(x, y)), "a gap at x = {x}");
+        }
+        let mut c = Canvas::new(16, 4);
+        c.set_aspect(2.0);
+        c.circle(15, 7, 4, true);
+        assert!(c.get(22, 7) && c.get(15, 11));
+        assert!(!c.get(25, 7) && !c.get(15, 13));
+    }
+
+    #[test]
+    fn a_bad_aspect_is_one() {
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let mut c = Canvas::new(8, 4);
+            c.set_aspect(bad);
+            assert_eq!(c.aspect(), 1.0, "{bad}");
+        }
+        let mut c = Canvas::new(8, 4);
+        c.set_aspect(1.1875);
+        assert_eq!(c.aspect(), 1.1875);
+        // The aspect is of the pane, not of the picture: clear and resize keep it.
+        c.clear();
+        assert_eq!(c.aspect(), 1.1875);
+        c.resize(4, 2);
+        assert_eq!(c.aspect(), 1.1875);
     }
 
     #[test]

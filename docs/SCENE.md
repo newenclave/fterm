@@ -32,13 +32,15 @@ Shapes that go out of the scene are cut at its edge.
 | `undot` | `x`, `y` | Takes one dot away. |
 | `line` | `x0`, `y0`, `x1`, `y1` | A line (both ends too). |
 | `rect` | `x`, `y`, `w`, `h`, `fill` (default false) | A rectangle with its top left corner at `x`, `y`. |
-| `circle` | `x`, `y`, `r`, `fill` (default false) | A circle around `x`, `y`. |
+| `circle` | `x`, `y`, `r`, `fill` (default false) | A circle around `x`, `y`. `r` is in dots up and down; the circle is round on the screen (see `aspect`). |
 | `text` | `col`, `row`, `text` | Text in cells. It covers the dots of those cells. Control chars become spaces, and chars of two cells (CJK, emoji) become `?`. |
 | `clear` | | No dots, no text, no colors. |
 
 A wrong command says where it is and what is wrong (`[1]: unknown variant "fly"`), and a list with a bad
 color draws nothing. The answer of `scene_draw` has the size (`cols`, `rows`, `width`, `height` in dots),
-so a script can fit its picture to the pane.
+so a script can fit its picture to the pane, and `aspect`: the height of a dot / its width on the screen
+(about 1.2 for most fonts). Dots are not square, so a script that wants a true square makes it
+`aspect` times wider than tall; `circle` does this by itself.
 
 ## A live chart
 Draw again a few times a second: clear, then the axes and the line. One `scene_draw` with the whole

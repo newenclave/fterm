@@ -221,6 +221,7 @@ impl Running {
                     if let Some(scene) = &pane.scene {
                         let mut canvas = scene.lock().unwrap();
                         canvas.resize(size.columns, size.rows);
+                        canvas.set_aspect(dot_aspect(self.renderer.cell()));
                         pane.session.feed(&fterm_scene::render(&canvas));
                     }
                 }
@@ -1246,7 +1247,8 @@ impl App {
         let running = self.running.as_mut().expect("the window is open");
         let id = running.mux.new_pane_id();
         let session = Session::scene(size);
-        let canvas = fterm_scene::Canvas::new(size.columns, size.rows);
+        let mut canvas = fterm_scene::Canvas::new(size.columns, size.rows);
+        canvas.set_aspect(dot_aspect(running.renderer.cell()));
         session.feed(&fterm_scene::render(&canvas));
         running.panes.insert(
             id,
@@ -3875,6 +3877,11 @@ fn shell_script_path() -> Option<std::path::PathBuf> {
             None
         }
     }
+}
+
+/// The height of a Braille dot / its width on the screen: a cell is 2 dots wide and 4 dots tall.
+fn dot_aspect(cell: fterm_render::font::CellMetrics) -> f32 {
+    (cell.height / 4.0) / (cell.width / 2.0)
 }
 
 /// bash that reads Windows paths. On Windows `bash.exe` from PATH can be `System32\bash.exe`

@@ -617,10 +617,17 @@ impl App {
             .and_then(|p| p.scene.as_ref())
             .map(|s| {
                 let c = s.lock().unwrap();
-                (c.cols(), c.rows(), c.width(), c.height())
+                (c.cols(), c.rows(), c.width(), c.height(), c.aspect())
             })
-            .unwrap_or_default();
-        json!({ "pane": pane.0, "cols": size.0, "rows": size.1, "width": size.2, "height": size.3 })
+            .unwrap_or((0, 0, 0, 0, 1.0));
+        json!({
+            "pane": pane.0,
+            "cols": size.0,
+            "rows": size.1,
+            "width": size.2,
+            "height": size.3,
+            "aspect": size.4,
+        })
     }
 
     fn api_send_text(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
