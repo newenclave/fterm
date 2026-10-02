@@ -89,7 +89,8 @@ def main() -> None:
                     t.addfile(info, f)
 
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    (out / f"{archive.name}.sha256").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+    # LF on every system: `sha256sum -c` does not take CRLF.
+    (out / f"{archive.name}.sha256").write_bytes(f"{digest}  {archive.name}\n".encode())
     print(archive)
 
 
