@@ -289,6 +289,30 @@ pub fn key_chord(key: &KeyInput) -> Option<KeyChord> {
         KeyCode::F10 => ChordKey::F(10),
         KeyCode::F11 => ChordKey::F(11),
         KeyCode::F12 => ChordKey::F(12),
+        // The numpad with NumLock off (or with Shift): its keys are Ins, Del, Home, End, ...
+        // Many laptops have these only there. With NumLock on they are digits: not for the keymap.
+        KeyCode::Numpad0
+        | KeyCode::Numpad1
+        | KeyCode::Numpad2
+        | KeyCode::Numpad3
+        | KeyCode::Numpad4
+        | KeyCode::Numpad6
+        | KeyCode::Numpad7
+        | KeyCode::Numpad8
+        | KeyCode::Numpad9
+        | KeyCode::NumpadDecimal => match key.logical {
+            Key::Named(NamedKey::Insert) => ChordKey::Insert,
+            Key::Named(NamedKey::Delete) => ChordKey::Delete,
+            Key::Named(NamedKey::Home) => ChordKey::Home,
+            Key::Named(NamedKey::End) => ChordKey::End,
+            Key::Named(NamedKey::PageUp) => ChordKey::PageUp,
+            Key::Named(NamedKey::PageDown) => ChordKey::PageDown,
+            Key::Named(NamedKey::ArrowUp) => ChordKey::Up,
+            Key::Named(NamedKey::ArrowDown) => ChordKey::Down,
+            Key::Named(NamedKey::ArrowLeft) => ChordKey::Left,
+            Key::Named(NamedKey::ArrowRight) => ChordKey::Right,
+            _ => return None,
+        },
         // Letters and the bracket and backslash keys.
         _ => ChordKey::Char(physical_letter(key.physical)?),
     };
@@ -601,6 +625,36 @@ mod tests {
 
     const CTRL_SHIFT: ModifiersState = ModifiersState::CONTROL.union(ModifiersState::SHIFT);
     const ALT_SHIFT: ModifiersState = ModifiersState::ALT.union(ModifiersState::SHIFT);
+
+    #[test]
+    fn the_numpad_keys_with_numlock_off() {
+        // Many laptops have Ins, Home, End, ... only on the numpad: the key is a numpad key,
+        // its meaning is Insert (NumLock off, or Shift).
+        for (code, named_key, text) in [
+            (KeyCode::Numpad0, NamedKey::Insert, "shift+insert"),
+            (KeyCode::NumpadDecimal, NamedKey::Delete, "shift+delete"),
+            (KeyCode::Numpad7, NamedKey::Home, "shift+home"),
+            (KeyCode::Numpad1, NamedKey::End, "shift+end"),
+            (KeyCode::Numpad9, NamedKey::PageUp, "shift+pageup"),
+            (KeyCode::Numpad3, NamedKey::PageDown, "shift+pagedown"),
+            (KeyCode::Numpad8, NamedKey::ArrowUp, "shift+up"),
+            (KeyCode::Numpad2, NamedKey::ArrowDown, "shift+down"),
+            (KeyCode::Numpad4, NamedKey::ArrowLeft, "shift+left"),
+            (KeyCode::Numpad6, NamedKey::ArrowRight, "shift+right"),
+        ] {
+            assert_eq!(
+                chord_of(code, named(named_key), SHIFT),
+                parsed(text),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            chord_of(KeyCode::Numpad0, named(NamedKey::Insert), CTRL),
+            parsed("ctrl+insert")
+        );
+        // NumLock on: a numpad digit is a digit, not a key for the keymap.
+        assert_eq!(chord_of(KeyCode::Numpad0, ch("0"), NONE), None);
+    }
 
     #[test]
     fn chords_from_keys() {

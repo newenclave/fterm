@@ -423,6 +423,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+shift+c", "copy"),
     ("ctrl+shift+v", "paste"),
     ("shift+insert", "paste"),
+    ("ctrl+insert", "copy"),
     ("ctrl+shift+space", "copy_mode"),
     ("shift+pageup", "scroll_page_up"),
     ("shift+pagedown", "scroll_page_down"),
@@ -714,6 +715,11 @@ mod tests {
         assert_eq!(
             get("shift+insert"),
             Some(Action::Builtin(BuiltinAction::Paste))
+        );
+        // The Windows pair: Ctrl+Ins copies, Shift+Ins pastes.
+        assert_eq!(
+            get("ctrl+insert"),
+            Some(Action::Builtin(BuiltinAction::Copy))
         );
         assert_eq!(get("ctrl+t"), None);
         // Every default key string is valid.

@@ -78,9 +78,13 @@ Some apps ask for the mouse (vim with `set mouse=a`, htop, mc). Then clicks, dra
 ## Copy and paste
 | Key | What it does |
 |---|---|
-| Ctrl + Shift + C | Copy the selection. |
+| Ctrl + Shift + C, Ctrl + Insert | Copy the selection. |
 | Ctrl + C | Copy, **when there is a selection**. With no selection it sends Ctrl+C to the app as usual. |
 | Ctrl + Shift + V, Shift + Insert | Paste. |
+
+Ins, Del, Home, End, PgUp, PgDn, and the arrows work on the numpad too (with NumLock off), for example
+Shift + Ins on a laptop that has Ins only there. Other keys: `keys` in [CONFIG.md](CONFIG.md), for example
+`{ key = "shift+delete", action = "copy" }`.
 
 Copied text has no spaces at the ends of lines, and lines that were only wrapped by the screen are joined again.
 The window title shows "Copied N lines" for a short time.
