@@ -118,7 +118,7 @@ struct Pane {
     /// A restored pane: the lines of its old text, to scroll them into view at its first prompt.
     intro_lines: usize,
     /// A Braille scene pane (Phase 11): its canvas. The pane's grid shows it; there is no program.
-    scene: Option<std::sync::Mutex<fterm_scene::Canvas>>,
+    scene: Option<std::sync::Mutex<fterm_scene::Scene>>,
 }
 
 /// Everything that exists only while the window is open.
@@ -219,10 +219,11 @@ impl Running {
                 {
                     pane.session.resize(size, cell);
                     if let Some(scene) = &pane.scene {
-                        let mut canvas = scene.lock().unwrap();
-                        canvas.resize(size.columns, size.rows);
-                        canvas.set_aspect(dot_aspect(self.renderer.cell()));
-                        pane.session.feed(&fterm_scene::render(&canvas));
+                        // The picture is drawn again for the new size (zoom, a split, the window).
+                        let mut scene = scene.lock().unwrap();
+                        scene.set_aspect(dot_aspect(self.renderer.cell()));
+                        scene.resize(size.columns, size.rows);
+                        pane.session.feed(&fterm_scene::render(scene.canvas()));
                     }
                 }
             }
@@ -1247,9 +1248,9 @@ impl App {
         let running = self.running.as_mut().expect("the window is open");
         let id = running.mux.new_pane_id();
         let session = Session::scene(size);
-        let mut canvas = fterm_scene::Canvas::new(size.columns, size.rows);
-        canvas.set_aspect(dot_aspect(running.renderer.cell()));
-        session.feed(&fterm_scene::render(&canvas));
+        let mut scene = fterm_scene::Scene::new(size.columns, size.rows);
+        scene.set_aspect(dot_aspect(running.renderer.cell()));
+        session.feed(&fterm_scene::render(scene.canvas()));
         running.panes.insert(
             id,
             Pane {
@@ -1263,7 +1264,7 @@ impl App {
                 profile: None,
                 rerun: None,
                 intro_lines: 0,
-                scene: Some(std::sync::Mutex::new(canvas)),
+                scene: Some(std::sync::Mutex::new(scene)),
             },
         );
         tracing::info!(
@@ -3650,6 +3651,7 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.scene_events();
         let now = Instant::now();
         let mut wake_at = None;
         match self.reload_at {

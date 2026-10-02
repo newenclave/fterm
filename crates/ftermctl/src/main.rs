@@ -41,7 +41,7 @@ Text:
 
 Events and messages:
   wait-for [--pane N] EVENT [--pattern TEXT] [--timeout S]
-                                         EVENT: command_done, agent_done, agent_waiting, message, text
+                                         EVENT: command_done, agent_done, agent_waiting, message, text, scene_resized
   notify TITLE [--body TEXT] [--level info|success|warning|error|attention]
   send-message N TEXT                    put a message into the inbox of pane N
   read-messages [--pane N] [--all] [--peek]

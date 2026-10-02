@@ -69,7 +69,7 @@ A missing `pane` means: the pane of the client (from `hello`), else the active p
 | `set_title` | `pane`, `title` (the title of its tab; empty = the automatic title) | |
 | `notify` | `title`, `body`, `level` (`info`, `success`, `warning`, `error`, `attention`) | |
 | `panel` | `name`: `"events"`, `"agents"`, or nothing (close the dock) | |
-| `wait_for` | `pane`, `event`: `"command_done"`, `"agent_done"`, `"agent_waiting"`, `"message"`, or `"text"` (with `pattern`); `timeout_ms` (default 30000, at most one hour) | the event (for example `command`, `exit`, `took_ms`) |
+| `wait_for` | `pane`, `event`: `"command_done"`, `"agent_done"`, `"agent_waiting"`, `"message"`, `"text"` (with `pattern`), or `"scene_resized"`; `timeout_ms` (default 30000, at most one hour) | the event (for example `command`, `exit`, `took_ms`) |
 | `send_message` | `to` (a pane id), `text` (at most 64 KB) | `id` |
 | `read_messages` | `pane` (default: yours), `unread_only` (default true), `mark_read` (default true) | `messages`: `id`, `from`, `from_name`, `text`, `time` |
 | `scene_open` | `place`: `"right"` (default) or `"down"`; `pane` (split next to it) | `pane`, `cols`, `rows`, `width`, `height` (dots), `aspect` |

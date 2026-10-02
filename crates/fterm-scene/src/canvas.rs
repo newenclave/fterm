@@ -15,6 +15,11 @@ impl Rgb {
         Self { r, g, b }
     }
 
+    /// `#rrggbb`.
+    pub fn hex(self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+    }
+
     /// `#rrggbb` (or `rrggbb`).
     pub fn parse(text: &str) -> Option<Self> {
         let hex = text.strip_prefix('#').unwrap_or(text);
@@ -109,6 +114,11 @@ impl Canvas {
     /// The color for the next shapes and text (`None` = the terminal's text color).
     pub fn set_pen(&mut self, color: Option<Rgb>) {
         self.pen = color;
+    }
+
+    /// The color for the next shapes and text.
+    pub fn pen(&self) -> Option<Rgb> {
+        self.pen
     }
 
     /// Puts a dot. A dot outside the canvas is not drawn.

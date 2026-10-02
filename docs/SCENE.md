@@ -5,8 +5,9 @@ Every cell is a 2×4 grid of dots (Braille chars `U+2800`–`U+28FF`), so a pane
 of 160×96 dots. fterm draws Braille as square pixels with no gaps (`braille_style = "pixels"`, see
 [CONFIG.md](CONFIG.md)), so a scene looks like a small picture.
 
-A scene pane is a normal pane: split, zoom, focus, resize, select, and copy work as in any pane.
-When it gets bigger or smaller, what fits stays. A saved session brings it back empty.
+A scene pane is a normal pane: split, zoom (Ctrl+Shift+Z), focus, resize, select, and copy work as in any pane.
+When it gets a new size, fterm draws the picture again for it: zoom makes it bigger and sharper, and
+nothing is cut when it gets smaller (see "A new size"). A saved session brings it back empty.
 
 ## Open a scene
 - The command palette: **New Braille scene (split right)** (`new_scene`).
@@ -53,4 +54,13 @@ ftermctl draw --pane 4 '[{"op":"clear"},{"op":"color","color":"#40c0ff"},{"op":"
 ```
 
 A color is for a whole cell (2×4 dots): where two colors meet in one cell, the last one wins.
-When the pane gets smaller, the picture is cut at the right and the bottom; draw it again for the new size.
+
+## A new size
+A scene keeps the commands since the last `clear` (at most 100 000; the oldest go first). When the pane
+gets a new size, it draws them again: points and lines go to the same places of the scene, boxes
+(`rect`, the box of `plot`) cover the same part of it, a `plot` with no box fills the whole new scene,
+and text goes to the same place (its letters keep their size).
+
+Then fterm sends the event `scene_resized` (with `pane`, `cols`, `rows`, `width`, `height`, `aspect`).
+A script with `ftermctl subscribe scene_resized`, or an agent with `wait_for` and `scene_resized`, can then
+draw a better picture for the new size (for example a chart with more points).

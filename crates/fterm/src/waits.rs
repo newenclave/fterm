@@ -12,6 +12,8 @@ pub enum WaitKind {
     Message,
     /// This text is on the screen (now or later).
     Text(String),
+    /// A scene pane gets a new size (draw again with more or fewer dots).
+    SceneResized,
 }
 
 /// Something that happened in a pane.
@@ -22,6 +24,8 @@ pub enum Happening<'a> {
     Message,
     /// The screen changed: its text now.
     Screen(&'a str),
+    /// A scene pane got a new size.
+    SceneResized,
 }
 
 /// `event` and `pattern` from the params of `wait_for`.
@@ -31,12 +35,13 @@ pub fn parse_kind(event: &str, pattern: Option<String>) -> Result<WaitKind, Stri
         "agent_done" => Ok(WaitKind::AgentDone),
         "agent_waiting" => Ok(WaitKind::AgentWaiting),
         "message" => Ok(WaitKind::Message),
+        "scene_resized" => Ok(WaitKind::SceneResized),
         "text" => match pattern {
             Some(text) if !text.is_empty() => Ok(WaitKind::Text(text)),
             _ => Err("`text` needs a `pattern`".to_owned()),
         },
         other => Err(format!(
-            "`event` must be command_done, agent_done, agent_waiting, message, or text, got `{other}`"
+            "`event` must be command_done, agent_done, agent_waiting, message, text, or scene_resized, got `{other}`"
         )),
     }
 }
@@ -47,6 +52,7 @@ pub fn matches(kind: &WaitKind, happening: Happening) -> bool {
         (WaitKind::AgentDone, Happening::Agent(state)) => state == "done" || state == "error",
         (WaitKind::AgentWaiting, Happening::Agent(state)) => state == "waiting",
         (WaitKind::Message, Happening::Message) => true,
+        (WaitKind::SceneResized, Happening::SceneResized) => true,
         (WaitKind::Text(pattern), Happening::Screen(text)) => text.contains(pattern.as_str()),
         _ => false,
     }
@@ -72,6 +78,15 @@ mod tests {
         assert!(parse_kind("text", None).is_err(), "text needs a pattern");
         assert!(parse_kind("text", Some(String::new())).is_err());
         assert!(parse_kind("coffee", None).is_err());
+        assert_eq!(
+            parse_kind("scene_resized", None),
+            Ok(WaitKind::SceneResized)
+        );
+        assert!(
+            parse_kind("coffee", None)
+                .unwrap_err()
+                .contains("scene_resized")
+        );
     }
 
     #[test]
@@ -91,5 +106,8 @@ mod tests {
         assert!(matches(&text, Screen("...\ntest result: ok. 5 passed\n")));
         assert!(!matches(&text, Screen("test result: FAILED")));
         assert!(!matches(&text, CommandDone));
+        assert!(matches(&WaitKind::SceneResized, SceneResized));
+        assert!(!matches(&WaitKind::SceneResized, CommandDone));
+        assert!(!matches(&WaitKind::CommandDone, SceneResized));
     }
 }

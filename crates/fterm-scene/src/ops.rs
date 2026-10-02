@@ -82,9 +82,8 @@ pub fn parse_ops(json: &serde_json::Value) -> Result<Vec<Op>, String> {
         .collect()
 }
 
-/// Draws the commands. A bad color stops before anything is drawn.
-pub fn apply(canvas: &mut Canvas, ops: &[Op]) -> Result<(), String> {
-    // The colors first, so a bad one draws nothing.
+/// The colors of the commands, in order. A bad one is an error (it names its place).
+pub fn colors(ops: &[Op]) -> Result<Vec<Rgb>, String> {
     let mut colors = Vec::new();
     for (i, op) in ops.iter().enumerate() {
         if let Op::Color { color: Some(text) } = op {
@@ -94,7 +93,13 @@ pub fn apply(canvas: &mut Canvas, ops: &[Op]) -> Result<(), String> {
             }
         }
     }
-    let mut colors = colors.into_iter();
+    Ok(colors)
+}
+
+/// Draws the commands. A bad color stops before anything is drawn.
+pub fn apply(canvas: &mut Canvas, ops: &[Op]) -> Result<(), String> {
+    // The colors first, so a bad one draws nothing.
+    let mut colors = colors(ops)?.into_iter();
     for op in ops {
         match op {
             Op::Color { color } => canvas.set_pen(color.as_ref().and_then(|_| colors.next())),

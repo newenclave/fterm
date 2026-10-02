@@ -46,7 +46,7 @@ Other MCP clients: the command is `ftermctl` with the argument `mcp`, transport 
 | `run_command` | Types a command into a pane, waits for its end, and gives the exit code and the output. |
 | `send_text` | Types text into a pane (for example an answer to a program). |
 | `read_pane` | The screen, the history, or the output of the last command of a pane. |
-| `wait_for` | Waits for an event: `command_done`, `agent_done`, `agent_waiting`, `message`, or a `text` on the screen. |
+| `wait_for` | Waits for an event: `command_done`, `agent_done`, `agent_waiting`, `message`, a `text` on the screen, or `scene_resized` (a scene got a new size). |
 | `notify` | A notification for you. |
 | `send_message` | A message to the agent in another pane (it goes to the inbox of that pane). |
 | `read_messages` | The messages that other agents sent to this pane. |

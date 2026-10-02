@@ -600,12 +600,36 @@ impl App {
             )));
         };
         {
-            let mut canvas = scene.lock().unwrap();
-            fterm_scene::apply(&mut canvas, &ops).map_err(RpcError::invalid_params)?;
-            p.session.feed(&fterm_scene::render(&canvas));
+            let mut scene = scene.lock().unwrap();
+            scene.draw(&ops).map_err(RpcError::invalid_params)?;
+            p.session.feed(&fterm_scene::render(scene.canvas()));
         }
         running.window.request_redraw();
         Ok(self.scene_size(pane))
+    }
+
+    /// `scene_resized` for each scene pane that got a new size (zoom, a split, the window), so a live
+    /// chart can be drawn again with more or fewer dots. Called when the event loop waits.
+    pub(super) fn scene_events(&mut self) {
+        let Some(running) = &self.running else {
+            return;
+        };
+        let resized: Vec<PaneId> = running
+            .panes
+            .iter()
+            .filter(|(_, p)| {
+                p.scene
+                    .as_ref()
+                    .is_some_and(|s| s.lock().unwrap().take_resized())
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for pane in resized {
+            let mut data = self.scene_size(pane);
+            data["event"] = json!("scene_resized");
+            self.api_event("scene_resized", data.clone());
+            self.resolve_waits(pane, crate::waits::Happening::SceneResized, data);
+        }
     }
 
     /// The pane and the size of its scene, in cells and in dots.
@@ -616,7 +640,8 @@ impl App {
             .and_then(|r| r.panes.get(&pane))
             .and_then(|p| p.scene.as_ref())
             .map(|s| {
-                let c = s.lock().unwrap();
+                let s = s.lock().unwrap();
+                let c = s.canvas();
                 (c.cols(), c.rows(), c.width(), c.height(), c.aspect())
             })
             .unwrap_or((0, 0, 0, 0, 1.0));

@@ -45,6 +45,7 @@ pub const EVENTS: &[&str] = &[
     "cwd",
     "title",
     "message",
+    "scene_resized",
 ];
 
 /// One request on its way to the app. The app sends the answer on `reply`.

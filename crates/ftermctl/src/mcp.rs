@@ -76,7 +76,7 @@ pub fn tools() -> Value {
             "name": "wait_for",
             "description": "Wait until something happens in a pane: a command ends, an agent is done or waits, a message comes, or a text shows on the screen.",
             "inputSchema": { "type": "object", "properties": {
-                "event": { "type": "string", "enum": ["command_done", "agent_done", "agent_waiting", "message", "text"] },
+                "event": { "type": "string", "enum": ["command_done", "agent_done", "agent_waiting", "message", "text", "scene_resized"] },
                 "pattern": { "type": "string", "description": "For text: the text to wait for." },
                 "pane": pane,
                 "timeout_seconds": timeout
