@@ -431,6 +431,31 @@ fn a_recording_has_the_output_and_the_sizes() {
     );
 }
 
+/// Waits until the text of the pane has not changed for a while (a slow CI machine needs more time
+/// for ConPTY to answer a resize than a fixed sleep gives).
+#[cfg(windows)]
+fn wait_quiet(session: &Session) {
+    let text = || {
+        session.with_term(|term| {
+            let total = fterm_term::input::total_lines(term);
+            fterm_term::input::lines_text(term, 0, total)
+        })
+    };
+    let end = std::time::Instant::now() + Duration::from_secs(10);
+    let mut last = text();
+    let mut quiet_since = std::time::Instant::now();
+    while std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(100));
+        let now = text();
+        if now != last {
+            last = now;
+            quiet_since = std::time::Instant::now();
+        } else if quiet_since.elapsed() >= Duration::from_millis(600) {
+            return;
+        }
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn resizing_does_not_lose_the_scrollback() {
@@ -453,6 +478,8 @@ fn resizing_does_not_lose_the_scrollback() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+    // The prompt comes after the output: resize only when PowerShell is still.
+    wait_quiet(&session);
     for (cols, rows) in [
         (70, 25),
         (120, 30),
@@ -466,9 +493,8 @@ fn resizing_does_not_lose_the_scrollback() {
         (120, 30),
     ] {
         session.resize(GridSize::new(cols, rows), (8, 16));
-        std::thread::sleep(Duration::from_millis(400));
+        wait_quiet(&session);
     }
-    std::thread::sleep(Duration::from_secs(1));
     let text = session.with_term(|term| {
         let total = fterm_term::input::total_lines(term);
         fterm_term::input::lines_text(term, 0, total)
