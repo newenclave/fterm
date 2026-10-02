@@ -513,17 +513,21 @@ impl Session {
 
 /// The system text: who the assistant is, where it runs, and the user's own instructions.
 pub fn system_prompt(os: &str, shell: &str, cwd: Option<&str>, extra: &str) -> String {
+    // A chat first: small models gave a command even for "are you here?" when the prompt spoke
+    // only of commands.
     let mut text = format!(
-        "You are an assistant inside fterm, a terminal. The user works on {os}, and the shell of \
-         the active pane is {shell}."
+        "You are a helpful assistant in the AI panel of fterm, a terminal. Talk with the user as in a \
+         normal chat, in the language of the user. Answer greetings, questions, and requests for an \
+         explanation in plain text, with no command. Only when the user wants to do something in the \
+         terminal, give the command: the user works on {os}, and the shell of the active pane is {shell}."
     );
     if let Some(cwd) = cwd {
         text.push_str(&format!(" The current folder is {cwd}."));
     }
     text.push_str(
-        " Give short and clear answers. Put every command in a fenced code block with the shell name \
-         (for example ```powershell), one command per block when you can, so the user can put it into \
-         the terminal.",
+        " Put each command in a fenced code block with the shell name (for example ```powershell), \
+         one command per block when you can, so the user can put it into the terminal. Give short and \
+         clear answers.",
     );
     if !extra.trim().is_empty() {
         text.push_str("\n\n");
@@ -770,6 +774,18 @@ mod tests {
         assert!(text.contains("```"), "it asks for commands in code blocks");
         assert!(text.ends_with("Answer in Russian."));
         assert!(!system_prompt("Linux", "bash", None, "").contains("folder"));
+    }
+
+    #[test]
+    fn the_panel_is_a_chat_not_only_commands() {
+        // A small model gave a PowerShell block even for "are you here?".
+        let text = system_prompt("Windows", "PowerShell", None, "");
+        assert!(text.contains("plain text"), "{text}");
+        assert!(text.contains("language of the user"), "{text}");
+        assert!(
+            text.contains("Only when the user wants to do something in the terminal"),
+            "{text}"
+        );
     }
 
     #[test]
