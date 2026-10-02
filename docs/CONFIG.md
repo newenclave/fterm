@@ -124,6 +124,8 @@ also work on other layouts (for example, Russian).
 | `scroll_page_up`, `scroll_page_down`, `scroll_top`, `scroll_bottom` | Scroll. |
 | `command_palette` (Ctrl+Shift+P), `reload_config` (Ctrl+Shift+F5), `open_config` (Ctrl+Shift+,) | fterm itself. |
 | `copy_claude_hooks` | Copy the Claude Code hooks for tab dots (see [CLAUDE.md](CLAUDE.md)). |
+| `install_claude_skill` | Write the fterm skill for Claude Code (see [CLAUDE.md](CLAUDE.md#the-fterm-skill)). |
+| `new_scene` | A Braille scene on the right (see [SCENE.md](SCENE.md)). |
 | `toggle_dock`, `panel_events`, `panel_agents`, `focus_dock` | The dock and its panels (see [KEYS.md](KEYS.md)). |
 | `history_commands`, `history_dirs` | The command and folder history (Alt+F8, Alt+F12). |
 | `toggle_remote_control` | API clients may (or may not) read and type into this pane (see [API.md](API.md)). |

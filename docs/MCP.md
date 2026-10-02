@@ -60,7 +60,8 @@ Other MCP clients: the command is `ftermctl` with the argument `mcp`, transport 
 The server also gives the agent short instructions: the main recipes (run tests in a pane, wait for
 an event, talk to another agent, draw a chart) and the rules (for example: ask the user before you close
 a pane). The full guide for agents is `ftermctl guide` (the same text is in
-[assets/agents/GUIDE.md](../assets/agents/GUIDE.md)); agents with no MCP can read it too.
+[assets/agents/GUIDE.md](../assets/agents/GUIDE.md)); agents with no MCP can read it too. For Claude Code there is also a skill with the same guide
+(see [CLAUDE.md](CLAUDE.md#the-fterm-skill)).
 
 Ask Claude for example: "open a scene and plot the time of each test run", or "draw the module graph of this
 project in a scene".

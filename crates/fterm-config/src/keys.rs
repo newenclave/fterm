@@ -200,11 +200,13 @@ pub enum BuiltinAction {
     SaveSessionAs,
     /// A Braille scene pane next to the active pane (Phase 11).
     NewScene,
+    /// Write the fterm skill for Claude Code (~/.claude/skills/fterm/SKILL.md).
+    InstallClaudeSkill,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 47] = [
+    pub const ALL: [BuiltinAction; 48] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -252,6 +254,7 @@ impl BuiltinAction {
         Self::Sessions,
         Self::SaveSessionAs,
         Self::NewScene,
+        Self::InstallClaudeSkill,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -304,6 +307,7 @@ impl BuiltinAction {
             Self::Sessions => "sessions",
             Self::SaveSessionAs => "save_session_as",
             Self::NewScene => "new_scene",
+            Self::InstallClaudeSkill => "install_claude_skill",
         };
         name.to_owned()
     }
@@ -344,6 +348,7 @@ impl BuiltinAction {
             Self::Sessions => "Sessions".to_owned(),
             Self::SaveSessionAs => "Save session as…".to_owned(),
             Self::NewScene => "New Braille scene (split right)".to_owned(),
+            Self::InstallClaudeSkill => "Install the fterm skill for Claude Code".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -501,6 +506,14 @@ mod tests {
         assert_eq!(
             keys.get(&chord("ctrl+shift+s")),
             Some(&Action::Builtin(BuiltinAction::Sessions))
+        );
+        assert_eq!(
+            BuiltinAction::InstallClaudeSkill.name(),
+            "install_claude_skill"
+        );
+        assert_eq!(
+            BuiltinAction::InstallClaudeSkill.label(),
+            "Install the fterm skill for Claude Code"
         );
         assert_eq!(BuiltinAction::NewScene.name(), "new_scene");
         assert_eq!(

@@ -26,11 +26,7 @@ pub struct Server<B: Backend> {
 }
 
 /// The tools with their JSON schemas.
-/// The guide for agents (`ftermctl guide`, and the Claude Code skill).
-pub const GUIDE: &str = include_str!("../../../assets/agents/GUIDE.md");
-
-/// What an MCP client gives the model about this server.
-const INSTRUCTIONS: &str = include_str!("../../../assets/agents/INSTRUCTIONS.md");
+use fterm_api::guide::INSTRUCTIONS;
 
 pub fn tools() -> Value {
     let pane = json!({ "type": "integer", "description": "The pane id (from list_panes). No pane = your own pane." });
@@ -631,7 +627,7 @@ mod tests {
         for t in tools().as_array().unwrap() {
             let name = t["name"].as_str().unwrap();
             assert!(
-                GUIDE.contains(&format!("`{name}`")),
+                fterm_api::guide::GUIDE.contains(&format!("`{name}`")),
                 "{name} is not in GUIDE.md"
             );
         }

@@ -1243,6 +1243,59 @@ impl App {
         })
     }
 
+    /// `install_claude_skill`: writes the fterm skill for Claude Code, but never over a file of the user.
+    fn install_claude_skill(&mut self) {
+        use fterm_api::guide::{SkillPlan, skill_md, skill_path, skill_plan};
+        let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from);
+        let home = fterm_config::profiles::home_dir();
+        let Some(path) = skill_path(config_dir.as_deref(), home.as_deref()) else {
+            return self.notify(None, "No home folder", "", Level::Error, Source::App);
+        };
+        let shown = path.display().to_string();
+        let existing = std::fs::read_to_string(&path).ok();
+        match skill_plan(existing.as_deref()) {
+            SkillPlan::UpToDate => self.notify(
+                None,
+                "The fterm skill is up to date",
+                &shown,
+                Level::Info,
+                Source::App,
+            ),
+            SkillPlan::Foreign => {
+                self.copy_text(skill_md());
+                self.notify(
+                    None,
+                    "A different fterm skill is there",
+                    &format!("{shown} is not from fterm, so it is not changed. The fterm skill is in the clipboard."),
+                    Level::Warning,
+                    Source::App,
+                );
+            }
+            SkillPlan::Write => {
+                let written = path
+                    .parent()
+                    .map_or(Ok(()), std::fs::create_dir_all)
+                    .and_then(|()| std::fs::write(&path, skill_md()));
+                match written {
+                    Ok(()) => self.notify(
+                        None,
+                        "The fterm skill for Claude Code is installed",
+                        &format!("{shown}. Claude Code uses it in new sessions."),
+                        Level::Success,
+                        Source::App,
+                    ),
+                    Err(err) => self.notify(
+                        None,
+                        "Cannot write the skill",
+                        &format!("{shown}: {err}"),
+                        Level::Error,
+                        Source::App,
+                    ),
+                }
+            }
+        }
+    }
+
     /// A new Braille scene pane with this grid size (no program; the API draws into it).
     fn spawn_scene(&mut self, size: GridSize) -> PaneId {
         let running = self.running.as_mut().expect("the window is open");
@@ -2023,6 +2076,7 @@ impl App {
                 self.notify(Some(pane), title, body, Level::Info, Source::App);
                 return;
             }
+            A::InstallClaudeSkill => return self.install_claude_skill(),
             A::CopyClaudeHooks => {
                 self.copy_text(crate::agent::CLAUDE_HOOKS.to_owned());
                 self.notify(

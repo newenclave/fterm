@@ -50,7 +50,8 @@ Events and messages:
 Other:
   call METHOD [JSON]                     any API call (see docs/API.md)
   mcp                                    an MCP server on stdin/stdout (see docs/MCP.md)
-  guide                                  how agents use fterm (recipes and rules)
+  guide [--skill]                        how agents use fterm (recipes and rules); --skill = as a
+                                         Claude Code skill (~/.claude/skills/fterm/SKILL.md)
 
 No --pane: your own pane (inside fterm), else the active pane.
 ";
@@ -80,8 +81,12 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Mcp => mcp::serve(cli.window).map(|()| ExitCode::SUCCESS),
-        Command::Guide => {
-            print!("{}", mcp::GUIDE);
+        Command::Guide { skill } => {
+            if *skill {
+                print!("{}", fterm_api::guide::skill_md());
+            } else {
+                print!("{}", fterm_api::guide::GUIDE);
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Call { method, params } => {

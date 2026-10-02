@@ -9,6 +9,7 @@
 
 pub mod client;
 pub mod discovery;
+pub mod guide;
 pub mod protocol;
 pub mod server;
 pub mod transport;

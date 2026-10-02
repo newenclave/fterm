@@ -20,8 +20,10 @@ pub enum Command {
     Subscribe {
         events: Vec<String>,
     },
-    /// The guide for agents (assets/agents/GUIDE.md).
-    Guide,
+    /// The guide for agents (assets/agents/GUIDE.md); `skill` = as a Claude Code skill file.
+    Guide {
+        skill: bool,
+    },
     /// `draw -`: the drawing commands come on stdin (a big batch does not fit on a command line).
     DrawStdin {
         pane: Option<u64>,
@@ -159,7 +161,9 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
     Ok(match word {
         "help" | "--help" | "-h" => Command::Help,
         "mcp" => Command::Mcp,
-        "guide" => Command::Guide,
+        "guide" => Command::Guide {
+            skill: read(&[], &["skill"])?.flag("skill"),
+        },
         "list" => call("list", json!({})),
         "focus" => call(
             "focus",
@@ -385,7 +389,15 @@ mod tests {
 
     #[test]
     fn the_guide_for_agents() {
-        assert_eq!(cli("guide").unwrap().command, Command::Guide);
+        assert_eq!(
+            cli("guide").unwrap().command,
+            Command::Guide { skill: false }
+        );
+        assert_eq!(
+            cli("guide --skill").unwrap().command,
+            Command::Guide { skill: true },
+            "the Claude Code skill file"
+        );
     }
 
     #[test]

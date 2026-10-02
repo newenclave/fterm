@@ -57,6 +57,13 @@ The hooks and their states:
 `PostToolUse` runs after every tool, so it starts a small shell each time. If you do not want that, delete it.
 Then the dot stays yellow after a permission question until Claude finishes.
 
+## The fterm skill
+Claude Code can also learn how to use fterm: the command palette → **Install the fterm skill for Claude Code**
+writes `~/.claude/skills/fterm/SKILL.md` (or in `CLAUDE_CONFIG_DIR`). Claude then knows the recipes and the rules
+(run tests in a pane, wait for an event, talk to another agent, draw a chart) when a task needs them.
+fterm updates only its own file; a file of yours with the same name stays, and the skill goes to the clipboard.
+`ftermctl guide --skill` prints the same file.
+
 ## Notes
 
 - Hooks only work in an interactive Claude Code session (not with `claude -p`).
