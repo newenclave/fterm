@@ -44,24 +44,19 @@ mod tests {
 
     #[test]
     fn a_relative_data_folder_is_next_to_the_config() {
-        let config = Path::new("D:/tools/fterm/fterm.lua");
-        assert_eq!(
-            resolve(config, "data", None),
-            Path::new("D:/tools/fterm").join("data")
-        );
-        // A full path stays (a full path looks different on Windows and on unix).
-        let full = if cfg!(windows) {
-            "E:/fterm-data"
+        // Full paths look different on Windows and on unix.
+        let (folder, full, home) = if cfg!(windows) {
+            ("D:/tools/fterm", "E:/fterm-data", "C:/Users/me")
         } else {
-            "/srv/fterm-data"
+            ("/opt/fterm", "/srv/fterm-data", "/home/me")
         };
-        assert_eq!(resolve(config, full, None), PathBuf::from(full));
-        let home = Path::new("C:/Users/me");
-        assert_eq!(resolve(config, "~/fterm", Some(home)), home.join("fterm"));
-        assert_eq!(
-            resolve(config, ".", None),
-            Path::new("D:/tools/fterm").join(".")
-        );
+        let folder = Path::new(folder);
+        let config = folder.join("fterm.lua");
+        assert_eq!(resolve(&config, "data", None), folder.join("data"));
+        assert_eq!(resolve(&config, full, None), PathBuf::from(full));
+        let home = Path::new(home);
+        assert_eq!(resolve(&config, "~/fterm", Some(home)), home.join("fterm"));
+        assert_eq!(resolve(&config, ".", None), folder.join("."));
     }
 
     #[test]
