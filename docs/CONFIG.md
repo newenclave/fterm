@@ -39,6 +39,7 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `padding` | number | `6` | Empty space around the text, in pixels. |
 | `scrollback` | number | `10000` | Lines of history. New tabs and panes use it. |
 | `braille_style` | `"pixels"` or `"dots"` | `"pixels"` | Braille chars as square pixels with no gaps, or as round dots. |
+| `gpu` | table | `{ backend = "auto", power = "high" }` | The GPU that draws the window. See "The GPU". |
 | `colors` | table | Catppuccin Mocha | See "Colors". |
 | `default_profile` | string | the first profile | The profile for new tabs and splits. |
 | `profiles` | list | found by fterm | See "Profiles". |
@@ -163,6 +164,26 @@ commands = {
 ```
 
 Commands show in the command palette (Ctrl + Shift + P), next to all actions and profiles.
+
+## The GPU
+fterm draws with the GPU. Which API it uses changes how much memory fterm takes:
+
+```lua
+gpu = {
+  backend = "auto",   -- "auto", "dx12", "vulkan", "gl", or "metal"
+  power = "high",     -- "high" (the fast GPU) or "low" (the GPU that uses less power)
+},
+```
+
+- `auto` is DX12 on Windows, Metal on macOS, and Vulkan (or GL) on Linux.
+- `gl` (OpenGL) takes the least memory: on Windows with an Intel GPU about 50 MB at start, DX12 about 160 MB,
+  Vulkan about 110 MB. It looks the same. If your GPU driver has a weak OpenGL (some virtual machines and
+  remote desktops), use `auto`.
+- When a backend does not start, fterm tries the next one, so the window always opens. The log says which one
+  it uses (`GPU adapter`).
+- `power = "low"` takes the integrated GPU on a laptop with two GPUs: less battery, enough for a terminal.
+- fterm reads `gpu` when it starts: restart fterm after a change. The env var `WGPU_BACKEND`
+  (`dx12`, `vulkan`, `gl`, `metal`) wins over the config, for a quick test.
 
 ## Panels
 The dock is an area at a window edge with service panels (Events, Agents). It does not cover the terminal:

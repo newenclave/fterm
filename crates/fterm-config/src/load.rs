@@ -240,6 +240,34 @@ pub enum Restore {
     Never,
 }
 
+/// The GPU API that draws the window (`gpu.backend`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GpuBackend {
+    /// DX12 on Windows, Metal on macOS, Vulkan or GL on Linux.
+    #[default]
+    Auto,
+    Dx12,
+    Vulkan,
+    Gl,
+    Metal,
+}
+
+/// Which GPU, when there are two (`gpu.power`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GpuPower {
+    /// The fast one (a discrete GPU).
+    #[default]
+    High,
+    /// The one that uses less power (an integrated GPU).
+    Low,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GpuConfig {
+    pub backend: GpuBackend,
+    pub power: GpuPower,
+}
+
 /// What comes back in a restored pane where a program (or an agent) ran.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Rerun {
@@ -391,6 +419,8 @@ pub struct Config {
     pub restore_agents: Rerun,
     /// Lines of old text that a restored pane shows in grey (0 = none).
     pub restore_history: usize,
+    /// The GPU that draws the window (used at start).
+    pub gpu: GpuConfig,
     pub api: ApiConfig,
     pub ai: AiConfig,
     /// The Lua function `on_notification` (its number), if there is one.
@@ -430,6 +460,7 @@ impl Default for Config {
             restore_programs: Rerun::default(),
             restore_agents: Rerun::default(),
             restore_history: 200,
+            gpu: GpuConfig::default(),
             api: ApiConfig::default(),
             ai: AiConfig::default(),
             on_notification: None,
@@ -959,6 +990,33 @@ impl Reader {
                     ));
                 }
             };
+        }
+        if let Some(gpu) = table_field(root, "gpu", "gpu")? {
+            if let Some(text) = string_field(&gpu, "backend", "gpu.backend")? {
+                config.gpu.backend = match text.as_str() {
+                    "auto" => GpuBackend::Auto,
+                    "dx12" => GpuBackend::Dx12,
+                    "vulkan" => GpuBackend::Vulkan,
+                    "gl" => GpuBackend::Gl,
+                    "metal" => GpuBackend::Metal,
+                    other => {
+                        return Err(format!(
+                            "gpu.backend: must be \"auto\", \"dx12\", \"vulkan\", \"gl\", or \"metal\", got `{other}`"
+                        ));
+                    }
+                };
+            }
+            if let Some(text) = string_field(&gpu, "power", "gpu.power")? {
+                config.gpu.power = match text.as_str() {
+                    "high" => GpuPower::High,
+                    "low" => GpuPower::Low,
+                    other => {
+                        return Err(format!(
+                            "gpu.power: must be \"high\" or \"low\", got `{other}`"
+                        ));
+                    }
+                };
+            }
         }
         for key in ["restore_programs", "restore_agents"] {
             if let Some(text) = string_field(root, key, key)? {
@@ -2217,6 +2275,40 @@ mod tests {
                 .restore_history,
             0
         );
+    }
+
+    #[test]
+    fn the_gpu_backend_and_power() {
+        let gpu = load("return {}").config.gpu;
+        assert_eq!(
+            gpu,
+            GpuConfig {
+                backend: GpuBackend::Auto,
+                power: GpuPower::High
+            }
+        );
+        for (text, value) in [
+            ("auto", GpuBackend::Auto),
+            ("dx12", GpuBackend::Dx12),
+            ("vulkan", GpuBackend::Vulkan),
+            ("gl", GpuBackend::Gl),
+            ("metal", GpuBackend::Metal),
+        ] {
+            let source = format!("return {{ gpu = {{ backend = \"{text}\" }} }}");
+            assert_eq!(load(&source).config.gpu.backend, value, "{text}");
+        }
+        assert_eq!(
+            load(r#"return { gpu = { power = "low" } }"#)
+                .config
+                .gpu
+                .power,
+            GpuPower::Low
+        );
+        let err = load_str(r#"return { gpu = { backend = "directx" } }"#, "t")
+            .err()
+            .unwrap();
+        assert!(err.contains("gpu.backend") && err.contains("gl"), "{err}");
+        assert!(load_str(r#"return { gpu = { power = "max" } }"#, "t").is_err());
     }
 
     #[test]

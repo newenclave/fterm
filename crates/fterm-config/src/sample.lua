@@ -7,6 +7,8 @@ return {
   padding = 6,
   scrollback = 10000,          -- lines of history (for new tabs)
   braille_style = "pixels",    -- "pixels" (no gaps) or "dots" (round dots)
+  -- The GPU (read at start): "gl" takes the least memory; "auto" = DX12 on Windows.
+  -- gpu = { backend = "auto", power = "high" },
 
   colors = {
     -- background = "#1e1e2e",

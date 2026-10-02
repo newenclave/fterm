@@ -1128,6 +1128,7 @@ impl App {
         match load_file(&self.config_path) {
             Ok(config) => {
                 tracing::info!("config reloaded");
+                let gpu_changed = config.config.gpu != self.config.config.gpu;
                 self.config = config;
                 self.profiles = profiles_for(&self.config);
                 self.apply_notification_config();
@@ -1135,6 +1136,16 @@ impl App {
                 // Say which file it read: with FTERM_CONFIG it is not always the one you think.
                 let path = self.config_path.display().to_string();
                 self.notify(None, "Config reloaded", &path, Level::Info, Source::App);
+                if gpu_changed {
+                    // The GPU is made once, at start.
+                    self.notify(
+                        None,
+                        "Restart fterm for the new gpu settings",
+                        "gpu.backend and gpu.power are used when fterm starts.",
+                        Level::Info,
+                        Source::App,
+                    );
+                }
             }
             Err(err) => {
                 tracing::warn!("config error: {err}");
@@ -1216,7 +1227,11 @@ impl App {
         let window = Arc::new(event_loop.create_window(attributes)?);
         // IME: input methods for Chinese, Japanese, Korean, and others.
         window.set_ime_allowed(true);
-        let gpu = pollster::block_on(Gpu::new(window.clone(), event_loop.owned_display_handle()))?;
+        let gpu = pollster::block_on(Gpu::new(
+            window.clone(),
+            event_loop.owned_display_handle(),
+            self.config.config.gpu,
+        ))?;
         let scale = window.scale_factor() as f32;
         let config = &self.config.config;
         let mut renderer = Renderer::new(
