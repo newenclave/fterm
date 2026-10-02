@@ -17,5 +17,9 @@ tracing.workspace = true
 unicode-width.workspace = true
 wgpu.workspace = true
 
+[dev-dependencies]
+# The `make_icon` example writes the icon files (PNG and ICO).
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
+
 [lints]
 workspace = true

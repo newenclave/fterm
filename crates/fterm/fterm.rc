@@ -1,0 +1,3 @@
+// The icon of fterm.exe (Explorer, shortcuts). It is made by:
+//   cargo run -p fterm-render --example make_icon -- assets/icon
+1 ICON "../../assets/icon/fterm.ico"

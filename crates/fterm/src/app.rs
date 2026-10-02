@@ -1223,7 +1223,14 @@ impl App {
     fn start(&self, event_loop: &ActiveEventLoop) -> anyhow::Result<Running> {
         let attributes = Window::default_attributes()
             .with_title("fterm")
-            .with_inner_size(LogicalSize::new(1024.0, 640.0));
+            .with_inner_size(LogicalSize::new(1024.0, 640.0))
+            .with_window_icon(crate::window_icon::window_icon(32));
+        // The big icon for the taskbar and Alt+Tab.
+        #[cfg(windows)]
+        let attributes = {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            attributes.with_taskbar_icon(crate::window_icon::window_icon(256))
+        };
         let window = Arc::new(event_loop.create_window(attributes)?);
         // IME: input methods for Chinese, Japanese, Korean, and others.
         window.set_ime_allowed(true);

@@ -22,6 +22,7 @@ mod session_state;
 mod text_command;
 mod title;
 mod waits;
+mod window_icon;
 
 use tracing_subscriber::EnvFilter;
 use winit::event_loop::{ControlFlow, EventLoop};
