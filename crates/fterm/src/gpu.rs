@@ -217,6 +217,12 @@ pub fn backend_tries(choice: fterm_config::load::GpuBackend, os: &str) -> Vec<wg
     tries
 }
 
+/// The panes take a new window size only when the window is really there: not when it is minimized
+/// (Windows gives 0x0 then), so the programs in them keep their size.
+pub fn panes_follow(size: PhysicalSize<u32>, minimized: bool) -> bool {
+    !minimized && surface_size(size).is_some()
+}
+
 pub fn surface_size(size: PhysicalSize<u32>) -> Option<(u32, u32)> {
     (size.width > 0 && size.height > 0).then_some((size.width, size.height))
 }
@@ -249,6 +255,23 @@ mod tests {
         assert_eq!(backend_tries(B::Auto, "linux"), [W::VULKAN, W::GL]);
         // A backend that this system does not have is tried first (it fails at once), then the usual ones.
         assert_eq!(backend_tries(B::Dx12, "linux"), [W::DX12, W::VULKAN, W::GL]);
+    }
+
+    #[test]
+    fn a_minimized_window_keeps_the_pane_sizes() {
+        // Windows gives a size of 0x0 when the window is minimized: the programs in the panes
+        // must not get a terminal of one cell (they draw their screen again for it).
+        assert!(!panes_follow(PhysicalSize::new(0, 0), false));
+        assert!(!panes_follow(PhysicalSize::new(1024, 0), false));
+        assert!(
+            !panes_follow(PhysicalSize::new(1024, 640), true),
+            "minimized"
+        );
+        assert!(panes_follow(PhysicalSize::new(1024, 640), false));
+        assert!(
+            panes_follow(PhysicalSize::new(200, 120), false),
+            "a small window is a real size"
+        );
     }
 
     #[test]

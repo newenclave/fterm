@@ -205,6 +205,11 @@ impl Running {
 
     /// Every pane of every tab gets the size of its own rect.
     fn resize_all_panes(&self) {
+        // A minimized window has no size: the programs keep theirs (else they draw for one cell).
+        let minimized = self.window.is_minimized().unwrap_or(false);
+        if !crate::gpu::panes_follow(self.window.inner_size(), minimized) {
+            return;
+        }
         let area = self.tab_area();
         let cell = cell_px(&self.renderer);
         for tab in self.mux.tabs() {
