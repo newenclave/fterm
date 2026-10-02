@@ -12,6 +12,7 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term};
+#[cfg(not(windows))]
 use alacritty_terminal::tty;
 
 use crate::select::StickySelection;
@@ -153,22 +154,38 @@ impl Session {
         };
         tracing::info!(%program, ?args, "starting session");
         let program_name = program_name(&program);
-        let pty_options = tty::Options {
-            shell: Some(tty::Shell::new(program, args)),
-            working_directory: options.cwd,
-            drain_on_exit: true,
-            env: HashMap::from([
-                ("TERM".to_owned(), "xterm-256color".to_owned()),
-                ("COLORTERM".to_owned(), "truecolor".to_owned()),
-                ("TERM_PROGRAM".to_owned(), "fterm".to_owned()),
-            ])
-            .into_iter()
-            .chain(options.env)
-            .collect(),
-            #[cfg(windows)]
-            escape_args: true,
-        };
-        let pty = tty::new(&pty_options, window_size(size, cell), 0)?;
+        let env: HashMap<String, String> = HashMap::from([
+            ("TERM".to_owned(), "xterm-256color".to_owned()),
+            ("COLORTERM".to_owned(), "truecolor".to_owned()),
+            ("TERM_PROGRAM".to_owned(), "fterm".to_owned()),
+        ])
+        .into_iter()
+        .chain(options.env)
+        .collect();
+        // Windows: our own ConPTY, so it takes our flags (see `conpty`).
+        #[cfg(windows)]
+        let pty = crate::conpty::new(
+            &crate::conpty::Options {
+                program,
+                args,
+                working_directory: options.cwd,
+                env,
+                escape_args: true,
+                flags: crate::conpty::PSEUDOCONSOLE_RESIZE_QUIRK,
+            },
+            window_size(size, cell),
+        )?;
+        #[cfg(not(windows))]
+        let pty = tty::new(
+            &tty::Options {
+                shell: Some(tty::Shell::new(program, args)),
+                working_directory: options.cwd,
+                drain_on_exit: true,
+                env,
+            },
+            window_size(size, cell),
+            0,
+        )?;
         #[cfg(windows)]
         let pid = pty.child_watcher().pid().map(|pid| pid.get());
         #[cfg(unix)]

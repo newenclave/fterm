@@ -13,5 +13,18 @@ serde_json.workspace = true
 sysinfo.workspace = true
 tracing.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+# Our own ConPTY code (ported from alacritty_terminal), for its flags.
+miow = "0.6"
+piper = "0.2.1"
+windows-sys = { version = "0.59", features = [
+    "Win32_System_Console",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+] }
+
 [lints]
 workspace = true

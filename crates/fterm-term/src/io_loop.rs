@@ -15,13 +15,13 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+use crate::conpty::{PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN};
 use alacritty_terminal::event::{self, Event, EventListener, WindowSize};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::tty;
-#[cfg(windows)]
-use alacritty_terminal::tty::{PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN};
 use alacritty_terminal::vte::ansi;
 use polling::{Event as PollingEvent, Events, PollMode, Poller};
 

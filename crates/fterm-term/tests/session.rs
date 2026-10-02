@@ -430,3 +430,53 @@ fn a_recording_has_the_output_and_the_sizes() {
         "the output: {text}"
     );
 }
+
+#[cfg(windows)]
+#[test]
+fn resizing_does_not_lose_the_scrollback() {
+    // ConPTY with no PSEUDOCONSOLE_RESIZE_QUIRK draws its screen again on every resize, over the
+    // terminal's own reflow: lines of the scrollback go away (and the prompt comes twice).
+    let (session, rx) = spawn(SessionOptions::command(
+        "powershell.exe",
+        ["-NoLogo", "-NoProfile"],
+    ));
+    session.write(b"1..100 | ForEach-Object { \"line-$_ \" + ('x' * 60) }\r".to_vec());
+    let deadline = std::time::Instant::now() + timeout();
+    while !session.with_term(|term| {
+        let total = fterm_term::input::total_lines(term);
+        fterm_term::input::lines_text(term, 0, total).contains("line-100 ")
+    }) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no output: {}",
+            session.screen_text()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    for (cols, rows) in [
+        (70, 25),
+        (120, 30),
+        (50, 20),
+        (130, 35),
+        (40, 20),
+        (120, 30),
+        (90, 30),
+        (140, 35),
+        (60, 22),
+        (120, 30),
+    ] {
+        session.resize(GridSize::new(cols, rows), (8, 16));
+        std::thread::sleep(Duration::from_millis(400));
+    }
+    std::thread::sleep(Duration::from_secs(1));
+    let text = session.with_term(|term| {
+        let total = fterm_term::input::total_lines(term);
+        fterm_term::input::lines_text(term, 0, total)
+    });
+    session.write(b"exit\r".to_vec());
+    wait_for_exit(&session, &rx);
+    let kept = (1..=100)
+        .filter(|n| text.contains(&format!("line-{n} ")))
+        .count();
+    assert!(kept >= 65, "only {kept} of 100 lines are left:\n{text}");
+}

@@ -2,6 +2,8 @@
 //! This crate has no GPU or window code, so it is easy to test.
 
 pub mod colors;
+#[cfg(windows)]
+pub mod conpty;
 pub mod copy_mode;
 pub mod input;
 pub mod io_loop;

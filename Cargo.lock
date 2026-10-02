@@ -1081,10 +1081,13 @@ name = "fterm-term"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
+ "miow",
+ "piper",
  "polling",
  "serde_json",
  "sysinfo",
  "tracing",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
