@@ -40,7 +40,9 @@ pub fn skill_plan(existing: Option<&str>) -> SkillPlan {
 fn plan_for(existing: Option<&str>, ours: &str) -> SkillPlan {
     match existing {
         None => SkillPlan::Write,
-        Some(text) if text.replace("\r\n", "\n") == ours => SkillPlan::UpToDate,
+        Some(text) if text.replace("\r\n", "\n") == ours.replace("\r\n", "\n") => {
+            SkillPlan::UpToDate
+        }
         Some(text) if text.contains(MARKER) => SkillPlan::Write,
         Some(_) => SkillPlan::Foreign,
     }

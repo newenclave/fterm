@@ -2,3 +2,5 @@
 *.bash text eol=lf
 *.zsh text eol=lf
 *.sh text eol=lf
+# The agent guide is embedded and compared with the file that fterm wrote: the same line ends everywhere.
+assets/agents/* text eol=lf
