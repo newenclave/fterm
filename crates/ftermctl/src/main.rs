@@ -50,6 +50,7 @@ Events and messages:
 Other:
   call METHOD [JSON]                     any API call (see docs/API.md)
   mcp                                    an MCP server on stdin/stdout (see docs/MCP.md)
+  guide                                  how agents use fterm (recipes and rules)
 
 No --pane: your own pane (inside fterm), else the active pane.
 ";
@@ -79,6 +80,10 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Mcp => mcp::serve(cli.window).map(|()| ExitCode::SUCCESS),
+        Command::Guide => {
+            print!("{}", mcp::GUIDE);
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Call { method, params } => {
             let mut client = connect(cli.window)?;
             let answer = client

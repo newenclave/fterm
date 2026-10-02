@@ -20,6 +20,8 @@ pub enum Command {
     Subscribe {
         events: Vec<String>,
     },
+    /// The guide for agents (assets/agents/GUIDE.md).
+    Guide,
     /// `draw -`: the drawing commands come on stdin (a big batch does not fit on a command line).
     DrawStdin {
         pane: Option<u64>,
@@ -157,6 +159,7 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
     Ok(match word {
         "help" | "--help" | "-h" => Command::Help,
         "mcp" => Command::Mcp,
+        "guide" => Command::Guide,
         "list" => call("list", json!({})),
         "focus" => call(
             "focus",
@@ -378,6 +381,11 @@ mod tests {
             )
         );
         assert_eq!(call("spawn --down").1["place"], json!("down"));
+    }
+
+    #[test]
+    fn the_guide_for_agents() {
+        assert_eq!(cli("guide").unwrap().command, Command::Guide);
     }
 
     #[test]

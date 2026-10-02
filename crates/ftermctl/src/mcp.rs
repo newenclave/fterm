@@ -26,6 +26,12 @@ pub struct Server<B: Backend> {
 }
 
 /// The tools with their JSON schemas.
+/// The guide for agents (`ftermctl guide`, and the Claude Code skill).
+pub const GUIDE: &str = include_str!("../../../assets/agents/GUIDE.md");
+
+/// What an MCP client gives the model about this server.
+const INSTRUCTIONS: &str = include_str!("../../../assets/agents/INSTRUCTIONS.md");
+
 pub fn tools() -> Value {
     let pane = json!({ "type": "integer", "description": "The pane id (from list_panes). No pane = your own pane." });
     let timeout = json!({ "type": "integer", "description": "How long to wait, in seconds." });
@@ -187,10 +193,7 @@ impl<B: Backend> Server<B> {
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false } },
                     "serverInfo": { "name": "fterm", "version": env!("CARGO_PKG_VERSION") },
-                    "instructions": "These tools control the fterm terminal window that you run in. \
-                        Panes have ids (see list_panes); without a pane id a tool uses your own pane. \
-                        run_command runs a command in a pane and gives its output and exit code. \
-                        Agents in other panes get messages with send_message.",
+                    "instructions": INSTRUCTIONS,
                 }))
             }
             "ping" => Ok(json!({})),
@@ -598,6 +601,40 @@ mod tests {
             s.handle(&request(3, "ping", json!({}))).unwrap()["result"],
             json!({})
         );
+    }
+
+    #[test]
+    fn the_instructions_tell_how_to_work() {
+        let answer = server()
+            .handle(&request(
+                1,
+                "initialize",
+                json!({ "protocolVersion": "2025-06-18" }),
+            ))
+            .unwrap();
+        let text = answer["result"]["instructions"].as_str().unwrap();
+        for word in [
+            "run_command",
+            "wait_for",
+            "send_message",
+            "open_scene",
+            "plot",
+            "ftermctl guide",
+        ] {
+            assert!(text.contains(word), "{word}");
+        }
+    }
+
+    #[test]
+    fn the_guide_names_every_tool() {
+        // A new tool must come into the guide too.
+        for t in tools().as_array().unwrap() {
+            let name = t["name"].as_str().unwrap();
+            assert!(
+                GUIDE.contains(&format!("`{name}`")),
+                "{name} is not in GUIDE.md"
+            );
+        }
     }
 
     #[test]

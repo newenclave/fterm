@@ -57,6 +57,11 @@ Other MCP clients: the command is `ftermctl` with the argument `mcp`, transport 
 | `draw_scene` | Draws commands into a scene: dots, lines, rects, circles, text, colors, charts (see [SCENE.md](SCENE.md)). |
 | `plot` | A chart of numbers in a scene, as a line or bars, with a title and a color. Call it again with new values for a live chart. |
 
+The server also gives the agent short instructions: the main recipes (run tests in a pane, wait for
+an event, talk to another agent, draw a chart) and the rules (for example: ask the user before you close
+a pane). The full guide for agents is `ftermctl guide` (the same text is in
+[assets/agents/GUIDE.md](../assets/agents/GUIDE.md)); agents with no MCP can read it too.
+
 Ask Claude for example: "open a scene and plot the time of each test run", or "draw the module graph of this
 project in a scene".
 
