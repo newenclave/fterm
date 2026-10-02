@@ -37,6 +37,15 @@ pub struct Reader {
 }
 
 impl Reader {
+    /// The stream ended with no `[DONE]`: after a `finish_reason` the answer is complete anyway.
+    pub fn at_end(&mut self) -> Option<Event> {
+        self.stop_reason.is_some().then(|| Event::Done {
+            stop_reason: self.stop_reason.take(),
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+        })
+    }
+
     pub fn event(&mut self, event: &SseEvent) -> Option<Event> {
         if event.data.trim() == "[DONE]" {
             return Some(Event::Done {
@@ -46,7 +55,11 @@ impl Reader {
             });
         }
         let value: Value = serde_json::from_str(&event.data).ok()?;
-        if let Some(message) = value["error"]["message"].as_str() {
+        // `{"error":{"message":..}}`, or `{"error":".."}` (Ollama).
+        let error = value["error"]["message"]
+            .as_str()
+            .or_else(|| value["error"].as_str());
+        if let Some(message) = error {
             return Some(Event::Failed(crate::AiError::Http {
                 status: 500,
                 message: message.to_owned(),

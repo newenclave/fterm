@@ -252,3 +252,47 @@ fn no_key_no_request() {
         })]
     );
 }
+
+#[test]
+fn an_answer_with_an_end_reason_is_done_without_done() {
+    // Some servers close the stream after `finish_reason` and send no `[DONE]`.
+    let chunks = vec![
+        "data: {\"choices\":[{\"delta\":{\"content\":\"ls\"}}]}\n\n".to_owned(),
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n".to_owned(),
+    ];
+    let (url, _server) = server(200, "text/event-stream", chunks);
+    let events = collect(&provider(Kind::OpenAi, &url), None, &Arc::default());
+    assert_eq!(events[0], Event::Delta("ls".into()));
+    assert!(
+        matches!(&events[1], Event::Done { stop_reason: Some(r), .. } if r == "stop"),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn an_error_in_the_stream_says_what_it_is() {
+    // Ollama writes an error as a string, not as an object.
+    let chunks = vec![
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Get\"}}]}\n\n".to_owned(),
+        "data: {\"error\":\"model runner has unexpectedly stopped\"}\n\n".to_owned(),
+    ];
+    let (url, _server) = server(200, "text/event-stream", chunks);
+    let events = collect(&provider(Kind::OpenAi, &url), None, &Arc::default());
+    let last = events.last().unwrap();
+    assert!(
+        matches!(last, Event::Failed(AiError::Http { message, .. }) if message.contains("runner has unexpectedly stopped")),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn a_broken_stream_says_how_much_came() {
+    let chunks = vec!["data: {\"choices\":[{\"delta\":{\"content\":\"Get-Chi\"}}]}\n\n".to_owned()];
+    let (url, _server) = server(200, "text/event-stream", chunks);
+    let events = collect(&provider(Kind::OpenAi, &url), None, &Arc::default());
+    let Some(Event::Failed(AiError::Network(message))) = events.last() else {
+        panic!("{events:?}");
+    };
+    assert!(message.contains("7 characters"), "{message}");
+    assert!(message.contains("still running"), "{message}");
+}

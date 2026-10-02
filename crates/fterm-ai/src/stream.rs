@@ -65,6 +65,8 @@ pub fn run(
     let mut anthropic = anthropic::Reader::default();
     let mut openai = openai::Reader::default();
     let mut line = String::new();
+    // How much of the answer came (for the message when the stream breaks).
+    let mut received = 0usize;
     loop {
         if stop.load(Ordering::SeqCst) {
             return on_event(Event::Failed(AiError::Stopped));
@@ -82,6 +84,9 @@ pub fn run(
                 Kind::OpenAi => openai.event(&event),
             };
             if let Some(out) = out {
+                if let Event::Delta(text) = &out {
+                    received += text.chars().count();
+                }
                 let last = matches!(out, Event::Done { .. } | Event::Failed(_));
                 on_event(out);
                 if last {
@@ -90,9 +95,15 @@ pub fn run(
             }
         }
         if at_end {
-            return on_event(Event::Failed(AiError::Network(
-                "the stream ended before the answer was complete".to_owned(),
-            )));
+            if let Kind::OpenAi = provider.kind
+                && let Some(done) = openai.at_end()
+            {
+                return on_event(done);
+            }
+            return on_event(Event::Failed(AiError::Network(format!(
+                "the stream ended before the answer was complete ({received} characters came, \
+                 with no end mark). Is the server still running?"
+            ))));
         }
     }
 }
