@@ -151,6 +151,7 @@ also work on other layouts (for example, Russian).
 | `toggle_remote_control` | API clients may (or may not) read and type into this pane (see [API.md](API.md)). |
 | `panel_ai`, `explain_error`, `ask_ai_selection`, `set_ai_key`, `text_to_command` | The AI panel and text to command (see [AI.md](AI.md)). |
 | `sessions` (Ctrl+Shift+S), `save_session_as`, `restore_session` | Saved sessions (see [Sessions](#sessions)). |
+| `toggle_fullscreen` (Alt+Enter) | Full screen with no window frame. |
 
 ### Lua functions
 A function gets an object `fterm` with these functions:

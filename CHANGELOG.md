@@ -10,6 +10,7 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 - **Screenshots of panes.** The API method `screenshot`, `ftermctl screenshot [--pane N] [FILE.png]`,
   and the MCP tool `screenshot_pane`. An agent gets the PNG as a picture, so it can see what it drew in a
   scene, or how a program looks. It works when the window is under other windows too.
+- **Full screen** with no window frame: Alt + Enter (the action `toggle_fullscreen`), like WezTerm.
 - **Text with colors and styles.** `get_text` with `styled: true`, `ftermctl get-text --styled`, and
   `read_pane` with `styled` give the colors (`#rrggbb`) and the styles (bold, italic, underline, strike,
   dim) of the text, as the user sees it. So an agent can find red errors, or what is selected in a menu.

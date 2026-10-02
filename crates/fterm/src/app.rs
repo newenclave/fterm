@@ -2065,6 +2065,14 @@ impl App {
                 }
             }
             A::Zoom => running.mux.toggle_zoom(),
+            A::ToggleFullscreen => {
+                // Borderless on the monitor of the window: no frame and no title bar.
+                let full = running.window.fullscreen().is_some();
+                running
+                    .window
+                    .set_fullscreen((!full).then_some(winit::window::Fullscreen::Borderless(None)));
+                return;
+            }
             A::ClosePane => {
                 if let Some(pane) = running.mux.active_pane() {
                     self.close(event_loop, CloseTarget::Pane(pane));

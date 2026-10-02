@@ -202,11 +202,13 @@ pub enum BuiltinAction {
     NewScene,
     /// Write the fterm skill for Claude Code (~/.claude/skills/fterm/SKILL.md).
     InstallClaudeSkill,
+    /// Full screen with no window frame (like Alt+Enter in WezTerm).
+    ToggleFullscreen,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 48] = [
+    pub const ALL: [BuiltinAction; 49] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -255,6 +257,7 @@ impl BuiltinAction {
         Self::SaveSessionAs,
         Self::NewScene,
         Self::InstallClaudeSkill,
+        Self::ToggleFullscreen,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -308,6 +311,7 @@ impl BuiltinAction {
             Self::SaveSessionAs => "save_session_as",
             Self::NewScene => "new_scene",
             Self::InstallClaudeSkill => "install_claude_skill",
+            Self::ToggleFullscreen => "toggle_fullscreen",
         };
         name.to_owned()
     }
@@ -349,6 +353,7 @@ impl BuiltinAction {
             Self::SaveSessionAs => "Save session as…".to_owned(),
             Self::NewScene => "New Braille scene (split right)".to_owned(),
             Self::InstallClaudeSkill => "Install the fterm skill for Claude Code".to_owned(),
+            Self::ToggleFullscreen => "Full screen on or off".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -442,6 +447,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+shift+s", "sessions"),
     ("alt+f8", "history_commands"),
     ("alt+f12", "history_dirs"),
+    ("alt+enter", "toggle_fullscreen"),
 ];
 
 impl Keymap {
@@ -603,6 +609,19 @@ mod tests {
         assert_eq!(
             keys.get(&chord("ctrl+shift+a")),
             Some(&Action::Builtin(BuiltinAction::PanelAgents))
+        );
+    }
+
+    #[test]
+    fn fullscreen_action_and_key() {
+        // Like WezTerm: Alt+Enter, and the window has no frame then.
+        let action = BuiltinAction::from_name("toggle_fullscreen").unwrap();
+        assert_eq!(action, BuiltinAction::ToggleFullscreen);
+        assert_eq!(action.label(), "Full screen on or off");
+        assert!(BuiltinAction::ALL.contains(&action));
+        assert_eq!(
+            Keymap::with_defaults().get(&chord("alt+enter")),
+            Some(&Action::Builtin(BuiltinAction::ToggleFullscreen))
         );
     }
 
