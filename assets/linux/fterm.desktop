@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=fterm
+GenericName=Terminal
+Comment=A GPU terminal for people and AI agents
+Exec=fterm
+Icon=fterm
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;console;command;
+StartupWMClass=fterm

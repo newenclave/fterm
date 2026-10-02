@@ -2,6 +2,11 @@
 
 fterm is a fast GPU terminal for Windows, Linux, and macOS, with built-in AI tools.
 
+## Download
+Take the archive for your system from [Releases](https://github.com/newenclave/fterm/releases), unpack it,
+and start `fterm.exe` (Linux and macOS: `./fterm`). There is no install: the config (`fterm.lua`) and the
+data (`data/`) are in the same folder, so you can move the folder or carry it on a USB drive.
+
 - The plan: [docs/ROADMAP.md](docs/ROADMAP.md)
 - How to build: [docs/BUILD.md](docs/BUILD.md)
 - How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
@@ -13,6 +18,7 @@ fterm is a fast GPU terminal for Windows, Linux, and macOS, with built-in AI too
 - The AI panel (Claude, Ollama, OpenAI-like APIs): [docs/AI.md](docs/AI.md)
 - Config and profiles: [docs/CONFIG.md](docs/CONFIG.md)
 
-## Font license
-fterm has the JetBrains Mono font inside. It uses the SIL Open Font License,
-see [assets/fonts/OFL.txt](assets/fonts/OFL.txt).
+## License
+fterm is under the MIT license ([LICENSE](LICENSE)). It has the JetBrains Mono font inside (SIL Open Font
+License, [assets/fonts/OFL.txt](assets/fonts/OFL.txt)) and code from alacritty_terminal (Apache-2.0); see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

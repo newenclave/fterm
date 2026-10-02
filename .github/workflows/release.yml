@@ -1,0 +1,60 @@
+name: Release
+
+# A tag like v0.1.0 builds fterm for Windows, Linux, and macOS, and makes a GitHub Release with
+# portable archives (no install; see scripts/package.py). The tag must be the version of Cargo.toml.
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux packages
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p fterm -p ftermctl
+
+      - name: Pack
+        run: python scripts/package.py --bin-dir target/release --out dist --tag ${{ github.ref_name }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fterm-${{ matrix.os }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Make the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/* \
+            --repo "${{ github.repository }}" \
+            --title "fterm ${{ github.ref_name }}" \
+            --generate-notes

@@ -311,10 +311,25 @@ Like a browser: when you open fterm again, you can get back what you had before 
 - **Check:** open 3 tabs with splits in different folders, close fterm, open it again: the box asks, Enter brings back
   the same tabs, layouts, and folders; a crash (kill the process) still restores the state from the last 30 seconds.
 
-### Phase 10 — All systems and release
-- Finish Linux and macOS support (pty, fonts, IME, macOS menu).
-- Installers: MSI (`cargo-wix`) and winget, dmg, AppImage and deb.
-- Code signing, auto update, many windows, save and restore sessions.
+### Phase 10 — All systems and release — in progress
+Done:
+- CI on Windows, Linux, and macOS (clippy and all tests), shell integration in bash and zsh with no setup.
+- A portable fterm: `--config PATH`, `fterm.lua` next to `fterm.exe`, and `data_dir` for the history, the sessions,
+  and the shell scripts (see [CONFIG.md](CONFIG.md#a-portable-fterm)).
+- Releases: a tag `vX.Y.Z` builds portable archives for Windows (zip), Linux, and macOS (tar.gz) and makes a
+  GitHub Release (`.github/workflows/release.yml`, `scripts/package.py`).
+- The icon (a bold f of Braille dots), in the window and in `fterm.exe`.
+- Our own ConPTY code (from alacritty_terminal) with `PSEUDOCONSOLE_RESIZE_QUIRK`: a resize no longer repeats
+  the screen in the scrollback.
+- The GPU in the config (`gpu.backend`, `gpu.power`) and small GPU memory blocks: about 160 MB at start with DX12,
+  50 MB with OpenGL (it was 337 MB).
+- `FTERM_RECORD`: a recording of the output of panes (asciinema), for bug reports.
+
+Still to do:
+- Linux and macOS: check on real machines (fonts, IME, the Cmd keys and the menu of macOS).
+- Packages: AppImage and deb, a macOS `.app` in a dmg (with `.icns`), MSI and winget.
+- Code signing, auto update, many windows.
+- Lines that a reflow to a very narrow pane still loses (72 of 100 come back in the test).
 
 ### Phase 11 — Braille scene ✅ (done: the canvas, scene panes, `scene_open`/`scene_draw`, `ftermctl scene`/`draw`, MCP `open_scene`/`draw_scene`/`plot`; see [SCENE.md](SCENE.md))
 - Braille gives 2×4 "pixels" in every cell. So an 80×24 terminal is a 160×96 pixel screen.

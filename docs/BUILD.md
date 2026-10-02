@@ -61,3 +61,18 @@ cargo build --release
 ```
 The file is `target/release/fterm` (`fterm.exe` on Windows).
 In a release build on Windows, there is no console window, so you do not see logs.
+
+## A portable archive
+```sh
+cargo build --release -p fterm -p ftermctl
+python scripts/package.py --bin-dir target/release --out dist
+```
+`dist/` gets `fterm-<version>-<system>-<arch>.zip` (Windows) or `.tar.gz` (Linux, macOS), and a `.sha256` file.
+In the archive: `fterm`, `ftermctl`, a portable `fterm.lua` (`data_dir = "data"`), the README, and the licenses
+(on Linux also `fterm.desktop` and `fterm.png`).
+
+## Make a release
+1. Set the new version in `Cargo.toml` (`[workspace.package] version`), and push it.
+2. Push a tag with the same version: `git tag v0.1.0 && git push origin v0.1.0`.
+3. The workflow `Release` builds the archives on Windows, Linux, and macOS and makes a GitHub Release with them.
+   A tag that is not the version of `Cargo.toml` stops it.
