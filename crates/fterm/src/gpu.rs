@@ -43,6 +43,7 @@ impl Gpu {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("fterm device"),
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
                 ..Default::default()
             })
             .await
