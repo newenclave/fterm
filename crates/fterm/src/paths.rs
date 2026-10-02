@@ -49,10 +49,13 @@ mod tests {
             resolve(config, "data", None),
             Path::new("D:/tools/fterm").join("data")
         );
-        assert_eq!(
-            resolve(config, "E:/fterm-data", None),
-            PathBuf::from("E:/fterm-data")
-        );
+        // A full path stays (a full path looks different on Windows and on unix).
+        let full = if cfg!(windows) {
+            "E:/fterm-data"
+        } else {
+            "/srv/fterm-data"
+        };
+        assert_eq!(resolve(config, full, None), PathBuf::from(full));
         let home = Path::new("C:/Users/me");
         assert_eq!(resolve(config, "~/fterm", Some(home)), home.join("fterm"));
         assert_eq!(
