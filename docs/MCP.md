@@ -35,7 +35,24 @@ claude mcp add --scope user fterm -- C:\path\to\ftermctl.exe mcp
 claude mcp add --scope user fterm -- ftermctl.exe mcp
 ```
 
+**OpenCode**: in `opencode.json` (in the project, or `~/.config/opencode/opencode.json` for all projects):
+
+```json
+{
+  "mcp": {
+    "fterm": { "type": "local", "command": ["ftermctl", "mcp"], "enabled": true }
+  }
+}
+```
+
 Other MCP clients: the command is `ftermctl` with the argument `mcp`, transport stdio.
+
+**Agents with no MCP** (or to tell an agent about fterm in its rules file, for example `AGENTS.md` or
+`CLAUDE.md`), one line is enough:
+
+```
+When FTERM_PANE_ID is set, you run in the fterm terminal: run `ftermctl guide` once to learn how to use its panes.
+```
 
 ## The tools
 
