@@ -33,9 +33,14 @@ pub enum SkillPlan {
 
 /// What to do, from the text of the file that is there (`None` = no file).
 pub fn skill_plan(existing: Option<&str>) -> SkillPlan {
+    plan_for(existing, &skill_md())
+}
+
+/// `skill_plan` with our text as a parameter.
+fn plan_for(existing: Option<&str>, ours: &str) -> SkillPlan {
     match existing {
         None => SkillPlan::Write,
-        Some(text) if text.replace("\r\n", "\n") == skill_md() => SkillPlan::UpToDate,
+        Some(text) if text.replace("\r\n", "\n") == ours => SkillPlan::UpToDate,
         Some(text) if text.contains(MARKER) => SkillPlan::Write,
         Some(_) => SkillPlan::Foreign,
     }
@@ -89,6 +94,19 @@ mod tests {
         assert_eq!(
             skill_plan(Some(&skill_md().replace('\n', "\r\n"))),
             SkillPlan::UpToDate
+        );
+    }
+
+    #[test]
+    fn line_ends_do_not_matter_on_either_side() {
+        // On a Windows checkout (core.autocrlf) the embedded guide has CRLF, the file on disk LF.
+        let ours_lf = "---\nname: fterm\n---\nguide\n";
+        let ours_crlf = ours_lf.replace('\n', "\r\n");
+        assert_eq!(plan_for(Some(ours_lf), &ours_crlf), SkillPlan::UpToDate);
+        assert_eq!(plan_for(Some(&ours_crlf), ours_lf), SkillPlan::UpToDate);
+        assert_eq!(
+            plan_for(Some("---\nname: fterm\n---\nother\n"), &ours_crlf),
+            SkillPlan::Foreign
         );
     }
 
