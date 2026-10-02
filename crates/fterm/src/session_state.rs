@@ -234,10 +234,12 @@ pub struct Entry {
 /// `%LOCALAPPDATA%\fterm\sessions` (Linux and macOS: `~/.local/state/fterm/sessions`).
 /// `FTERM_SESSION_DIR` wins (for tests).
 pub fn sessions_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("FTERM_SESSION_DIR") {
-        return Some(PathBuf::from(dir));
-    }
-    Some(default_path()?.parent()?.join("sessions"))
+    crate::paths::folder(
+        std::env::var_os("FTERM_SESSION_DIR").map(PathBuf::from),
+        crate::paths::data_dir().as_deref(),
+        "sessions",
+        default_path().and_then(|p| p.parent().map(|dir| dir.join("sessions"))),
+    )
 }
 
 /// The file that the window with this pid saves to while it runs.

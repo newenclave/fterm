@@ -403,7 +403,12 @@ pub struct App {
 
 impl App {
     pub fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
-        let config_path = config_path();
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let arg = fterm_config::load::config_arg(&args).unwrap_or_else(|err| {
+            tracing::warn!("{err}");
+            None
+        });
+        let config_path = config_path(arg.as_deref());
         let (config, message) = if config_path.exists() {
             match load_file(&config_path) {
                 Ok(config) => {
@@ -415,6 +420,18 @@ impl App {
         } else {
             (LoadedConfig::defaults(), None)
         };
+        // `data_dir`: the history, the sessions, and the shell scripts in one folder (a portable fterm).
+        let data_dir = config.config.data_dir.as_deref().map(|dir| {
+            crate::paths::resolve(
+                &config_path,
+                dir,
+                fterm_config::profiles::home_dir().as_deref(),
+            )
+        });
+        if let Some(dir) = &data_dir {
+            tracing::info!(folder = %dir.display(), "the data folder");
+        }
+        crate::paths::set_data_dir(data_dir);
         let profiles = profiles_for(&config);
         let mut app = Self {
             proxy,
@@ -700,7 +717,12 @@ impl App {
         if history.as_ref().is_some_and(|h| h.limits() == limits) {
             return;
         }
-        let Some(folder) = fterm_history::default_folder() else {
+        let Some(folder) = crate::paths::folder(
+            std::env::var_os("FTERM_HISTORY_DIR").map(std::path::PathBuf::from),
+            crate::paths::data_dir().as_deref(),
+            "history",
+            fterm_history::default_folder(),
+        ) else {
             tracing::warn!("no folder for the history");
             return;
         };
@@ -3977,7 +3999,14 @@ fn shell_script_path() -> Option<std::path::PathBuf> {
     .map(std::path::PathBuf::from)
     .or_else(|| fterm_config::profiles::home_dir().map(|h| h.join(".local").join("share")))
     .unwrap_or_else(std::env::temp_dir);
-    match install_scripts(&base.join("fterm").join("shell")) {
+    let folder = crate::paths::folder(
+        None,
+        crate::paths::data_dir().as_deref(),
+        "shell",
+        Some(base.join("fterm").join("shell")),
+    )
+    .unwrap_or_default();
+    match install_scripts(&folder) {
         Ok(path) => Some(path),
         Err(err) => {
             tracing::warn!("cannot write the shell integration scripts: {err}");

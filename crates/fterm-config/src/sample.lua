@@ -9,6 +9,8 @@ return {
   braille_style = "pixels",    -- "pixels" (no gaps) or "dots" (round dots)
   -- The GPU (read at start): "gl" takes the least memory; "auto" = DX12 on Windows.
   -- gpu = { backend = "auto", power = "high" },
+  -- One folder for the history, the sessions, and the shell scripts (read at start; relative to this file).
+  -- data_dir = "data",
 
   colors = {
     -- background = "#1e1e2e",

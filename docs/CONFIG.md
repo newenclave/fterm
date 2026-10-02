@@ -3,9 +3,27 @@
 fterm reads a config file at start, and again each time you save it. You do not need to restart.
 
 ## Where is the file?
-1. The path in the `FTERM_CONFIG` variable, if it is set.
-2. Windows: `%APPDATA%\fterm\fterm.lua`.
-3. Linux and macOS: `~/.config/fterm/fterm.lua`.
+1. The path after `--config` when you start fterm: `fterm.exe --config D:\tools\my.lua`.
+2. The path in the `FTERM_CONFIG` variable, if it is set.
+3. `fterm.lua` in the folder of `fterm.exe` (a portable fterm, see below).
+4. Windows: `%APPDATA%\fterm\fterm.lua`.
+5. Linux and macOS: `~/.config/fterm/fterm.lua`.
+
+### A portable fterm
+fterm needs no install. Put `fterm.exe`, `ftermctl.exe`, and a `fterm.lua` into one folder (for example on a
+USB drive), and in `fterm.lua` say where the data goes:
+
+```lua
+return {
+  data_dir = "data",   -- next to fterm.lua: data\history, data\sessions, data\shell
+}
+```
+
+`data_dir` is read when fterm starts. A relative path is from the folder of the config file; `~` is your home
+folder. With no `data_dir`, the history is in `%APPDATA%\fterm\history`, the sessions and the shell
+scripts are in `%LOCALAPPDATA%\fterm`. Two things stay on the computer: the AI key (in the key store of
+Windows, not in a file) and the small files that tell `ftermctl` which fterm windows are open
+(`%LOCALAPPDATA%\fterm\instances`).
 
 With no file, fterm uses the built-in settings. Press **Ctrl + Shift + ,** (comma) to open the file
 in your editor. If there is no file yet, fterm makes one with examples.
@@ -40,6 +58,7 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `scrollback` | number | `10000` | Lines of history. New tabs and panes use it. |
 | `braille_style` | `"pixels"` or `"dots"` | `"pixels"` | Braille chars as square pixels with no gaps, or as round dots. |
 | `gpu` | table | `{ backend = "auto", power = "high" }` | The GPU that draws the window. See "The GPU". |
+| `data_dir` | string | the folders of the user | One folder for the history, the sessions, and the shell scripts. See "A portable fterm". |
 | `colors` | table | Catppuccin Mocha | See "Colors". |
 | `default_profile` | string | the first profile | The profile for new tabs and splits. |
 | `profiles` | list | found by fterm | See "Profiles". |

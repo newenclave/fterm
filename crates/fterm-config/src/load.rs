@@ -421,6 +421,9 @@ pub struct Config {
     pub restore_history: usize,
     /// The GPU that draws the window (used at start).
     pub gpu: GpuConfig,
+    /// The folder for the history, the sessions, and the shell scripts (used at start), as written:
+    /// a relative path is from the folder of the config file.
+    pub data_dir: Option<String>,
     pub api: ApiConfig,
     pub ai: AiConfig,
     /// The Lua function `on_notification` (its number), if there is one.
@@ -461,6 +464,7 @@ impl Default for Config {
             restore_agents: Rerun::default(),
             restore_history: 200,
             gpu: GpuConfig::default(),
+            data_dir: None,
             api: ApiConfig::default(),
             ai: AiConfig::default(),
             on_notification: None,
@@ -990,6 +994,9 @@ impl Reader {
                     ));
                 }
             };
+        }
+        if let Some(dir) = string_field(root, "data_dir", "data_dir")? {
+            config.data_dir = Some(dir);
         }
         if let Some(gpu) = table_field(root, "gpu", "gpu")? {
             if let Some(text) = string_field(&gpu, "backend", "gpu.backend")? {
@@ -1575,11 +1582,61 @@ pub fn load_file(path: &Path) -> Result<LoadedConfig, String> {
     load_str(&source, &path.display().to_string())
 }
 
-/// Where the config file is: `FTERM_CONFIG`, or `%APPDATA%\fterm\fterm.lua`, or `~/.config/fterm/fterm.lua`.
-pub fn config_path() -> PathBuf {
-    if let Some(path) = std::env::var_os("FTERM_CONFIG") {
-        return PathBuf::from(path);
+/// `--config PATH` (or `--config=PATH`) on the command line of fterm.
+pub fn config_arg(args: &[String]) -> Result<Option<PathBuf>, String> {
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        let path = if word == "--config" {
+            words.next().map(String::as_str)
+        } else if let Some(path) = word.strip_prefix("--config=") {
+            Some(path)
+        } else {
+            continue;
+        };
+        return match path.filter(|p| !p.is_empty()) {
+            Some(path) => Ok(Some(PathBuf::from(path))),
+            None => Err("--config needs the path of a config file".to_owned()),
+        };
     }
+    Ok(None)
+}
+
+/// Where the config is: `--config`, then `FTERM_CONFIG`, then `fterm.lua` next to fterm.exe (a portable
+/// fterm: the program and its config in one folder), then the config of the user.
+pub fn choose_config_path(
+    arg: Option<&Path>,
+    env: Option<&Path>,
+    exe_dir: Option<&Path>,
+    exists: impl Fn(&Path) -> bool,
+    user: PathBuf,
+) -> PathBuf {
+    if let Some(path) = arg.or(env) {
+        return path.to_path_buf();
+    }
+    match exe_dir.map(|dir| dir.join("fterm.lua")) {
+        Some(next_to_exe) if exists(&next_to_exe) => next_to_exe,
+        _ => user,
+    }
+}
+
+/// Where the config file is: `--config` (`arg`), `FTERM_CONFIG`, `fterm.lua` next to fterm.exe, or
+/// the config of the user (see `user_config_path`).
+pub fn config_path(arg: Option<&Path>) -> PathBuf {
+    let env = std::env::var_os("FTERM_CONFIG").map(PathBuf::from);
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    choose_config_path(
+        arg,
+        env.as_deref(),
+        exe_dir.as_deref(),
+        Path::is_file,
+        user_config_path(),
+    )
+}
+
+/// `%APPDATA%\fterm\fterm.lua`, or `~/.config/fterm/fterm.lua`.
+pub fn user_config_path() -> PathBuf {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else {
@@ -2309,6 +2366,72 @@ mod tests {
             .unwrap();
         assert!(err.contains("gpu.backend") && err.contains("gl"), "{err}");
         assert!(load_str(r#"return { gpu = { power = "max" } }"#, "t").is_err());
+    }
+
+    #[test]
+    fn the_config_path_from_the_command_line() {
+        let args = |line: &str| {
+            line.split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(config_arg(&args("")), Ok(None));
+        assert_eq!(
+            config_arg(&args("--config D:/f/my.lua")),
+            Ok(Some(PathBuf::from("D:/f/my.lua")))
+        );
+        assert_eq!(
+            config_arg(&args("--config=D:/f/my.lua")),
+            Ok(Some(PathBuf::from("D:/f/my.lua")))
+        );
+        assert!(config_arg(&args("--config")).is_err(), "no path");
+        assert!(config_arg(&args("--config=")).is_err(), "an empty path");
+        // Other words are not for this (for example a path that Windows gives to the program).
+        assert_eq!(config_arg(&args("C:/x --other")), Ok(None));
+    }
+
+    #[test]
+    fn the_data_folder_from_the_config() {
+        assert_eq!(load("return {}").config.data_dir, None);
+        assert_eq!(
+            load(r#"return { data_dir = "data" }"#)
+                .config
+                .data_dir
+                .as_deref(),
+            Some("data")
+        );
+        assert!(load_str("return { data_dir = 5 }", "t").is_err());
+    }
+
+    #[test]
+    fn the_config_path_in_order() {
+        let user = PathBuf::from("C:/Users/me/AppData/Roaming/fterm/fterm.lua");
+        let exe = Path::new("D:/tools/fterm");
+        let there = |p: &Path| p == Path::new("D:/tools/fterm").join("fterm.lua");
+        let none = |_: &Path| false;
+        let arg = Path::new("E:/a.lua");
+        let env = Path::new("E:/b.lua");
+        assert_eq!(
+            choose_config_path(Some(arg), Some(env), Some(exe), there, user.clone()),
+            arg
+        );
+        assert_eq!(
+            choose_config_path(None, Some(env), Some(exe), there, user.clone()),
+            env
+        );
+        // A portable fterm: its config is next to it.
+        assert_eq!(
+            choose_config_path(None, None, Some(exe), there, user.clone()),
+            exe.join("fterm.lua")
+        );
+        assert_eq!(
+            choose_config_path(None, None, Some(exe), none, user.clone()),
+            user
+        );
+        assert_eq!(
+            choose_config_path(None, None, None, there, user.clone()),
+            user
+        );
     }
 
     #[test]
