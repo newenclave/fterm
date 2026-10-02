@@ -46,6 +46,8 @@ pub struct SessionOptions {
     pub scrollback: usize,
     /// Bytes for the terminal (not the program) before the program starts: the old text of a restored pane.
     pub intro: Vec<u8>,
+    /// Record what the program writes, and the sizes, to this file (asciinema v2; `FTERM_RECORD`).
+    pub record: Option<std::path::PathBuf>,
 }
 
 impl Default for SessionOptions {
@@ -57,6 +59,7 @@ impl Default for SessionOptions {
             env: Vec::new(),
             scrollback: 10_000,
             intro: Vec::new(),
+            record: None,
         }
     }
 }
@@ -114,6 +117,8 @@ pub struct Session {
     pid: Option<u32>,
     /// The program name without folder and `.exe` (for the default tab title).
     program: String,
+    /// `FTERM_RECORD`: the recording of this session (the sizes are written here).
+    recorder: crate::record::Shared,
 }
 
 impl Session {
@@ -174,7 +179,23 @@ impl Session {
                 (osc_listener.on_event)(TermEvent::Osc(event));
             }
         });
-        let event_loop = IoLoop::new(term.clone(), listener.clone(), pty, osc_sink)?;
+        let recorder: crate::record::Shared = Default::default();
+        if let Some(path) = &options.record {
+            match crate::record::open(path, size.columns, size.rows) {
+                Ok(r) => {
+                    tracing::info!(path = %path.display(), "recording the session");
+                    *recorder.lock().unwrap() = Some(r);
+                }
+                Err(err) => tracing::warn!(path = %path.display(), "cannot record: {err}"),
+            }
+        }
+        let event_loop = IoLoop::new(
+            term.clone(),
+            listener.clone(),
+            pty,
+            osc_sink,
+            recorder.clone(),
+        )?;
         let sender = event_loop.channel();
         let _ = listener.sender.set(sender.clone());
         event_loop.spawn();
@@ -186,6 +207,7 @@ impl Session {
             selection: Mutex::new(StickySelection::default()),
             pid,
             program: program_name,
+            recorder,
         })
     }
 
@@ -197,6 +219,9 @@ impl Session {
     }
 
     pub fn resize(&self, size: GridSize, cell: (u16, u16)) {
+        crate::record::with(&self.recorder, |r| {
+            r.resize(size.columns, size.rows, std::time::Instant::now())
+        });
         *self.size.lock().unwrap() = size;
         self.term.lock().resize(size);
         if let Some(notifier) = &mut *self.notifier.lock().unwrap() {
@@ -231,6 +256,7 @@ impl Session {
             selection: Mutex::new(StickySelection::default()),
             pid: None,
             program: "scene".to_owned(),
+            recorder: Default::default(),
         }
     }
 

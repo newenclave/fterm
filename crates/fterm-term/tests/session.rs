@@ -396,3 +396,37 @@ fn a_scene_session_has_no_program() {
     assert_eq!(rows, 5);
     drop(session);
 }
+
+#[test]
+fn a_recording_has_the_output_and_the_sizes() {
+    let file = std::env::temp_dir().join(format!("fterm-record-test-{}.cast", std::process::id()));
+    let _ = std::fs::remove_file(&file);
+    let options = SessionOptions {
+        record: Some(file.clone()),
+        ..SessionOptions::default()
+    };
+    let (session, rx) = spawn(options);
+    session.resize(GridSize::new(100, 30), (8, 16));
+    session.write(b"echo fterm-recorded\r".to_vec());
+    session.write(b"exit\r".to_vec());
+    wait_for_exit(&session, &rx);
+    drop(session);
+    let text = std::fs::read_to_string(&file).unwrap();
+    let _ = std::fs::remove_file(&file);
+    let lines: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines[0]["version"], 2);
+    assert_eq!(lines[0]["width"], 80);
+    assert!(
+        lines.iter().any(|l| l[1] == "r" && l[2] == "100x30"),
+        "the resize: {text}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l[1] == "o" && l[2].as_str().is_some_and(|t| t.contains("fterm-recorded"))),
+        "the output: {text}"
+    );
+}

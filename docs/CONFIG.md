@@ -444,5 +444,18 @@ Every pane gets `TERM_PROGRAM=fterm`.
   `ftermctl.exe` and `ftermctl.exe mcp` work in WSL panes (see [MCP.md](MCP.md)).
 - Claude Code hooks work in WSL as they are: their escape sequences go through the terminal.
 
+## Recording the output (for bug reports)
+When a program looks wrong in fterm (broken lines, wrong colors, a broken scrollback), a recording helps
+to find the bug. Set the env var `FTERM_RECORD` to a folder and start fterm:
+
+```powershell
+$env:FTERM_RECORD = "C:\temp\fterm-rec"; fterm.exe
+```
+
+Each pane writes `fterm-<pid>-pane-<id>-<time>.cast` there: everything that the program wrote, and every change
+of the pane size, with times (the asciinema v2 format, so `asciinema play` shows it too). Keys are not
+recorded, but the output can have secrets (for example a token that a command prints). fterm shows a
+warning while it records: remove `FTERM_RECORD` when you are done.
+
 ## What comes later
 Functions for events (`on_output`, `on_agent_event`, …) come with Phase 6 (events and shell integration).

@@ -41,9 +41,23 @@ pub fn wslenv_with(wslenv: Option<&str>) -> String {
     parts.join(":")
 }
 
+/// `FTERM_RECORD` (a folder): the recording of a pane. The pid keeps two windows apart.
+pub fn record_file(dir: &std::path::Path, pid: u32, pane: u64, unix_ms: u64) -> std::path::PathBuf {
+    dir.join(format!("fterm-{pid}-pane-{pane}-{unix_ms}.cast"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_pane_has_its_own_recording() {
+        let dir = std::path::Path::new("rec");
+        assert_eq!(
+            record_file(dir, 4321, 3, 1_790_000_000_123),
+            dir.join("fterm-4321-pane-3-1790000000123.cast")
+        );
+    }
 
     #[test]
     fn the_fterm_vars_go_into_wsl() {

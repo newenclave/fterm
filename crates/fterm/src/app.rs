@@ -1432,6 +1432,7 @@ impl App {
                     env,
                     scrollback: self.config.config.scrollback,
                     intro: Vec::new(),
+                    record: None,
                 }
             }
             None => SessionOptions {
@@ -1449,6 +1450,16 @@ impl App {
         }
         let running = self.running.as_mut().expect("the window is open");
         let id = running.mux.new_pane_id();
+        // FTERM_RECORD: a recording of the pane, for finding bugs of the output.
+        if let Some(dir) = std::env::var_os("FTERM_RECORD").filter(|d| !d.is_empty()) {
+            let file = crate::env::record_file(
+                std::path::Path::new(&dir),
+                std::process::id(),
+                id.0,
+                now_ms(),
+            );
+            options.record = Some(file);
+        }
         // Hooks of tools in the pane (for example Claude Code) can use it.
         options
             .env
@@ -3528,6 +3539,19 @@ impl ApplicationHandler<UserEvent> for App {
                 self.focused = running.window.has_focus();
                 self.running = Some(running);
                 self.start_api();
+                if let Some(dir) = std::env::var_os("FTERM_RECORD").filter(|d| !d.is_empty()) {
+                    // A recording can have secrets: it must not stay on by mistake.
+                    self.notify(
+                        None,
+                        "Recording the output of every pane",
+                        &format!(
+                            "FTERM_RECORD: {}. It can have secrets; remove FTERM_RECORD when you are done.",
+                            std::path::Path::new(&dir).display()
+                        ),
+                        Level::Warning,
+                        Source::App,
+                    );
+                }
             }
             Err(err) => {
                 tracing::error!("cannot start: {err:#}");

@@ -8,6 +8,7 @@ pub mod io_loop;
 pub mod links;
 pub mod osc;
 pub mod process;
+pub mod record;
 pub mod select;
 pub mod session;
 pub mod shell;

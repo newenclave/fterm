@@ -67,6 +67,8 @@ pub struct IoLoop<T: tty::EventedPty, U: EventListener> {
     event_proxy: U,
     scanner: Scanner,
     osc_sink: OscSink,
+    /// `FTERM_RECORD`: what the program writes goes here too.
+    recorder: crate::record::Shared,
 }
 
 impl<T, U> IoLoop<T, U>
@@ -79,6 +81,7 @@ where
         event_proxy: U,
         pty: T,
         osc_sink: OscSink,
+        recorder: crate::record::Shared,
     ) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         Ok(Self {
@@ -90,6 +93,7 @@ where
             event_proxy,
             scanner: Scanner::default(),
             osc_sink,
+            recorder,
         })
     }
 
@@ -127,7 +131,11 @@ where
             match self.pty.reader().read(&mut buf[unprocessed..]) {
                 // Windows and macOS give this when there is nothing more to read.
                 Ok(0) if unprocessed == 0 => break,
-                Ok(got) => unprocessed += got,
+                Ok(got) => {
+                    let new = &buf[unprocessed..unprocessed + got];
+                    crate::record::with(&self.recorder, |r| r.output(new, Instant::now()));
+                    unprocessed += got;
+                }
                 Err(err) => match err.kind() {
                     ErrorKind::Interrupted | ErrorKind::WouldBlock => {
                         if unprocessed == 0 {

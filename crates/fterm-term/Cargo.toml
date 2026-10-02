@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 alacritty_terminal.workspace = true
 polling = "3"
+serde_json.workspace = true
 sysinfo.workspace = true
 tracing.workspace = true
 
