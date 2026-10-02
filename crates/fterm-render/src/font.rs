@@ -76,7 +76,61 @@ fn pick_emoji_family<'a>(families: impl Iterator<Item = &'a str>) -> Option<Stri
 
 /// The cluster asks for an emoji picture: it has VS16 (U+FE0F). A char like `❤` alone may be text.
 fn wants_emoji(text: &str) -> bool {
-    text.contains('\u{fe0f}')
+    if text.contains('\u{fe0e}') {
+        // VS15 asks for text.
+        return false;
+    }
+    text.contains('\u{fe0f}') || text.chars().next().is_some_and(emoji_by_default)
+}
+
+/// The char is an emoji with no VS16 (Emoji_Presentation=Yes in the Unicode emoji data):
+/// the emoji blocks and the flags, and a list of older symbols.
+fn emoji_by_default(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x1F300..=0x1F64F
+            | 0x1F680..=0x1F6FF
+            | 0x1F900..=0x1F9FF
+            | 0x1FA70..=0x1FAFF
+            | 0x1F1E6..=0x1F1FF
+            | 0x1F004
+            | 0x1F0CF
+            | 0x1F18E
+            | 0x1F191..=0x1F19A
+            | 0x231A..=0x231B
+            | 0x23E9..=0x23EC
+            | 0x23F0
+            | 0x23F3
+            | 0x25FD..=0x25FE
+            | 0x2614..=0x2615
+            | 0x2648..=0x2653
+            | 0x267F
+            | 0x2693
+            | 0x26A1
+            | 0x26AA..=0x26AB
+            | 0x26BD..=0x26BE
+            | 0x26C4..=0x26C5
+            | 0x26CE
+            | 0x26D4
+            | 0x26EA
+            | 0x26F2..=0x26F3
+            | 0x26F5
+            | 0x26FA
+            | 0x26FD
+            | 0x2705
+            | 0x270A..=0x270B
+            | 0x2728
+            | 0x274C
+            | 0x274E
+            | 0x2753..=0x2755
+            | 0x2757
+            | 0x2795..=0x2797
+            | 0x27B0
+            | 0x27BF
+            | 0x2B1B..=0x2B1C
+            | 0x2B50
+            | 0x2B55
+    )
 }
 
 impl Fonts {
@@ -525,6 +579,26 @@ mod tests {
         assert!(wants_emoji("✔\u{fe0f}"));
         assert!(!wants_emoji("❤"), "a heart alone may be text");
         assert!(!wants_emoji("a"));
+        // Chars that are emoji by default (Emoji_Presentation), with no VS16.
+        for emoji in [
+            "😀",
+            "🎉",
+            "🚀",
+            "✅",
+            "👍",
+            "⌚",
+            "⭐",
+            "🇫🇮",
+            "👨\u{200d}👩",
+        ] {
+            assert!(wants_emoji(emoji), "{emoji:?}");
+        }
+        // Text by default: they need VS16 to be emoji.
+        for text in ["☀", "✔", "©", "1", "#", "→", "界"] {
+            assert!(!wants_emoji(text), "{text:?}");
+        }
+        // VS15 asks for text.
+        assert!(!wants_emoji("😀\u{fe0e}"));
     }
 
     #[test]
@@ -534,7 +608,7 @@ mod tests {
             eprintln!("skipped: no emoji font here");
             return;
         };
-        for text in ["❤\u{fe0f}", "✔\u{fe0f}", "☀\u{fe0f}"] {
+        for text in ["❤\u{fe0f}", "✔\u{fe0f}", "☀\u{fe0f}", "😀", "🚀"] {
             assert_eq!(
                 fonts.font_family(text).as_deref(),
                 Some(emoji.as_str()),
@@ -579,9 +653,11 @@ mod tests {
                     || g.width as f32 >= 0.85 * 2.0 * cell.width;
                 assert!(
                     fills && g.height as f32 <= cell.height + 1.0,
-                    "{emoji:?} at {size}: {}x{} in {cell:?}",
+                    "{emoji:?} at {size}: {}x{} in {cell:?}, font {:?}, {:?}",
                     g.width,
-                    g.height
+                    g.height,
+                    fonts.font_family(emoji),
+                    g.kind
                 );
             }
         }
@@ -594,7 +670,13 @@ mod tests {
         };
         let cell = fonts.cell();
         let g = fonts.rasterize("😀", false, false, 2).unwrap();
-        assert_eq!(g.kind, ImageKind::Color);
+        assert_eq!(
+            g.kind,
+            ImageKind::Color,
+            "font {:?}, emoji font {:?}",
+            fonts.font_family("😀"),
+            fonts.emoji_family
+        );
         assert_eq!(g.data.len(), (g.width * g.height * 4) as usize);
         assert!(g.width as f32 <= 2.0 * cell.width + 1.0, "{g:?}");
         assert!(g.height as f32 <= cell.height + 1.0, "{g:?}");
