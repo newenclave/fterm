@@ -68,11 +68,17 @@ cargo build --release -p fterm -p ftermctl
 python scripts/package.py --bin-dir target/release --out dist
 ```
 `dist/` gets `fterm-<version>-<system>-<arch>.zip` (Windows) or `.tar.gz` (Linux, macOS), and a `.sha256` file.
-In the archive: `fterm`, `ftermctl`, a portable `fterm.lua` (`data_dir = "data"`), the README, and the licenses
-(on Linux also `fterm.desktop` and `fterm.png`).
+In the archive: `fterm`, `ftermctl`, a portable `fterm.lua` (`data_dir = "data"`), the README, `CHANGELOG.md`,
+and the licenses (on Linux also `fterm.desktop` and `fterm.png`).
 
 ## Make a release
-1. Set the new version in `Cargo.toml` (`[workspace.package] version`), and push it.
-2. Push a tag with the same version: `git tag v0.1.0 && git push origin v0.1.0`.
-3. The workflow `Release` builds the archives on Windows, Linux, and macOS and makes a GitHub Release with them.
-   A tag that is not the version of `Cargo.toml` stops it.
+1. Set the new version in `Cargo.toml` (`[workspace.package] version`).
+2. In [CHANGELOG.md](../CHANGELOG.md), make `## [Unreleased]` the new version with the date
+   (`## [0.2.0] - 2026-11-01`), put a new empty `## [Unreleased]` above it, and fix the links at the end.
+   `python scripts/package.py --notes v0.2.0` shows the text that the release gets. Push it.
+3. Push a tag with the same version: `git tag v0.2.0 && git push origin v0.2.0`.
+4. The workflow `Release` builds the archives on Windows, Linux, and macOS and makes a GitHub Release with them.
+   The text of the release is the part of CHANGELOG.md for that version.
+   A tag that is not the version of `Cargo.toml`, or a version with no part in CHANGELOG.md, stops it.
+
+Every change that people see goes into `## [Unreleased]` in CHANGELOG.md, in the same branch.

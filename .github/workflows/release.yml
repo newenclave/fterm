@@ -45,10 +45,16 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      # The text of the release is the part of CHANGELOG.md for this version.
+      - name: Release notes
+        run: python3 scripts/package.py --notes "${{ github.ref_name }}" > notes.md
 
       - name: Make the release
         env:
@@ -57,4 +63,4 @@ jobs:
           gh release create "${{ github.ref_name }}" dist/* \
             --repo "${{ github.repository }}" \
             --title "fterm ${{ github.ref_name }}" \
-            --generate-notes
+            --notes-file notes.md

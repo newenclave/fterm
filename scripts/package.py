@@ -5,6 +5,10 @@
 Windows gives fterm-<version>-windows-<arch>.zip, Linux and macOS a .tar.gz. In the archive is one folder
 fterm-<version>/ with the programs, a portable fterm.lua (data_dir = "data"), the README, and the licenses.
 A .sha256 file comes next to the archive.
+
+    python scripts/package.py --notes v1.2.3
+
+prints the part of CHANGELOG.md for that version (the text of the GitHub release).
 """
 
 import argparse
@@ -44,6 +48,7 @@ def files(bin_dir: Path, system: str) -> list[tuple[Path, str]]:
     out += [
         (ROOT / "assets/portable/fterm.lua", "fterm.lua"),
         (ROOT / "assets/portable/README.txt", "README.txt"),
+        (ROOT / "CHANGELOG.md", "CHANGELOG.md"),
         (ROOT / "LICENSE", "LICENSE"),
         (ROOT / "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-NOTICES.md"),
         (ROOT / "assets/fonts/OFL.txt", "OFL.txt"),
@@ -56,12 +61,25 @@ def files(bin_dir: Path, system: str) -> list[tuple[Path, str]]:
     return out
 
 
+def notes(changelog: str, tag: str) -> str:
+    """The part of the changelog for `tag` (v1.2.3): from its `## [1.2.3]` line to the next version."""
+    ver = tag.removeprefix("v")
+    match = re.search(rf"^## \[{re.escape(ver)}\][^\n]*\n(.*?)(?=^## \[|^\[[^\]]+\]: |\Z)", changelog, re.M | re.S)
+    if not match:
+        sys.exit(f"no part for {ver} in CHANGELOG.md")
+    return match.group(1).strip() + "\n"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bin-dir", default="target/release", help="where fterm and ftermctl are")
     parser.add_argument("--out", default="dist")
     parser.add_argument("--tag", help="the git tag (v1.2.3): it must be the version of Cargo.toml")
+    parser.add_argument("--notes", metavar="TAG", help="print the changelog of this version and stop")
     args = parser.parse_args()
+    if args.notes:
+        sys.stdout.write(notes((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"), args.notes))
+        return
 
     ver = version()
     if args.tag and args.tag != f"v{ver}":

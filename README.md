@@ -7,6 +7,7 @@ Take the archive for your system from [Releases](https://github.com/newenclave/f
 and start `fterm.exe` (Linux and macOS: `./fterm`). There is no install: the config (`fterm.lua`) and the
 data (`data/`) are in the same folder, so you can move the folder or carry it on a USB drive.
 
+- What is new in each version: [CHANGELOG.md](CHANGELOG.md)
 - The plan: [docs/ROADMAP.md](docs/ROADMAP.md)
 - How to build: [docs/BUILD.md](docs/BUILD.md)
 - How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
