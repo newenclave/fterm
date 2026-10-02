@@ -249,6 +249,19 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             w.pane_into(&mut params)?;
             call("get_text", params)
         }
+        "screenshot" => {
+            let w = read(&["pane"], &[])?;
+            let mut params = json!({});
+            let file = w.text();
+            if !file.trim().is_empty() {
+                // fterm has another current folder: give it the full path.
+                let full = std::path::absolute(file.trim())
+                    .map_err(|err| format!("bad file `{file}`: {err}"))?;
+                params["path"] = json!(full.to_string_lossy().replace('\\', "/"));
+            }
+            w.pane_into(&mut params)?;
+            call("screenshot", params)
+        }
         "title" => {
             let w = read(&["pane"], &[])?;
             let mut params = json!({ "title": w.text() });
@@ -432,6 +445,24 @@ mod tests {
             Command::DrawStdin { pane: Some(4) },
             "`-` = the commands come on stdin"
         );
+    }
+
+    #[test]
+    fn screenshots() {
+        assert_eq!(call("screenshot"), ("screenshot".into(), json!({})));
+        let file = if cfg!(windows) {
+            "C:/shots/a.png"
+        } else {
+            "/shots/a.png"
+        };
+        assert_eq!(
+            call(&format!("screenshot --pane 3 {file}")),
+            ("screenshot".into(), json!({"pane": 3, "path": file}))
+        );
+        // fterm has another folder: a short path is made full here.
+        let (_, params) = call("screenshot map.png");
+        let path = std::path::PathBuf::from(params["path"].as_str().unwrap());
+        assert!(path.is_absolute() && path.ends_with("map.png"), "{path:?}");
     }
 
     #[test]

@@ -381,6 +381,8 @@ pub struct App {
     api_questions: std::collections::VecDeque<api_calls::ApiAsk>,
     /// `wait_for` calls that wait.
     waits: Vec<api_calls::Wait>,
+    /// Screenshots that wait for the next frame.
+    shots: Vec<api_calls::PendingShot>,
     /// Messages between agents, by pane.
     inbox: crate::inbox::Inbox,
     /// The AI chat, the flag that stops its running answer, and the API key prompt.
@@ -463,6 +465,7 @@ impl App {
             api_always: std::collections::HashSet::new(),
             api_questions: std::collections::VecDeque::new(),
             waits: Vec::new(),
+            shots: Vec::new(),
             inbox: crate::inbox::Inbox::default(),
             ai: crate::ai_chat::Session::default(),
             ai_stop: None,
@@ -3453,7 +3456,10 @@ impl App {
         });
         let view = Rect::new(0.0, 0.0, width, size.height as f32);
 
-        let result = gpu.frame(|device, queue, target, size| {
+        let mut draw = |device: &wgpu::Device,
+                        queue: &wgpu::Queue,
+                        target: &wgpu::TextureView,
+                        size: (u32, u32)| {
             renderer.render(device, queue, target, size, |parts| {
                 parts.tab_bar(&TabBarInput {
                     layout: &layout,
@@ -3539,7 +3545,45 @@ impl App {
                 }
                 Ok(())
             });
-        });
+        };
+        let result = gpu.frame(&mut draw);
+        // Screenshots: the same frame, in a texture of its own, cut to the pane.
+        if !self.shots.is_empty() {
+            let tab = &mux.tabs()[mux.active_index()];
+            let rects = match tab.zoomed {
+                Some(pane) => vec![(pane, area)],
+                None => tab.layout.rects(area),
+            };
+            for shot in std::mem::take(&mut self.shots) {
+                let answer = match rects.iter().find(|(id, _)| *id == shot.pane) {
+                    None => Err(fterm_api::protocol::RpcError::invalid_params(format!(
+                        "pane {} is not on the screen (it is in another tab): show it first (focus)",
+                        shot.pane.0
+                    ))),
+                    Some((_, rect)) => crate::screenshot::take(
+                        gpu,
+                        crate::gpu::pixel_area(*rect),
+                        &mut draw,
+                        &shot.path,
+                    )
+                    .map(|(width, height)| {
+                        serde_json::json!({
+                            "pane": shot.pane.0,
+                            "path": shot.path.display().to_string(),
+                            "width": width,
+                            "height": height,
+                        })
+                    })
+                    .map_err(|err| {
+                        fterm_api::protocol::RpcError::new(
+                            fterm_api::protocol::RpcError::INTERNAL,
+                            format!("{err:#}"),
+                        )
+                    }),
+                };
+                let _ = shot.reply.send(answer);
+            }
+        }
         if let Err(err) = result {
             tracing::error!("cannot draw: {err:#}");
             event_loop.exit();

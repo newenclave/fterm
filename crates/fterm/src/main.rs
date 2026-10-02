@@ -19,6 +19,7 @@ mod notify;
 mod palette;
 mod panels;
 mod paths;
+mod screenshot;
 mod session_state;
 mod text_command;
 mod title;

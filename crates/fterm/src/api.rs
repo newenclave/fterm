@@ -31,6 +31,7 @@ pub const METHODS: &[&str] = &[
     "read_messages",
     "scene_open",
     "scene_draw",
+    "screenshot",
     "subscribe",
     "unsubscribe",
 ];
@@ -163,6 +164,22 @@ pub fn place_param(params: &Value) -> Result<SpawnWhere, RpcError> {
     }
 }
 
+/// Where a screenshot of `pane` goes: `path` (a .png file), else a file in the temp folder.
+pub fn shot_path(
+    params: &Value,
+    pane: u64,
+    unix_ms: u64,
+    temp: &std::path::Path,
+) -> Result<std::path::PathBuf, RpcError> {
+    match str_param(params, "path")? {
+        None => Ok(temp.join(format!("fterm-shot-{pane}-{unix_ms}.png"))),
+        Some(path) if path.to_ascii_lowercase().ends_with(".png") => Ok(path.into()),
+        Some(path) => Err(RpcError::invalid_params(format!(
+            "a screenshot is a PNG file: `{path}` must end with .png"
+        ))),
+    }
+}
+
 /// `place` of a scene: "right" (the default) or "down". A scene is a split.
 pub fn scene_place(params: &Value) -> Result<fterm_mux::Direction, RpcError> {
     match str_param(params, "place")?.as_deref() {
@@ -179,6 +196,25 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn where_a_screenshot_goes() {
+        use std::path::{Path, PathBuf};
+        let temp = Path::new("T:/temp");
+        assert_eq!(
+            shot_path(&json!({}), 3, 1_790_000_000_123, temp).unwrap(),
+            temp.join("fterm-shot-3-1790000000123.png")
+        );
+        assert_eq!(
+            shot_path(&json!({"path": "D:/shots/map.png"}), 3, 0, temp).unwrap(),
+            PathBuf::from("D:/shots/map.png")
+        );
+        assert!(
+            shot_path(&json!({"path": "D:/shots/map.jpg"}), 3, 0, temp).is_err(),
+            "PNG only"
+        );
+        assert!(shot_path(&json!({"path": 5}), 3, 0, temp).is_err());
+    }
 
     #[test]
     fn a_scene_is_a_split() {

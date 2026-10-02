@@ -56,6 +56,11 @@ The user sees the command run. This is better than a hidden command when the use
    `x`, `y` are dots from the top left; `text` uses cells (`col`, `row`). All commands of one call are drawn
    at once.
 
+**See a pane**
+- `screenshot_pane` (`ftermctl screenshot --pane N`) gives a PNG picture of a pane, as the user sees it:
+  the colors, a scene, a program with a UI. Use it to check what you drew. `read_pane` is better for text.
+- The pane must be on the screen (in the active tab). The PNG stays in the temp folder (or at `path`).
+
 The scene draws itself again when the user zooms or resizes it. To use the new size (for example more
 points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
 
@@ -88,6 +93,7 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
 | A message | `ftermctl send-message N TEXT`, `ftermctl read-messages` |
 | A notification | `ftermctl notify TITLE --body TEXT --level info` |
 | A scene | `ftermctl scene`, `ftermctl draw --pane N JSON` (or `-` for stdin) |
+| A picture of a pane | `ftermctl screenshot --pane N [FILE.png]` |
 
 `ftermctl help` lists everything. The docs for people are in the fterm repository: `docs/MCP.md`,
 `docs/API.md`, and `docs/SCENE.md`.

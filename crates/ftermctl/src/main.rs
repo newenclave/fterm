@@ -38,6 +38,8 @@ Text:
                                          type COMMAND and press Enter; with --wait, wait until it ends,
                                          print its output, and exit with its exit code
   get-text [--pane N] [--history|--last-output] [--lines N]
+  screenshot [--pane N] [FILE.png]       a PNG of a pane, as you see it; prints the file
+                                         (no FILE = a file in the temp folder)
 
 Events and messages:
   wait-for [--pane N] EVENT [--pattern TEXT] [--timeout S]
@@ -186,6 +188,7 @@ fn print_answer(as_json: bool, method: &str, answer: &Value) {
             answer["pane"], answer["width"], answer["height"]
         ),
         "scene_draw" => {}
+        "screenshot" => println!("{}", answer["path"].as_str().unwrap_or("")),
         "send_message" => println!("message {}", answer["id"]),
         "wait_for" => println!("{}", serde_json::to_string(answer).unwrap_or_default()),
         _ if answer.as_object().is_some_and(|o| o.is_empty()) => {}

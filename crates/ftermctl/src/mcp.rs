@@ -19,6 +19,30 @@ pub trait Backend {
         command: &str,
         timeout_ms: u64,
     ) -> Result<Value, String>;
+    /// A file that fterm wrote (a screenshot).
+    fn read_file(&mut self, path: &str) -> Result<Vec<u8>, String>;
+}
+
+/// Base64 (standard, with `=`) of `bytes`: MCP sends images like this.
+pub fn base64(bytes: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ABC[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 pub struct Server<B: Backend> {
@@ -131,6 +155,14 @@ pub fn tools() -> Value {
             }, "required": ["title"] }
         },
         {
+            "name": "screenshot_pane",
+            "description": "Take a picture (PNG) of a pane, as the user sees it: colors, scenes, the layout. Use it to check what you drew or how a program looks. The pane must be on the screen (in the active tab).",
+            "inputSchema": { "type": "object", "properties": {
+                "pane": pane,
+                "path": { "type": "string", "description": "Save the PNG here (a full path that ends with .png). No path = a file in the temp folder." }
+            }}
+        },
+        {
             "name": "open_scene",
             "description": "Open a Braille scene: a pane that you draw into (charts, diagrams, simple pictures). Each cell is 2x4 dots. Returns the pane id, the size in dots, and the aspect (dot height / width). For a chart of numbers use plot.",
             "inputSchema": { "type": "object", "properties": {
@@ -202,9 +234,7 @@ impl<B: Backend> Server<B> {
                     .unwrap_or_else(|| json!({}));
                 match self.tool(name, &args) {
                     None => Err((-32602, format!("no tool `{name}`"))),
-                    Some(Ok(text)) => Ok(
-                        json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
-                    ),
+                    Some(Ok(content)) => Ok(json!({ "content": content, "isError": false })),
                     Some(Err(text)) => Ok(
                         json!({ "content": [{ "type": "text", "text": text }], "isError": true }),
                     ),
@@ -222,8 +252,9 @@ impl<B: Backend> Server<B> {
 }
 
 impl<B: Backend> Server<B> {
-    /// One tool. `None` = no such tool; `Some(Err)` = a tool error (the agent sees the text).
-    fn tool(&mut self, name: &str, args: &Value) -> Option<Result<String, String>> {
+    /// One tool: the MCP content (text, or an image too). `None` = no such tool;
+    /// `Some(Err)` = a tool error (the agent sees the text).
+    fn tool(&mut self, name: &str, args: &Value) -> Option<Result<Vec<Value>, String>> {
         // An argument that the tool does not have: say which ones it has, so the agent can fix it.
         let all = tools();
         let schema = all.as_array()?.iter().find(|t| t["name"] == name)?;
@@ -260,6 +291,10 @@ impl<B: Backend> Server<B> {
                 .ok_or_else(|| format!("`{key}` is missing"))
         };
         let pretty = |v: Value| serde_json::to_string_pretty(&v).unwrap_or_default();
+        if name == "screenshot_pane" {
+            let params = pick(&[("pane", "pane"), ("path", "path")]);
+            return Some(self.screenshot(params));
+        }
         let result = match name {
             "list_panes" => self.backend.call("list", json!({})).map(pretty),
             "open_pane" => self
@@ -402,7 +437,21 @@ impl<B: Backend> Server<B> {
             }),
             _ => return None,
         };
-        Some(result)
+        Some(result.map(|text| vec![json!({ "type": "text", "text": text })]))
+    }
+
+    /// `screenshot_pane`: fterm writes a PNG; the agent gets the picture and where the file is.
+    fn screenshot(&mut self, params: Value) -> Result<Vec<Value>, String> {
+        let shot = self.backend.call("screenshot", params)?;
+        let path = shot["path"].as_str().ok_or("fterm gave no file")?;
+        let png = self.backend.read_file(path)?;
+        Ok(vec![
+            json!({ "type": "image", "mimeType": "image/png", "data": base64(&png) }),
+            json!({ "type": "text", "text": format!(
+                "Pane {}: {}x{} pixels, saved as {path}.",
+                shot["pane"], shot["width"], shot["height"]
+            ) }),
+        ])
     }
 }
 
@@ -446,6 +495,10 @@ impl Backend for Window {
         let window = self.window;
         let client = self.client()?;
         crate::run::run_and_wait_with(client, window, pane, command, timeout_ms)
+    }
+
+    fn read_file(&mut self, path: &str) -> Result<Vec<u8>, String> {
+        std::fs::read(path).map_err(|err| format!("cannot read {path}: {err}"))
     }
 }
 
@@ -514,6 +567,9 @@ mod tests {
                 "spawn" => json!({ "pane": 7 }),
                 "get_text" => json!({ "pane": 1, "text": "hello\nworld" }),
                 "send_message" => json!({ "id": 3 }),
+                "screenshot" => {
+                    json!({ "pane": 4, "path": "T:/fterm-shot-4.png", "width": 640, "height": 300 })
+                }
                 "scene_open" | "scene_draw" => {
                     json!({ "pane": 7, "cols": 66, "rows": 21, "width": 132, "height": 84, "aspect": 1.1875 })
                 }
@@ -531,6 +587,11 @@ mod tests {
             Ok(
                 json!({ "pane": 2, "command": command, "exit": 1, "took_ms": 5, "output": "1 test failed" }),
             )
+        }
+
+        fn read_file(&mut self, path: &str) -> Result<Vec<u8>, String> {
+            assert_eq!(path, "T:/fterm-shot-4.png");
+            Ok(b"PNG!".to_vec())
         }
     }
 
@@ -656,6 +717,7 @@ mod tests {
             "open_scene",
             "draw_scene",
             "plot",
+            "screenshot_pane",
         ] {
             assert!(names.contains(&name), "{name}");
         }
@@ -665,6 +727,36 @@ mod tests {
         }
         let run = tools.iter().find(|t| t["name"] == "run_command").unwrap();
         assert_eq!(run["inputSchema"]["required"], json!(["command"]));
+    }
+
+    #[test]
+    fn base64_of_bytes() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64(&[0xff, 0xfe, 0x00]), "//4A");
+    }
+
+    #[test]
+    fn a_screenshot_is_an_image() {
+        let mut s = server();
+        let result = tool(&mut s, "screenshot_pane", json!({ "pane": 4 }));
+        assert_eq!(result["isError"], json!(false), "{result}");
+        assert_eq!(
+            s.backend.calls[0],
+            ("screenshot".into(), json!({ "pane": 4 }))
+        );
+        let content = result["content"].as_array().unwrap();
+        let image = content.iter().find(|c| c["type"] == "image").unwrap();
+        assert_eq!(image["mimeType"], json!("image/png"));
+        assert_eq!(image["data"], json!(base64(b"PNG!")));
+        let text = content.iter().find(|c| c["type"] == "text").unwrap();
+        assert!(
+            text["text"].as_str().unwrap().contains("fterm-shot-4.png"),
+            "{text}"
+        );
     }
 
     #[test]

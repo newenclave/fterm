@@ -55,6 +55,10 @@ ftermctl draw --pane 4 '[{"op":"clear"},{"op":"color","color":"#40c0ff"},{"op":"
 
 A color is for a whole cell (2×4 dots): where two colors meet in one cell, the last one wins.
 
+## See the result
+`ftermctl screenshot --pane N shot.png` (or the MCP tool `screenshot_pane`) gives a PNG of the scene, as you
+see it. So an agent can look at its drawing and fix it.
+
 ## A new size
 A scene keeps the commands since the last `clear` (at most 100 000; the oldest go first). When the pane
 gets a new size, it draws them again: points and lines go to the same places of the scene, boxes

@@ -143,7 +143,7 @@ impl Gpu {
     /// An error here means the GPU cannot work any more.
     pub fn frame(
         &mut self,
-        draw: impl FnOnce(&wgpu::Device, &wgpu::Queue, &wgpu::TextureView, (u32, u32)),
+        mut draw: impl FnMut(&wgpu::Device, &wgpu::Queue, &wgpu::TextureView, (u32, u32)),
     ) -> Result<()> {
         let (frame, suboptimal) = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => (frame, false),
@@ -188,6 +188,148 @@ impl Gpu {
             self.surface.configure(&self.device, &self.config);
         }
         Ok(())
+    }
+}
+
+/// A rect of the window in whole pixels: from the pixel where it starts to the one where it ends.
+pub fn pixel_area(rect: fterm_mux::Rect) -> (u32, u32, u32, u32) {
+    let x0 = rect.x.max(0.0).floor();
+    let y0 = rect.y.max(0.0).floor();
+    let x1 = (rect.x + rect.width).max(0.0).ceil();
+    let y1 = (rect.y + rect.height).max(0.0).ceil();
+    (
+        x0 as u32,
+        y0 as u32,
+        (x1 - x0).max(0.0) as u32,
+        (y1 - y0).max(0.0) as u32,
+    )
+}
+
+/// The bytes of one row in a texture-to-buffer copy: a multiple of 256.
+pub fn padded_bytes_per_row(width: u32) -> u32 {
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    (width * 4).div_ceil(align) * align
+}
+
+/// The pixels of a copied texture as RGBA rows with no padding.
+pub fn unpad(data: &[u8], width: u32, height: u32, padded: u32, bgra: bool) -> Vec<u8> {
+    let row = (width * 4) as usize;
+    let mut out = Vec::with_capacity(row * height as usize);
+    for y in 0..height as usize {
+        let start = y * padded as usize;
+        out.extend_from_slice(&data[start..start + row]);
+    }
+    if bgra {
+        for pixel in out.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+    }
+    out
+}
+
+/// A picture of a part of the window: RGBA pixels, rows from the top.
+pub struct Shot {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+impl Gpu {
+    /// Draws a frame with `draw` into a texture of its own (not the window), and gives the pixels of
+    /// `area` (x, y, width, height; cut to the window). It works when the window is covered too.
+    pub fn capture(
+        &mut self,
+        area: (u32, u32, u32, u32),
+        mut draw: impl FnMut(&wgpu::Device, &wgpu::Queue, &wgpu::TextureView, (u32, u32)),
+    ) -> Result<Shot> {
+        let (fw, fh) = (self.config.width, self.config.height);
+        let x = area.0.min(fw);
+        let y = area.1.min(fh);
+        let width = area.2.min(fw - x);
+        let height = area.3.min(fh - y);
+        if width == 0 || height == 0 {
+            return Err(anyhow!("nothing to take: the area is empty"));
+        }
+        let size = wgpu::Extent3d {
+            width: fw,
+            height: fh,
+            depth_or_array_layers: 1,
+        };
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("screenshot"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        draw(&self.device, &self.queue, &view, (fw, fh));
+
+        let padded = padded_bytes_per_row(width);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("screenshot pixels"),
+            size: u64::from(padded) * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("screenshot copy"),
+            });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_secs(5)),
+            })
+            .context("the GPU did not finish the screenshot")?;
+        rx.recv()
+            .context("the GPU did not answer")?
+            .context("cannot read the screenshot from the GPU")?;
+        let data = slice
+            .get_mapped_range()
+            .map_err(|err| anyhow!("cannot read the screenshot: {err:?}"))?
+            .to_vec();
+        buffer.unmap();
+        let bgra = matches!(
+            self.config.format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        );
+        Ok(Shot {
+            width,
+            height,
+            rgba: unpad(&data, width, height, padded, bgra),
+        })
     }
 }
 
@@ -272,6 +414,39 @@ mod tests {
             panes_follow(PhysicalSize::new(200, 120), false),
             "a small window is a real size"
         );
+    }
+
+    #[test]
+    fn a_pane_in_whole_pixels() {
+        use fterm_mux::Rect;
+        assert_eq!(
+            pixel_area(Rect::new(10.4, 20.6, 100.2, 50.5)),
+            (10, 20, 101, 52)
+        );
+        // Only the part on the window: from 0 to 7 across, from 0 to 9 down.
+        assert_eq!(pixel_area(Rect::new(-3.0, -1.0, 10.0, 10.0)), (0, 0, 7, 9));
+        assert_eq!(pixel_area(Rect::new(0.0, 0.0, 0.0, 0.0)), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn a_copied_row_is_a_multiple_of_256_bytes() {
+        assert_eq!(padded_bytes_per_row(10), 256);
+        assert_eq!(padded_bytes_per_row(64), 256);
+        assert_eq!(padded_bytes_per_row(65), 512);
+        assert_eq!(padded_bytes_per_row(1920), 7680);
+    }
+
+    #[test]
+    fn the_rows_without_padding_and_in_rgba() {
+        // 2x2 pixels, rows of 256 bytes; the GPU gives BGRA.
+        let mut data = vec![0u8; 512];
+        data[0..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        data[256..264].copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
+        assert_eq!(
+            unpad(&data, 2, 2, 256, true),
+            [3, 2, 1, 4, 7, 6, 5, 8, 11, 10, 9, 12, 15, 14, 13, 16]
+        );
+        assert_eq!(unpad(&data, 2, 1, 256, false), [1, 2, 3, 4, 5, 6, 7, 8]);
     }
 
     #[test]

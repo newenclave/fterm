@@ -16,7 +16,7 @@ Agents (Claude Code, OpenCode), scripts, and `ftermctl` use it. MCP is in [MCP.m
 ## Who may do what
 - `hello`, `list`, `focus`, `zoom`, `set_title`, `notify`, `panel`, `send_message`, and the events: everybody.
 - Reading or typing into **your own pane** (the pane in `hello`) or a pane that you opened with `spawn`: yes.
-- Reading or typing into **another pane** (`send_text`, `get_text`, `close`, `wait_for`, `read_messages`)
+- Reading or typing into **another pane** (`send_text`, `get_text`, `screenshot`, `close`, `wait_for`, `read_messages`)
   and `spawn`: fterm asks the user once for each client:
 
   > Allow claude (tab 2) to read and type into other panes?
@@ -41,6 +41,7 @@ ftermctl run --pane 3 --wait cargo test        # type it, wait for the end, prin
                                                # and exit with the exit code of cargo
 ftermctl get-text --pane 3 --last-output       # the output of the last command
 ftermctl send-text --pane 3 --enter git status
+ftermctl screenshot --pane 3 shot.png          # a PNG of the pane; prints the full path
 ftermctl wait-for --pane 3 text --pattern "ready" --timeout 60
 ftermctl notify "Deploy is done" --level success
 ftermctl send-message 3 "please review the diff"
@@ -74,12 +75,18 @@ A missing `pane` means: the pane of the client (from `hello`), else the active p
 | `read_messages` | `pane` (default: yours), `unread_only` (default true), `mark_read` (default true) | `messages`: `id`, `from`, `from_name`, `text`, `time` |
 | `scene_open` | `place`: `"right"` (default) or `"down"`; `pane` (split next to it) | `pane`, `cols`, `rows`, `width`, `height` (dots), `aspect` |
 | `scene_draw` | `pane`, `ops`: one drawing command or a list (see [SCENE.md](SCENE.md)) | `pane`, `cols`, `rows`, `width`, `height`, `aspect` |
+| `screenshot` | `pane`; `path`: a `.png` file (default: a new file in the temp folder) | `pane`, `path`, `width`, `height` (pixels) |
 | `subscribe` | `events`: a list of names, or `["*"]` for all | `events` |
 | `unsubscribe` | `events` | `events` |
 
 A pane in `list` has: `id`, `tab`, `program`, `title`, `cwd`, `active`, `running` (a command runs),
 `at_prompt`, `agent` (`state`, `message`), `last_command` (`command`, `exit`, `took_ms`), `size`,
 `remote` (remote control on), `messages` (unread messages).
+
+`screenshot` takes the pane as it is on the screen, with its colors and its border, at the next frame. The
+pane must be in the active tab (or zoomed); else it is an error. fterm writes the file itself, so `path`
+should be a full path (ftermctl makes a short path full). It works when the window is covered by
+other windows too, but not when it is minimized.
 
 `wait_for` waits for the **next** event (a text that is on the screen already answers at once).
 `last_output` needs shell integration (PowerShell has it by itself; see [CONFIG.md](CONFIG.md)).

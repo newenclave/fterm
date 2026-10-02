@@ -32,6 +32,13 @@ pub(super) struct Wait {
     pub reply: std::sync::mpsc::Sender<Result<Value, RpcError>>,
 }
 
+/// A `screenshot` that waits for the next frame.
+pub(super) struct PendingShot {
+    pub pane: PaneId,
+    pub path: std::path::PathBuf,
+    pub reply: std::sync::mpsc::Sender<Result<Value, RpcError>>,
+}
+
 /// Requests of one client that wait for the user's answer (may it use other panes?).
 pub(super) struct ApiAsk {
     pub client: ClientId,
@@ -116,6 +123,9 @@ impl App {
         if request.method == "wait_for" {
             return self.api_wait_for(request);
         }
+        if request.method == "screenshot" {
+            return self.api_screenshot(request);
+        }
         let result =
             self.api_dispatch(event_loop, request.client, &request.method, &request.params);
         let _ = request.reply.send(result);
@@ -125,7 +135,13 @@ impl App {
     fn api_access(&self, request: &ApiRequest) -> Verdict {
         let gated = matches!(
             request.method.as_str(),
-            "send_text" | "get_text" | "close" | "wait_for" | "read_messages" | "spawn"
+            "send_text"
+                | "get_text"
+                | "close"
+                | "wait_for"
+                | "read_messages"
+                | "spawn"
+                | "screenshot"
         );
         if !gated {
             return Verdict::Allow;
@@ -270,6 +286,41 @@ impl App {
             deadline,
             reply: request.reply,
         });
+    }
+
+    /// `screenshot`: a PNG of a pane, as the user sees it. It is taken at the next frame.
+    fn api_screenshot(&mut self, request: ApiRequest) {
+        let result = (|| {
+            let pane = self.target_pane(request.client, &request.params)?;
+            // A minimized window draws no frames, so the screenshot would wait for ever.
+            let minimized = self
+                .running
+                .as_ref()
+                .is_some_and(|r| r.window.is_minimized().unwrap_or(false));
+            if minimized {
+                return Err(RpcError::invalid_params(
+                    "the fterm window is minimized: there is nothing to take a picture of",
+                ));
+            }
+            let path =
+                crate::api::shot_path(&request.params, pane.0, now_ms(), &std::env::temp_dir())?;
+            Ok((pane, path))
+        })();
+        match result {
+            Ok((pane, path)) => {
+                self.shots.push(PendingShot {
+                    pane,
+                    path,
+                    reply: request.reply,
+                });
+                if let Some(running) = &self.running {
+                    running.window.request_redraw();
+                }
+            }
+            Err(err) => {
+                let _ = request.reply.send(Err(err));
+            }
+        }
     }
 
     /// Something happened in a pane: answer the waits that waited for it.

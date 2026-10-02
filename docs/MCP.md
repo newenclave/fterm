@@ -73,6 +73,7 @@ When FTERM_PANE_ID is set, you run in the fterm terminal: run `ftermctl guide` o
 | `open_scene` | Opens a Braille scene (a pane to draw into) on the right or below. Gives its id, its size in dots, and the aspect of the dots. |
 | `draw_scene` | Draws commands into a scene: dots, lines, rects, circles, text, colors, charts (see [SCENE.md](SCENE.md)). |
 | `plot` | A chart of numbers in a scene, as a line or bars, with a title and a color. Call it again with new values for a live chart. |
+| `screenshot_pane` | A picture (PNG) of a pane, as you see it. The agent gets the image, so it can check a scene or a program with a UI. The pane must be in the active tab. |
 
 The server also gives the agent short instructions: the main recipes (run tests in a pane, wait for
 an event, talk to another agent, draw a chart) and the rules (for example: ask the user before you close
@@ -81,7 +82,7 @@ a pane). The full guide for agents is `ftermctl guide` (the same text is in
 (see [CLAUDE.md](CLAUDE.md#the-fterm-skill)).
 
 Ask Claude for example: "open a scene and plot the time of each test run", or "draw the module graph of this
-project in a scene".
+project in a scene". With `screenshot_pane` the agent can look at what it drew and fix it.
 
 ## Safety
 The first time an agent wants to read or type into a pane that is **not its own** (or opens a new pane),
