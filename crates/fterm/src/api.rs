@@ -180,6 +180,48 @@ pub fn shot_path(
     }
 }
 
+/// Styled text for `get_text`: the default colors once, and runs that have only what is not
+/// the default (so the answer stays small).
+pub fn styled_json(
+    lines: &[Vec<fterm_term::styled::Run>],
+    fg: fterm_term::alacritty_terminal::vte::ansi::Rgb,
+    bg: fterm_term::alacritty_terminal::vte::ansi::Rgb,
+) -> Value {
+    let hex = |c: fterm_term::alacritty_terminal::vte::ansi::Rgb| {
+        format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b)
+    };
+    let lines: Vec<Value> = lines
+        .iter()
+        .map(|line| {
+            line.iter()
+                .map(|run| {
+                    let s = &run.style;
+                    let mut v = serde_json::json!({ "text": run.text });
+                    if s.fg != fg {
+                        v["fg"] = hex(s.fg).into();
+                    }
+                    if s.bg != bg {
+                        v["bg"] = hex(s.bg).into();
+                    }
+                    for (key, on) in [
+                        ("bold", s.bold),
+                        ("italic", s.italic),
+                        ("underline", s.underline),
+                        ("strike", s.strike),
+                        ("dim", s.dim),
+                    ] {
+                        if on {
+                            v[key] = true.into();
+                        }
+                    }
+                    v
+                })
+                .collect()
+        })
+        .collect();
+    serde_json::json!({ "fg": hex(fg), "bg": hex(bg), "lines": lines })
+}
+
 /// `place` of a scene: "right" (the default) or "down". A scene is a split.
 pub fn scene_place(params: &Value) -> Result<fterm_mux::Direction, RpcError> {
     match str_param(params, "place")?.as_deref() {
@@ -214,6 +256,67 @@ mod tests {
             "PNG only"
         );
         assert!(shot_path(&json!({"path": 5}), 3, 0, temp).is_err());
+    }
+
+    #[test]
+    fn styled_text_as_json() {
+        use fterm_term::alacritty_terminal::vte::ansi::Rgb;
+        use fterm_term::styled::{Run, Style};
+        let fg = Rgb {
+            r: 0xcd,
+            g: 0xd6,
+            b: 0xf4,
+        };
+        let bg = Rgb {
+            r: 0x1e,
+            g: 0x1e,
+            b: 0x2e,
+        };
+        let plain = Style {
+            fg,
+            bg,
+            bold: false,
+            italic: false,
+            underline: false,
+            strike: false,
+            dim: false,
+        };
+        let red = Style {
+            fg: Rgb {
+                r: 0xf3,
+                g: 0x8b,
+                b: 0xa8,
+            },
+            bold: true,
+            ..plain
+        };
+        let bar = Style {
+            bg: Rgb { r: 0, g: 0, b: 255 },
+            underline: true,
+            ..plain
+        };
+        let run = |text: &str, style| Run {
+            text: text.to_owned(),
+            style,
+        };
+        let lines = vec![
+            vec![run("ok ", plain), run("error", red)],
+            vec![],
+            vec![run("bar", bar)],
+        ];
+        // The default colors are said once; a run has only what is not the default.
+        assert_eq!(
+            styled_json(&lines, fg, bg),
+            json!({
+                "fg": "#cdd6f4",
+                "bg": "#1e1e2e",
+                "lines": [
+                    [{"text": "ok "}, {"text": "error", "fg": "#f38ba8", "bold": true}],
+                    [],
+                    [{"text": "bar", "bg": "#0000ff", "underline": true}],
+                ]
+            })
+        );
     }
 
     #[test]

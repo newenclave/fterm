@@ -95,7 +95,8 @@ pub fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": {
                 "pane": pane,
                 "what": { "type": "string", "enum": ["screen", "history", "last_output"], "description": "The default is screen." },
-                "lines": { "type": "integer", "description": "For history and last_output: only the last lines (default 200)." }
+                "lines": { "type": "integer", "description": "For history and last_output: only the last lines (default 200)." },
+                "styled": { "type": "boolean", "description": "Also give the colors and styles: the default fg and bg, and each line as runs of text with fg, bg (#rrggbb), bold, italic, underline, strike, dim (only what is not the default). For example to see which lines are red errors." }
             }}
         },
         {
@@ -337,9 +338,24 @@ impl<B: Backend> Server<B> {
                 .backend
                 .call(
                     "get_text",
-                    pick(&[("pane", "pane"), ("what", "what"), ("lines", "lines")]),
+                    pick(&[
+                        ("pane", "pane"),
+                        ("what", "what"),
+                        ("lines", "lines"),
+                        ("styled", "styled"),
+                    ]),
                 )
-                .map(|v| v["text"].as_str().unwrap_or("").to_owned()),
+                .map(|mut v| {
+                    if args.get("styled") == Some(&json!(true)) {
+                        // The lines have the text already: do not send it twice.
+                        if let Some(o) = v.as_object_mut() {
+                            o.remove("text");
+                        }
+                        serde_json::to_string(&v).unwrap_or_default()
+                    } else {
+                        v["text"].as_str().unwrap_or("").to_owned()
+                    }
+                }),
             "wait_for" => need("event").and_then(|_| {
                 let mut params =
                     pick(&[("pane", "pane"), ("event", "event"), ("pattern", "pattern")]);
@@ -558,13 +574,17 @@ mod tests {
         }
 
         fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-            self.calls.push((method.to_owned(), params));
+            self.calls.push((method.to_owned(), params.clone()));
             if self.fail {
                 return Err("no fterm window found".into());
             }
             Ok(match method {
                 "list" => json!({ "tabs": [], "active_pane": 1 }),
                 "spawn" => json!({ "pane": 7 }),
+                "get_text" if params["styled"] == json!(true) => json!({
+                    "pane": 1, "text": "ok error", "fg": "#cdd6f4", "bg": "#1e1e2e",
+                    "lines": [[{ "text": "ok " }, { "text": "error", "fg": "#f38ba8" }]]
+                }),
                 "get_text" => json!({ "pane": 1, "text": "hello\nworld" }),
                 "send_message" => json!({ "id": 3 }),
                 "screenshot" => {
@@ -789,6 +809,27 @@ mod tests {
             &mut s,
             "send_text",
             json!({ "pane": 1, "text": "ls", "enter": true }),
+        );
+
+        // With colors: the styled lines as JSON, not only the text. Its own server, so the calls of
+        // `s` keep their places.
+        let mut colored = server();
+        let result = tool(
+            &mut colored,
+            "read_pane",
+            json!({ "pane": 1, "styled": true }),
+        );
+        assert_eq!(
+            colored.backend.calls.last().unwrap().1,
+            json!({ "pane": 1, "styled": true })
+        );
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let styled: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(styled["fg"], json!("#cdd6f4"));
+        assert_eq!(styled["lines"][0][1]["fg"], json!("#f38ba8"));
+        assert!(
+            styled.get("text").is_none(),
+            "the text is in the lines already"
         );
         assert_eq!(
             s.backend.calls[2],

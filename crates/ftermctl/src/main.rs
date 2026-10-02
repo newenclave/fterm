@@ -37,7 +37,8 @@ Text:
   run [--pane N] [--wait] [--timeout S] COMMAND
                                          type COMMAND and press Enter; with --wait, wait until it ends,
                                          print its output, and exit with its exit code
-  get-text [--pane N] [--history|--last-output] [--lines N]
+  get-text [--pane N] [--history|--last-output] [--lines N] [--styled]
+                                         --styled = with colors and styles, as JSON
   screenshot [--pane N] [FILE.png]       a PNG of a pane, as you see it; prints the file
                                          (no FILE = a file in the temp folder)
 
@@ -181,6 +182,10 @@ fn print_answer(as_json: bool, method: &str, answer: &Value) {
     match method {
         "list" => print!("{}", show::list(answer)),
         "read_messages" => print!("{}", show::messages(answer)),
+        "get_text" if answer.get("lines").is_some() => println!(
+            "{}",
+            serde_json::to_string_pretty(answer).unwrap_or_default()
+        ),
         "get_text" => println!("{}", answer["text"].as_str().unwrap_or("")),
         "spawn" => println!("{}", answer["pane"]),
         "scene_open" => println!(

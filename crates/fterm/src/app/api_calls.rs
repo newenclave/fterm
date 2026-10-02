@@ -729,44 +729,58 @@ impl App {
             .and_then(Value::as_u64)
             .map_or(200, |n| n as usize)
             .min(MAX_LINES);
+        let styled = bool_param(params, "styled")?.unwrap_or(false);
+        let palette = super::palette_for(&self.config);
         let running = self.running.as_ref().expect("checked in api_call");
         let p = &running.panes[&pane];
         let session = &p.session;
+        // The lines (from the top of the history) to give.
+        let range = session.with_term(|term| {
+            let total = total_lines(term);
+            match what.as_str() {
+                "screen" => Ok(Some((term.grid().history_size(), total))),
+                "history" => Ok(Some((total.saturating_sub(lines), total))),
+                "last_output" => Ok(p
+                    .shell
+                    .last_output(total)
+                    .map(|(start, end)| (start.max(end.saturating_sub(lines)), end))),
+                other => Err(RpcError::invalid_params(format!(
+                    "`what` must be \"screen\", \"history\", or \"last_output\", got `{other}`"
+                ))),
+            }
+        })?;
+        let Some((from, to)) = range else {
+            return Err(RpcError::new(
+                RpcError::NOT_FOUND,
+                "no command output yet (it needs shell integration)",
+            ));
+        };
         let text = match what.as_str() {
             "screen" => session.screen_text(),
-            "last_output" => {
-                let range = session.with_term(|term| {
-                    let total = total_lines(term);
-                    p.shell.last_output(total).map(|(start, end)| {
-                        lines_text(term, start.max(end.saturating_sub(lines)), end)
-                    })
-                });
-                let Some(text) = range else {
-                    return Err(RpcError::new(
-                        RpcError::NOT_FOUND,
-                        "no command output yet (it needs shell integration)",
-                    ));
-                };
-                let last = p.last_command.as_ref();
-                return Ok(json!({
-                    "pane": pane.0,
-                    "text": text.trim_end(),
-                    "running": p.shell.is_running(),
-                    "command": last.and_then(|c| c.command.clone()),
-                    "exit": last.and_then(|c| c.exit),
-                }));
-            }
-            "history" => session.with_term(|term| {
-                let total = total_lines(term);
-                lines_text(term, total.saturating_sub(lines), total)
-            }),
-            other => {
-                return Err(RpcError::invalid_params(format!(
-                    "`what` must be \"screen\", \"history\", or \"last_output\", got `{other}`"
-                )));
-            }
+            _ => session.with_term(|term| lines_text(term, from, to)),
         };
-        Ok(json!({ "pane": pane.0, "text": text.trim_end() }))
+        let mut answer = json!({ "pane": pane.0, "text": text.trim_end() });
+        if what == "last_output" {
+            let last = p.last_command.as_ref();
+            answer["running"] = json!(p.shell.is_running());
+            answer["command"] = json!(last.and_then(|c| c.command.clone()));
+            answer["exit"] = json!(last.and_then(|c| c.exit));
+        }
+        if styled {
+            let styled = session.with_term(|term| {
+                let mut lines = fterm_term::styled::styled_lines(term, from, to, &palette);
+                // Empty lines at the end are not in `text` either.
+                while lines.last().is_some_and(Vec::is_empty) {
+                    lines.pop();
+                }
+                let (fg, bg) = fterm_term::styled::default_colors(term, &palette);
+                crate::api::styled_json(&lines, fg, bg)
+            });
+            for key in ["fg", "bg", "lines"] {
+                answer[key] = styled[key].clone();
+            }
+        }
+        Ok(answer)
     }
 
     fn api_close(

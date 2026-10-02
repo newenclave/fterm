@@ -40,6 +40,7 @@ ftermctl spawn --right                         # a split on the right; prints th
 ftermctl run --pane 3 --wait cargo test        # type it, wait for the end, print the output,
                                                # and exit with the exit code of cargo
 ftermctl get-text --pane 3 --last-output       # the output of the last command
+ftermctl get-text --pane 3 --styled            # the screen with colors and styles, as JSON
 ftermctl send-text --pane 3 --enter git status
 ftermctl screenshot --pane 3 shot.png          # a PNG of the pane; prints the full path
 ftermctl wait-for --pane 3 text --pattern "ready" --timeout 60
@@ -63,7 +64,7 @@ A missing `pane` means: the pane of the client (from `hello`), else the active p
 | `list` | | `tabs`: each with `tab`, `title`, `active`, `zoomed`, `panes` |
 | `spawn` | `place`: `"tab"` (default), `"right"`, `"down"`; `profile`; `cwd`; `pane` (split next to it) | `pane` |
 | `send_text` | `pane`, `text`, `enter` (true = press Enter after the text) | |
-| `get_text` | `pane`, `what`: `"screen"` (default), `"history"`, or `"last_output"`; `lines` (default 200, at most 10000) | `text`; for `last_output` also `command`, `exit`, `running` |
+| `get_text` | `pane`, `what`: `"screen"` (default), `"history"`, or `"last_output"`; `lines` (default 200, at most 10000); `styled` (default false) | `text`; for `last_output` also `command`, `exit`, `running`; with `styled` also `fg`, `bg`, `lines` (see below) |
 | `focus` | `pane` | |
 | `close` | `pane`, `force` (needed when a program runs in it) | |
 | `zoom` | `pane` | |
@@ -82,6 +83,16 @@ A missing `pane` means: the pane of the client (from `hello`), else the active p
 A pane in `list` has: `id`, `tab`, `program`, `title`, `cwd`, `active`, `running` (a command runs),
 `at_prompt`, `agent` (`state`, `message`), `last_command` (`command`, `exit`, `took_ms`), `size`,
 `remote` (remote control on), `messages` (unread messages).
+
+`get_text` with `styled: true` also gives the colors and styles, as the user sees them. `fg` and `bg`
+are the default colors of the pane. `lines` has one list of runs for each line (a wrapped line is one
+line). A run is text with one style: `text`, and only what is not the default: `fg`, `bg` (`"#rrggbb"`),
+`bold`, `italic`, `underline`, `strike`, `dim`. The colors are final (bold, dim, and inverse are in them).
+
+```json
+{ "pane": 1, "text": "ok error", "fg": "#cdd6f4", "bg": "#1e1e2e",
+  "lines": [[{ "text": "ok " }, { "text": "error", "fg": "#f38ba8", "bold": true }]] }
+```
 
 `screenshot` takes the pane as it is on the screen, with its colors and its border, at the next frame. The
 pane must be in the active tab (or zoomed); else it is an error. fterm writes the file itself, so `path`

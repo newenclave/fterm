@@ -234,7 +234,7 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             call("send_text", params)
         }
         "get-text" => {
-            let w = read(&["pane", "lines"], &["history", "last-output"])?;
+            let w = read(&["pane", "lines"], &["history", "last-output", "styled"])?;
             let what = if w.flag("last-output") {
                 "last_output"
             } else if w.flag("history") {
@@ -245,6 +245,9 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             let mut params = json!({ "what": what });
             if let Some(lines) = w.number("lines")? {
                 params["lines"] = json!(lines);
+            }
+            if w.flag("styled") {
+                params["styled"] = json!(true);
             }
             w.pane_into(&mut params)?;
             call("get_text", params)
@@ -483,6 +486,10 @@ mod tests {
         );
         assert_eq!(call("get-text --history").1, json!({"what": "history"}));
         assert_eq!(call("get-text").1, json!({"what": "screen"}));
+        assert_eq!(
+            call("get-text --styled --lines 5").1,
+            json!({"what": "screen", "lines": 5, "styled": true})
+        );
         assert_eq!(
             call("title --pane 4 build server"),
             (

@@ -33,7 +33,8 @@ The user sees the command run. This is better than a hidden command when the use
 - Then `wait_for` with `event: "text"` and a `pattern` (for example `"Listening on"`), or with
   `event: "command_done"`. Do not ask again and again in a loop: `wait_for` waits for you.
 - `read_pane` with `what: "last_output"` gives the output of the last command; `"screen"` gives what the
-  user sees now; `lines` keeps it short.
+  user sees now; `lines` keeps it short. With `styled: true` (`ftermctl get-text --styled`) it also gives
+  the colors and styles of the text, as JSON: to find red errors, or what is selected in a menu.
 
 **Talk to the agent in another pane**
 - `send_message` with `to` (its pane id) and `text`. Nothing is typed into that pane: the message goes to

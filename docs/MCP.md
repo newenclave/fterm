@@ -62,7 +62,7 @@ When FTERM_PANE_ID is set, you run in the fterm terminal: run `ftermctl guide` o
 | `open_pane` | A new tab, or a split on the right or below (`place`, `profile`, `cwd`, `next_to`). Gives the new pane id. |
 | `run_command` | Types a command into a pane, waits for its end, and gives the exit code and the output. |
 | `send_text` | Types text into a pane (for example an answer to a program). |
-| `read_pane` | The screen, the history, or the output of the last command of a pane. |
+| `read_pane` | The screen, the history, or the output of the last command of a pane. With `styled`, also the colors and styles of the text (for example: which lines are red). |
 | `wait_for` | Waits for an event: `command_done`, `agent_done`, `agent_waiting`, `message`, a `text` on the screen, or `scene_resized` (a scene got a new size). |
 | `notify` | A notification for you. |
 | `send_message` | A message to the agent in another pane (it goes to the inbox of that pane). |
