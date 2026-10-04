@@ -42,6 +42,14 @@ Text:
   screenshot [--pane N] [FILE.png]       a PNG of a pane, as you see it; prints the file
                                          (no FILE = a file in the temp folder)
 
+The AI panel:
+  ai read [--last N]                     the chat: questions and answers
+  ai ask [--pane N] [--wait] [--timeout S] TEXT
+                                         ask a question (--pane N: with the last command and output of
+                                         pane N); with --wait, print the answer. Needs
+                                         ai = { api_access = true } in fterm.lua
+  ai input TEXT | ai stop | ai clear     type into the input (not sent), stop the answer, a new chat
+
 Events and messages:
   wait-for [--pane N] EVENT [--pattern TEXT] [--timeout S]
                                          EVENT: command_done, agent_done, agent_waiting, message, text, scene_resized
@@ -98,6 +106,14 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
                 .call(method, params.clone())
                 .map_err(|err| err.to_string())?;
             print_answer(cli.json, method, &answer);
+            if method == "ai_ask"
+                && let Some(error) = answer.get("error").and_then(Value::as_str)
+            {
+                if !cli.json {
+                    eprintln!("ftermctl: the AI answer failed: {error}");
+                }
+                return Ok(ExitCode::FAILURE);
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Run {
@@ -182,6 +198,14 @@ fn print_answer(as_json: bool, method: &str, answer: &Value) {
     match method {
         "list" => print!("{}", show::list(answer)),
         "read_messages" => print!("{}", show::messages(answer)),
+        "ai_read" => print!("{}", show::chat(answer)),
+        // With `wait`: the answer (a failed one: only the error, on stderr); without: the request id.
+        "ai_ask" if answer.get("error").is_some() => {}
+        "ai_ask" if answer.get("text").is_some() => {
+            println!("{}", answer["text"].as_str().unwrap_or(""))
+        }
+        "ai_ask" => println!("{}", answer["id"]),
+        "ai_stop" => {}
         "get_text" if answer.get("lines").is_some() => println!(
             "{}",
             serde_json::to_string_pretty(answer).unwrap_or_default()

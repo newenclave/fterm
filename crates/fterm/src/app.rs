@@ -383,6 +383,8 @@ pub struct App {
     waits: Vec<api_calls::Wait>,
     /// Screenshots that wait for the next frame.
     shots: Vec<api_calls::PendingShot>,
+    /// `ai_ask` calls that wait for the end of the answer.
+    ai_waits: Vec<api_calls::AiWait>,
     /// Messages between agents, by pane.
     inbox: crate::inbox::Inbox,
     /// The AI chat, the flag that stops its running answer, and the API key prompt.
@@ -466,6 +468,7 @@ impl App {
             api_questions: std::collections::VecDeque::new(),
             waits: Vec::new(),
             shots: Vec::new(),
+            ai_waits: Vec::new(),
             inbox: crate::inbox::Inbox::default(),
             ai: crate::ai_chat::Session::default(),
             ai_stop: None,

@@ -20,6 +20,13 @@ pub(super) struct PendingCommand {
     stop: Arc<AtomicBool>,
 }
 
+/// A question that did not go to the AI: its context (to put back), and why, for a notification
+/// (`None`: the question is empty, or an answer runs).
+pub(super) struct Refused {
+    pub context: Vec<ContextItem>,
+    pub why: Option<(&'static str, String, Level)>,
+}
+
 impl App {
     /// The provider from the config, as `fterm_ai` wants it.
     fn ai_provider(&self) -> Result<Provider, String> {
@@ -63,6 +70,27 @@ impl App {
             return;
         }
         let context = std::mem::take(&mut self.ai.context);
+        if let Err(Refused { context, why }) = self.ai_submit(&question, context, None) {
+            self.ai.input.set(&question);
+            self.ai.context = context;
+            if let Some((title, body, level)) = why {
+                self.notify(None, title, &body, level, Source::App);
+            }
+        }
+    }
+
+    /// Asks the AI: the question goes into the chat, and the answer streams in. `from` is the name of
+    /// the API client that asks (the chat shows it). Gives the request id, or the context back when the
+    /// question did not go (with the reason for a notification).
+    pub(super) fn ai_submit(
+        &mut self,
+        question: &str,
+        context: Vec<ContextItem>,
+        from: Option<&str>,
+    ) -> Result<u64, Refused> {
+        if question.trim().is_empty() || self.ai.running.is_some() {
+            return Err(Refused { context, why: None });
+        }
         let mut sent = build_message(question.trim(), &context);
         // on_ai_request in the config can stop it or change the text (for example, to hide secrets).
         let (provider_name, model) = self
@@ -81,36 +109,38 @@ impl App {
         match self.config.on_ai_request(&request) {
             Ok(Some(text)) => sent = text,
             Ok(None) => {
-                self.ai.input.set(&question);
-                self.ai.context = context;
-                self.notify(
-                    None,
-                    "The question was not sent",
-                    "on_ai_request in your config stopped it.",
-                    Level::Info,
-                    Source::App,
-                );
-                return;
+                return Err(Refused {
+                    context,
+                    why: Some((
+                        "The question was not sent",
+                        "on_ai_request in your config stopped it.".to_owned(),
+                        Level::Info,
+                    )),
+                });
             }
             Err(err) => {
-                self.ai.input.set(&question);
-                self.ai.context = context;
-                self.notify(None, "Lua error", &err, Level::Error, Source::App);
-                return;
+                return Err(Refused {
+                    context,
+                    why: Some(("Lua error", err, Level::Error)),
+                });
             }
         }
         let mut display = question.trim().to_owned();
+        if let Some(from) = from {
+            display.push_str(&format!("\n(from {from})"));
+        }
         for item in &context {
             display.push_str(&format!("\n+ {}", item.label()));
         }
         let Some(id) = self.ai.ask_with(&display, sent) else {
-            return;
+            return Err(Refused { context, why: None });
         };
         let provider = match self.ai_provider() {
             Ok(provider) => provider,
             Err(err) => {
-                self.ai.event(id, Event::Failed(AiError::Network(err)));
-                return;
+                // The chat shows the error, and the request has ended.
+                self.ai_event(id, Event::Failed(AiError::Network(err)));
+                return Ok(id);
             }
         };
         let pane = self.running.as_ref().and_then(Running::active_pane);
@@ -146,22 +176,49 @@ impl App {
                 });
             });
         self.redraw_ai();
+        Ok(id)
+    }
+
+    /// Stops the running answer. Returns `false` when no answer runs.
+    pub(super) fn ai_stop_answer(&self) -> bool {
+        match &self.ai_stop {
+            Some(stop) => {
+                stop.store(true, Ordering::SeqCst);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A new chat: stops the running answer and forgets all turns.
+    pub(super) fn ai_clear_chat(&mut self) {
+        if let Some(id) = self.ai.running {
+            // As if the answer ended: API clients that wait for it get their answer now.
+            self.ai_stop_answer();
+            self.ai_event(id, Event::Failed(AiError::Stopped));
+        }
+        self.ai_stop = None;
+        self.ai.clear();
+        self.redraw_ai();
     }
 
     /// An event of a running answer.
     pub(super) fn ai_event(&mut self, id: u64, event: Event) {
         let ended = matches!(event, Event::Done { .. } | Event::Failed(_));
-        let failed = matches!(&event, Event::Failed(e) if *e != AiError::Stopped);
+        let stopped = event == Event::Failed(AiError::Stopped);
+        let failed = matches!(&event, Event::Failed(_)) && !stopped;
         if !self.ai.event(id, event) {
             return;
         }
         if ended {
             self.ai_stop = None;
+            self.ai_answered(id);
             let showing = self
                 .running
                 .as_ref()
                 .is_some_and(|r| r.dock.showing(PanelKind::Ai));
-            if !showing || !self.focused {
+            // A stopped answer needs no notification: somebody stopped it on purpose.
+            if (!showing || !self.focused) && !stopped {
                 let (title, level) = if failed {
                     ("The AI answer failed", Level::Error)
                 } else {
@@ -175,7 +232,7 @@ impl App {
         self.redraw_ai();
     }
 
-    fn redraw_ai(&self) {
+    pub(super) fn redraw_ai(&self) {
         if let Some(running) = &self.running
             && running.dock.showing(PanelKind::Ai)
         {
@@ -197,13 +254,10 @@ impl App {
             Key::Named(NamedKey::Enter) => return self.ai_send(),
             Key::Named(NamedKey::Escape) => {
                 // Esc stops a running answer; a second Esc gives the keyboard back to the terminal.
-                match &self.ai_stop {
-                    Some(stop) => stop.store(true, Ordering::SeqCst),
-                    None => {
-                        if let Some(running) = &mut self.running {
-                            running.dock.focused = false;
-                        }
-                    }
+                if !self.ai_stop_answer()
+                    && let Some(running) = &mut self.running
+                {
+                    running.dock.focused = false;
                 }
             }
             // Backspace in an empty input takes away the last chip.
@@ -230,11 +284,7 @@ impl App {
             _ if alt && letter == Some('s') => self.ai_add_selection(),
             // Ctrl+L: a new chat (like clearing a terminal).
             _ if self.mods.control_key() && physical_letter(event.physical_key) == Some('l') => {
-                if let Some(stop) = self.ai_stop.take() {
-                    stop.store(true, Ordering::SeqCst);
-                }
-                self.ai.running = None;
-                self.ai.clear();
+                self.ai_clear_chat()
             }
             Key::Named(NamedKey::Tab) => {
                 if let Some(running) = &mut self.running {
@@ -258,7 +308,15 @@ impl App {
 
     /// The last command of the active pane and its output, as context.
     fn pane_context(&self) -> Vec<ContextItem> {
-        let Some(pane) = self.running.as_ref().and_then(Running::active_pane) else {
+        match self.running.as_ref().and_then(|r| r.mux.active_pane()) {
+            Some(pane) => self.pane_context_of(pane),
+            None => Vec::new(),
+        }
+    }
+
+    /// The last command of a pane and its output, as context.
+    pub(super) fn pane_context_of(&self, pane: PaneId) -> Vec<ContextItem> {
+        let Some(pane) = self.running.as_ref().and_then(|r| r.panes.get(&pane)) else {
             return Vec::new();
         };
         let mut items = Vec::new();

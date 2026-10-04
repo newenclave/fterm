@@ -65,6 +65,14 @@ The user sees the command run. This is better than a hidden command when the use
 The scene draws itself again when the user zooms or resizes it. To use the new size (for example more
 points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
 
+**The AI panel of the user**
+- `ai_read` (`ftermctl ai read --last 2`) reads the chat of the fterm AI panel: the questions and the answers.
+- `ai_ask` with `text` (`ftermctl ai ask --wait TEXT`) asks a question there and gives the answer. `pane`
+  sends the last command and the output of that pane too. It uses the user's AI key, so it works only when
+  the user set `ai = { api_access = true }` in `fterm.lua`. If it is off, do not ask the user to turn it on
+  for you; do the task yourself.
+- `ftermctl ai input TEXT` puts a text into the input of the panel without sending it, for the user.
+
 **Other tools**
 - `focus_pane` shows a pane to the user (its tab, and the keyboard goes there). Use it when the user
   should look at something now, not for your own work.
@@ -95,6 +103,7 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
 | A notification | `ftermctl notify TITLE --body TEXT --level info` |
 | A scene | `ftermctl scene`, `ftermctl draw --pane N JSON` (or `-` for stdin) |
 | A picture of a pane | `ftermctl screenshot --pane N [FILE.png]` |
+| The AI panel | `ftermctl ai read [--last N]`, `ftermctl ai ask --wait TEXT`, `ftermctl ai input TEXT` |
 
 `ftermctl help` lists everything. The docs for people are in the fterm repository: `docs/MCP.md`,
 `docs/API.md`, and `docs/SCENE.md`.

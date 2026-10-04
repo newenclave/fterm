@@ -156,6 +156,47 @@ fn call(method: &str, params: Value) -> Command {
     }
 }
 
+/// `ai read|ask|input|stop|clear`: the AI panel.
+fn ai_command(args: &[String]) -> Result<Command, String> {
+    let rest = args.get(1..).unwrap_or_default();
+    let read = |with_value: &[&str], without: &[&str]| Words::read(rest, with_value, without);
+    Ok(match args.first().map(String::as_str) {
+        Some("read") => {
+            let w = read(&["last"], &[])?;
+            let mut params = json!({});
+            if let Some(last) = w.number("last")? {
+                params["last"] = json!(last);
+            }
+            call("ai_read", params)
+        }
+        Some("ask") => {
+            let w = read(&["pane", "timeout"], &["wait"])?;
+            let text = w.text();
+            if text.trim().is_empty() {
+                return Err("ai ask needs a question".to_owned());
+            }
+            let mut params = json!({ "text": text });
+            if w.flag("wait") {
+                params["wait"] = json!(true);
+            }
+            if let Some(secs) = w.number("timeout")? {
+                params["timeout_ms"] = json!(secs * 1000);
+            }
+            w.pane_into(&mut params)?;
+            call("ai_ask", params)
+        }
+        Some("input") => call("ai_input", json!({ "text": read(&[], &[])?.text() })),
+        Some("stop") => call("ai_stop", json!({})),
+        Some("clear") => call("ai_clear", json!({})),
+        Some(other) => {
+            return Err(format!(
+                "unknown ai command `{other}` (read, ask, input, stop, clear)"
+            ));
+        }
+        None => return Err("ai needs a command: read, ask, input, stop, clear".to_owned()),
+    })
+}
+
 fn command(word: &str, args: &[String]) -> Result<Command, String> {
     let read = |with_value: &[&str], without: &[&str]| Words::read(args, with_value, without);
     Ok(match word {
@@ -181,6 +222,7 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             Some(_) => call("zoom", json!({ "pane": pane_word(args.first(), "zoom")? })),
             None => call("zoom", json!({})),
         },
+        "ai" => ai_command(args)?,
         "panel" => match args.first() {
             Some(name) => call("panel", json!({ "name": name })),
             None => call("panel", json!({})),
@@ -466,6 +508,29 @@ mod tests {
         let (_, params) = call("screenshot map.png");
         let path = std::path::PathBuf::from(params["path"].as_str().unwrap());
         assert!(path.is_absolute() && path.ends_with("map.png"), "{path:?}");
+    }
+
+    #[test]
+    fn ai_commands() {
+        assert_eq!(call("ai read"), ("ai_read".into(), json!({})));
+        assert_eq!(call("ai read --last 4").1, json!({"last": 4}));
+        assert_eq!(
+            call("ai ask --pane 2 --wait --timeout 60 why did it fail?"),
+            (
+                "ai_ask".into(),
+                json!({"text": "why did it fail?", "pane": 2, "wait": true, "timeout_ms": 60_000})
+            )
+        );
+        assert_eq!(call("ai ask hi").1, json!({"text": "hi"}));
+        assert_eq!(
+            call("ai input explain this"),
+            ("ai_input".into(), json!({"text": "explain this"}))
+        );
+        assert_eq!(call("ai stop").0, "ai_stop");
+        assert_eq!(call("ai clear").0, "ai_clear");
+        assert!(cli("ai").is_err());
+        assert!(cli("ai ask").is_err(), "no question");
+        assert!(cli("ai dance").is_err());
     }
 
     #[test]

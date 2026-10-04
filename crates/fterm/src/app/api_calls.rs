@@ -32,6 +32,15 @@ pub(super) struct Wait {
     pub reply: std::sync::mpsc::Sender<Result<Value, RpcError>>,
 }
 
+/// An `ai_ask` that waits for the end of the answer.
+pub(super) struct AiWait {
+    pub client: ClientId,
+    /// The request id of the AI chat.
+    pub id: u64,
+    pub deadline: Instant,
+    pub reply: std::sync::mpsc::Sender<Result<Value, RpcError>>,
+}
+
 /// A `screenshot` that waits for the next frame.
 pub(super) struct PendingShot {
     pub pane: PaneId,
@@ -126,6 +135,9 @@ impl App {
         if request.method == "screenshot" {
             return self.api_screenshot(request);
         }
+        if request.method == "ai_ask" {
+            return self.api_ai_ask(request);
+        }
         let result =
             self.api_dispatch(event_loop, request.client, &request.method, &request.params);
         let _ = request.reply.send(result);
@@ -133,6 +145,11 @@ impl App {
 
     /// May this request run now? Reading or typing into a pane that is not the client's own needs a yes.
     fn api_access(&self, request: &ApiRequest) -> Verdict {
+        if request.method == "ai_ask" && !self.config.config.ai.api_access {
+            return Verdict::Deny(
+                "questions to the AI panel use the user's key: set ai = { api_access = true } in fterm.lua",
+            );
+        }
         let gated = matches!(
             request.method.as_str(),
             "send_text"
@@ -142,14 +159,18 @@ impl App {
                 | "read_messages"
                 | "spawn"
                 | "screenshot"
+                | "ai_read"
+                | "ai_ask"
+                | "ai_clear"
         );
         if !gated {
             return Verdict::Allow;
         }
         let client = self.api_clients.get(&request.client);
         let running = self.running.as_ref().expect("checked in api_call");
-        let (own, remote) = if request.method == "spawn" {
-            // A new pane is new power: it needs the same yes as a pane of somebody else.
+        let (own, remote) = if request.method == "spawn" || request.method.starts_with("ai_") {
+            // A new pane is new power, and the AI chat has the text of the panes:
+            // they need the same yes as a pane of somebody else.
             (false, true)
         } else {
             match self.target_pane(request.client, &request.params) {
@@ -236,6 +257,7 @@ impl App {
     pub(super) fn api_client_gone(&mut self, client: ClientId) {
         self.api_clients.remove(&client);
         self.waits.retain(|w| w.client != client);
+        self.ai_waits.retain(|w| w.client != client);
         self.api_questions.retain(|a| a.client != client);
         if let Some(running) = &self.running {
             running.window.request_redraw();
@@ -286,6 +308,88 @@ impl App {
             deadline,
             reply: request.reply,
         });
+    }
+
+    /// `ai_ask`: a question in the AI panel. With `wait`, the answer comes when the AI has finished.
+    fn api_ai_ask(&mut self, request: ApiRequest) {
+        let result = (|| {
+            let text = str_param(&request.params, "text")?
+                .filter(|t| !t.trim().is_empty())
+                .ok_or_else(|| RpcError::invalid_params("give a `text`"))?;
+            let context = match pane_param(&request.params, "pane")? {
+                Some(_) => self.pane_context_of(self.target_pane(request.client, &request.params)?),
+                None => Vec::new(),
+            };
+            let wait = bool_param(&request.params, "wait")?.unwrap_or(false);
+            if self.ai.running.is_some() {
+                return Err(RpcError::invalid_params(
+                    "an answer is running: wait for it (the ai_answer event) or stop it (ai_stop)",
+                ));
+            }
+            let from = self
+                .api_clients
+                .get(&request.client)
+                .map_or_else(|| "client".to_owned(), |c| c.name.clone());
+            let id = self
+                .ai_submit(&text, context, Some(&from))
+                .map_err(|refused| {
+                    let why = refused.why.map_or_else(
+                        || "the question was not sent".to_owned(),
+                        |(title, body, _)| format!("{title}: {body}"),
+                    );
+                    RpcError::new(RpcError::DENIED, why)
+                })?;
+            Ok((id, wait))
+        })();
+        match result {
+            Err(err) => {
+                let _ = request.reply.send(Err(err));
+            }
+            Ok((id, false)) => {
+                let _ = request.reply.send(Ok(json!({ "id": id })));
+            }
+            // The request ended at once (for example, no model in the config).
+            Ok((id, true)) if self.ai.running != Some(id) => {
+                let _ = request.reply.send(Ok(self.ai_answer_json(id)));
+            }
+            Ok((id, true)) => {
+                let ms = request
+                    .params
+                    .get("timeout_ms")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(crate::api::AI_TIMEOUT_MS)
+                    .clamp(0.0, 3_600_000.0);
+                self.ai_waits.push(AiWait {
+                    client: request.client,
+                    id,
+                    deadline: Instant::now() + Duration::from_millis(ms as u64),
+                    reply: request.reply,
+                });
+            }
+        }
+    }
+
+    /// The end of AI answer `id`, as the API gives it.
+    fn ai_answer_json(&self, id: u64) -> Value {
+        let (text, error) = self.ai.last_answer();
+        let mut data = json!({ "event": "ai_answer", "id": id, "text": text });
+        if let Some(error) = error {
+            data["error"] = json!(error);
+        }
+        data
+    }
+
+    /// AI answer `id` has ended: the `ai_answer` event, and the `ai_ask` calls that wait for it.
+    pub(super) fn ai_answered(&mut self, id: u64) {
+        let data = self.ai_answer_json(id);
+        self.api_event("ai_answer", data.clone());
+        let (done, waiting): (Vec<AiWait>, Vec<AiWait>) = std::mem::take(&mut self.ai_waits)
+            .into_iter()
+            .partition(|w| w.id == id);
+        self.ai_waits = waiting;
+        for wait in done {
+            let _ = wait.reply.send(Ok(data.clone()));
+        }
     }
 
     /// `screenshot`: a PNG of a pane, as the user sees it. It is taken at the next frame.
@@ -367,12 +471,18 @@ impl App {
             .into_iter()
             .partition(|w| w.deadline <= now);
         self.waits = waiting;
-        for wait in over {
-            let _ = wait
-                .reply
-                .send(Err(RpcError::new(RpcError::TIMEOUT, "the time is over")));
+        let (ai_over, ai_waiting): (Vec<AiWait>, Vec<AiWait>) = std::mem::take(&mut self.ai_waits)
+            .into_iter()
+            .partition(|w| w.deadline <= now);
+        self.ai_waits = ai_waiting;
+        let replies = over.into_iter().map(|w| w.reply);
+        for reply in replies.chain(ai_over.into_iter().map(|w| w.reply)) {
+            let _ = reply.send(Err(RpcError::new(RpcError::TIMEOUT, "the time is over")));
         }
-        self.waits.iter().map(|w| w.deadline).min()
+        let deadlines = self.waits.iter().map(|w| w.deadline);
+        deadlines
+            .chain(self.ai_waits.iter().map(|w| w.deadline))
+            .min()
     }
 
     /// A pane closed: its inbox goes, and its waits get an error.
@@ -475,6 +585,29 @@ impl App {
                 }
                 running.dock.focused = false;
                 self.dock_changed();
+                Ok(json!({}))
+            }
+            "ai_read" => {
+                let last = params
+                    .get("last")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize);
+                let mut chat = self.ai.to_json(last);
+                if let Some(p) = self.config.config.ai.current() {
+                    chat["provider"] = json!(p.name);
+                    chat["model"] = json!(p.model);
+                }
+                Ok(chat)
+            }
+            "ai_input" => {
+                let text = str_param(params, "text")?.unwrap_or_default();
+                self.ai.input.set(&text);
+                self.redraw_ai();
+                Ok(json!({}))
+            }
+            "ai_stop" => Ok(json!({ "stopped": self.ai_stop_answer() })),
+            "ai_clear" => {
+                self.ai_clear_chat();
                 Ok(json!({}))
             }
             other => Err(RpcError::no_method(other)),

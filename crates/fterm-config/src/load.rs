@@ -129,7 +129,7 @@ pub struct AiProvider {
     pub needs_key: bool,
 }
 
-/// `ai = { provider, providers, system, max_tokens }`
+/// `ai = { provider, providers, system, max_tokens, api_access }`
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AiConfig {
     pub provider: String,
@@ -139,6 +139,8 @@ pub struct AiConfig {
     pub max_tokens: u32,
     /// The model for "text to command" (`None` = the model of the provider).
     pub command_model: Option<String>,
+    /// May API clients (agents) ask questions in the AI panel? It costs the user's key and money.
+    pub api_access: bool,
 }
 
 impl AiConfig {
@@ -202,6 +204,7 @@ impl Default for AiConfig {
             system: String::new(),
             max_tokens: 2048,
             command_model: None,
+            api_access: false,
         }
     }
 }
@@ -1194,6 +1197,9 @@ fn ai(table: &Table) -> Result<AiConfig, String> {
             ));
         }
         ai.max_tokens = n as u32;
+    }
+    if let Some(on) = bool_field(table, "api_access", "ai.api_access")? {
+        ai.api_access = on;
     }
     if let Some(providers) = table_field(table, "providers", "ai.providers")? {
         for pair in providers.pairs::<String, Table>() {
@@ -2261,6 +2267,24 @@ mod tests {
             .config
             .ai;
         assert_eq!(ai.command_model.as_deref(), Some("claude-sonnet-5"));
+    }
+
+    #[test]
+    fn ai_for_api_clients() {
+        assert!(
+            !load("return {}").config.ai.api_access,
+            "off: questions cost money"
+        );
+        assert!(
+            load("return { ai = { api_access = true } }")
+                .config
+                .ai
+                .api_access
+        );
+        let Err(err) = load_str(r#"return { ai = { api_access = "yes" } }"#, "t") else {
+            panic!("a string must fail");
+        };
+        assert!(err.contains("ai.api_access"), "{err}");
     }
 
     #[test]

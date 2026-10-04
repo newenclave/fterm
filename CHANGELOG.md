@@ -7,6 +7,10 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 ## [Unreleased]
 
 ### Added
+- **The AI panel for agents.** The API methods `ai_read`, `ai_ask`, `ai_input`, `ai_stop`, `ai_clear` and the
+  event `ai_answer`, `ftermctl ai read|ask|input|stop|clear`, and the MCP tools `ai_read` and `ai_ask`.
+  An agent can read the chat and ask questions there. `ai_ask` uses your key, so it works only with
+  `ai = { api_access = true }` in the config.
 - **Screenshots of panes.** The API method `screenshot`, `ftermctl screenshot [--pane N] [FILE.png]`,
   and the MCP tool `screenshot_pane`. An agent gets the PNG as a picture, so it can see what it drew in a
   scene, or how a program looks. It works when the window is under other windows too.

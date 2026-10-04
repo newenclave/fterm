@@ -32,6 +32,11 @@ pub const METHODS: &[&str] = &[
     "scene_open",
     "scene_draw",
     "screenshot",
+    "ai_read",
+    "ai_ask",
+    "ai_input",
+    "ai_stop",
+    "ai_clear",
     "subscribe",
     "unsubscribe",
 ];
@@ -47,7 +52,11 @@ pub const EVENTS: &[&str] = &[
     "title",
     "message",
     "scene_resized",
+    "ai_answer",
 ];
+
+/// How long `ai_ask` with `wait` waits for the answer when it does not say (5 minutes).
+pub const AI_TIMEOUT_MS: f64 = 300_000.0;
 
 /// One request on its way to the app. The app sends the answer on `reply`.
 #[derive(Debug)]
@@ -104,22 +113,25 @@ impl Handler for Bridge {
     }
 }
 
-/// How long a client thread waits for the app. `wait_for` waits as long as it asks (at most one hour).
+/// How long a client thread waits for the app. `wait_for` and `ai_ask` with `wait` wait as long as
+/// they ask (at most one hour).
 pub fn timeout_for(method: &str, params: &Value) -> Duration {
     // Long enough for the user to answer the access question.
     const BASE: Duration = Duration::from_secs(120);
     const WAIT_FOR: Duration = Duration::from_secs(30);
     const EXTRA: Duration = Duration::from_secs(5);
+    let asked = |default: f64| {
+        let ms = params.get("timeout_ms").and_then(Value::as_f64);
+        Duration::from_millis(ms.unwrap_or(default).clamp(0.0, 3_600_000.0) as u64)
+    };
+    if method == "ai_ask" && params.get("wait").and_then(Value::as_bool) == Some(true) {
+        // The access question can come first, then the answer.
+        return BASE + asked(AI_TIMEOUT_MS);
+    }
     if method != "wait_for" {
         return BASE;
     }
-    let asked = params
-        .get("timeout_ms")
-        .and_then(Value::as_f64)
-        .map_or(WAIT_FOR, |ms| {
-            Duration::from_millis(ms.clamp(0.0, 3_600_000.0) as u64)
-        });
-    asked + EXTRA
+    asked(WAIT_FOR.as_millis() as f64) + EXTRA
 }
 
 /// An optional pane id: `{"pane": 3}`.
@@ -353,6 +365,20 @@ mod tests {
         assert_eq!(
             timeout_for("wait_for", &json!({"timeout_ms": 1e12})),
             Duration::from_secs(3605)
+        );
+        assert_eq!(
+            timeout_for("ai_ask", &json!({"text": "hi"})),
+            Duration::from_secs(120),
+            "no wait: the answer is the id"
+        );
+        assert_eq!(
+            timeout_for("ai_ask", &json!({"wait": true})),
+            Duration::from_secs(420),
+            "the access question, then 5 minutes for the answer"
+        );
+        assert_eq!(
+            timeout_for("ai_ask", &json!({"wait": true, "timeout_ms": 10_000})),
+            Duration::from_secs(130)
         );
     }
 

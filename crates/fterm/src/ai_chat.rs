@@ -2,6 +2,7 @@
 //! Pure: no drawing and no network.
 
 use fterm_render::dock::{ChatLine, ChatStyle};
+use serde_json::{Value, json};
 use unicode_width::UnicodeWidthChar;
 
 /// The text that the user types (many lines). The cursor is a char index.
@@ -498,6 +499,42 @@ impl Session {
         self.scroll = 0;
     }
 
+    /// The text and the error of the last answer (for `ai_ask` and the `ai_answer` event).
+    pub fn last_answer(&self) -> (String, Option<String>) {
+        self.turns
+            .iter()
+            .rev()
+            .find(|t| !t.user)
+            .map(|t| (t.text.clone(), t.error.clone()))
+            .unwrap_or_default()
+    }
+
+    /// The chat for `ai_read`: the turns (only the `last` ones, if given), the input, and the context.
+    pub fn to_json(&self, last: Option<usize>) -> Value {
+        let skip = last.map_or(0, |n| self.turns.len().saturating_sub(n));
+        let turns: Vec<Value> = self.turns[skip..]
+            .iter()
+            .map(|t| {
+                let mut turn = json!({
+                    "role": if t.user { "user" } else { "ai" },
+                    "text": t.text,
+                    "streaming": t.streaming,
+                });
+                if let Some(error) = &t.error {
+                    turn["error"] = json!(error);
+                }
+                turn
+            })
+            .collect();
+        let context: Vec<String> = self.context.iter().map(ContextItem::label).collect();
+        json!({
+            "turns": turns,
+            "input": self.input.text,
+            "context": context,
+            "running": self.running.is_some(),
+        })
+    }
+
     pub fn views(&self) -> Vec<TurnView<'_>> {
         self.turns
             .iter()
@@ -673,6 +710,32 @@ mod tests {
                 (ChatStyle::Error, "no API key"),
             ]
         );
+    }
+
+    #[test]
+    fn the_chat_as_json() {
+        let mut chat = Session::default();
+        let id = chat.ask("what is ls?").unwrap();
+        answer(&mut chat, id, "It lists files.");
+        let id = chat.ask("and dir?").unwrap();
+        chat.event(id, fterm_ai::Event::Failed(fterm_ai::AiError::Stopped));
+        chat.input.set("draft");
+        chat.context.push(ContextItem::Output("a\nb".into()));
+        let all = chat.to_json(None);
+        assert_eq!(all["turns"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            all["turns"][1],
+            json!({"role": "ai", "text": "It lists files.", "streaming": false})
+        );
+        assert!(all["turns"][3]["error"].is_string());
+        assert_eq!(all["input"], "draft");
+        assert_eq!(all["context"], json!(["output (2 lines)"]));
+        assert_eq!(all["running"], false);
+        let last = chat.to_json(Some(2));
+        assert_eq!(last["turns"][0]["text"], "and dir?");
+        assert_eq!(chat.to_json(Some(99))["turns"].as_array().unwrap().len(), 4);
+        assert_eq!(chat.last_answer().0, "");
+        assert!(chat.last_answer().1.is_some());
     }
 
     #[test]

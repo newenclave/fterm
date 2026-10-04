@@ -164,6 +164,22 @@ pub fn tools() -> Value {
             }}
         },
         {
+            "name": "ai_read",
+            "description": "Read the chat of the fterm AI panel (the user's own AI assistant): the questions, the answers, and the text in its input box.",
+            "inputSchema": { "type": "object", "properties": {
+                "last": { "type": "integer", "description": "Only the last turns (a question and its answer are 2 turns)." }
+            }}
+        },
+        {
+            "name": "ai_ask",
+            "description": "Ask a question in the fterm AI panel and wait for the answer. It uses the user's AI key, so it works only when the user set ai = { api_access = true } in fterm.lua. The user sees the question and the answer in the panel.",
+            "inputSchema": { "type": "object", "properties": {
+                "text": { "type": "string", "description": "The question." },
+                "pane": { "type": "integer", "description": "Send the last command of this pane and its output with the question." },
+                "timeout": timeout
+            }, "required": ["text"] }
+        },
+        {
             "name": "open_scene",
             "description": "Open a Braille scene: a pane that you draw into (charts, diagrams, simple pictures). Each cell is 2x4 dots. Returns the pane id, the size in dots, and the aspect (dot height / width). For a chart of numbers use plot.",
             "inputSchema": { "type": "object", "properties": {
@@ -399,6 +415,22 @@ impl<B: Backend> Server<B> {
                     .call("close", pick(&[("pane", "pane"), ("force", "force")]))
                     .map(|_| "Closed.".to_owned())
             }),
+            "ai_read" => self
+                .backend
+                .call("ai_read", pick(&[("last", "last")]))
+                .map(|v| crate::show::chat(&v)),
+            "ai_ask" => need("text").and_then(|_| {
+                let mut params = pick(&[("text", "text"), ("pane", "pane")]);
+                params["wait"] = json!(true);
+                if let Some(ms) = seconds("timeout") {
+                    params["timeout_ms"] = json!(ms);
+                }
+                let v = self.backend.call("ai_ask", params)?;
+                match v["error"].as_str() {
+                    Some(error) => Err(format!("The AI answer failed: {error}")),
+                    None => Ok(v["text"].as_str().unwrap_or("").to_owned()),
+                }
+            }),
             "set_title" => need("title").and_then(|_| {
                 self.backend
                     .call("set_title", pick(&[("pane", "pane"), ("title", "title")]))
@@ -587,6 +619,17 @@ mod tests {
                 }),
                 "get_text" => json!({ "pane": 1, "text": "hello\nworld" }),
                 "send_message" => json!({ "id": 3 }),
+                "ai_read" => json!({
+                    "turns": [
+                        { "role": "user", "text": "what is ls?", "streaming": false },
+                        { "role": "ai", "text": "It lists files.", "streaming": false }
+                    ],
+                    "input": "", "context": [], "running": false
+                }),
+                "ai_ask" if params["text"] == "fail" => {
+                    json!({ "id": 2, "text": "", "error": "no API key" })
+                }
+                "ai_ask" => json!({ "id": 1, "text": "Use dir." }),
                 "screenshot" => {
                     json!({ "pane": 4, "path": "T:/fterm-shot-4.png", "width": 640, "height": 300 })
                 }
@@ -738,6 +781,8 @@ mod tests {
             "draw_scene",
             "plot",
             "screenshot_pane",
+            "ai_read",
+            "ai_ask",
         ] {
             assert!(names.contains(&name), "{name}");
         }
@@ -777,6 +822,43 @@ mod tests {
             text["text"].as_str().unwrap().contains("fterm-shot-4.png"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn the_ai_panel() {
+        let mut s = server();
+        let result = tool(&mut s, "ai_read", json!({ "last": 2 }));
+        assert_eq!(s.backend.calls[0], ("ai_read".into(), json!({ "last": 2 })));
+        assert_eq!(
+            result["content"][0]["text"],
+            json!("> what is ls?\nIt lists files.\n\n")
+        );
+
+        let result = tool(
+            &mut s,
+            "ai_ask",
+            json!({ "text": "and on Windows?", "pane": 3, "timeout": 60 }),
+        );
+        assert_eq!(result["isError"], json!(false));
+        assert_eq!(result["content"][0]["text"], json!("Use dir."));
+        assert_eq!(
+            s.backend.calls[1],
+            (
+                "ai_ask".into(),
+                json!({ "text": "and on Windows?", "pane": 3, "wait": true, "timeout_ms": 60_000 })
+            ),
+            "the tool always waits for the answer"
+        );
+
+        let result = tool(&mut s, "ai_ask", json!({ "text": "fail" }));
+        assert_eq!(result["isError"], json!(true));
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("no API key")
+        );
+        assert_eq!(tool(&mut s, "ai_ask", json!({}))["isError"], json!(true));
     }
 
     #[test]

@@ -59,6 +59,21 @@ on_ai_request = function(r)
 end,
 ```
 
+## Agents and the AI panel
+Agents and scripts can use the chat through the API (see [API.md](API.md) and [MCP.md](MCP.md)):
+
+- `ai_read` (`ftermctl ai read`) reads the chat. `ai_input` (`ftermctl ai input TEXT`) puts a text into the
+  input; you read it and press Enter yourself. `ai_stop` and `ai_clear` stop the answer and start a new chat.
+- `ai_ask` (`ftermctl ai ask --wait TEXT`, the MCP tool `ai_ask`) asks a question and gives the answer.
+  It uses your key, so it is **off** until you turn it on:
+
+  ```lua
+  ai = { api_access = true },
+  ```
+
+The panel does not open for an agent. Its question shows `(from <name>)` in the chat, and `on_ai_request`
+sees it too. The first time an agent reads the chat, fterm asks you (as for the panes of others).
+
 ## The provider and the key
 The default is **Anthropic** with **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`): fast and cheap.
 

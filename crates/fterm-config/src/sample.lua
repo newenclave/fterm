@@ -81,6 +81,7 @@ return {
       ollama = { model = "qwen2.5-coder:1.5b" },  -- local; first run: ollama pull qwen2.5-coder:1.5b
     },
     -- system = "Answer in Russian.",
+    -- api_access = true,  -- agents (ftermctl, MCP) may ask questions here; it uses your key
   },
 
   -- An agent (for example Claude Code) changed its state. Return false = no normal notification.

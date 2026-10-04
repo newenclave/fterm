@@ -65,6 +65,40 @@ pub fn messages(answer: &Value) -> String {
     out
 }
 
+/// `ai_read` as text: `> ` before the lines of a question, the answers as they are.
+pub fn chat(answer: &Value) -> String {
+    let turns = answer["turns"].as_array().cloned().unwrap_or_default();
+    let mut out = String::new();
+    if turns.is_empty() {
+        out.push_str("the chat is empty\n");
+    }
+    for turn in turns {
+        let text = turn["text"].as_str().unwrap_or("");
+        if turn["role"] == "user" {
+            for line in text.lines() {
+                out.push_str(&format!("> {line}\n"));
+            }
+        } else {
+            out.push_str(text);
+            if !text.is_empty() && !text.ends_with('\n') {
+                out.push('\n');
+            }
+            if turn["streaming"] == true {
+                out.push_str("(the answer is coming)\n");
+            }
+            if let Some(error) = turn["error"].as_str() {
+                out.push_str(&format!("(failed: {error})\n"));
+            }
+            // A blank line after each question and its answer.
+            out.push('\n');
+        }
+    }
+    if let Some(input) = answer["input"].as_str().filter(|i| !i.is_empty()) {
+        out.push_str(&format!("input: {input}\n"));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -117,5 +151,32 @@ mod tests {
         .join("\n");
         assert_eq!(messages(&answer), expected);
         assert_eq!(messages(&json!({ "messages": [] })), "no messages\n");
+    }
+
+    #[test]
+    fn the_chat_as_text() {
+        let answer = json!({
+            "turns": [
+                { "role": "user", "text": "what is ls?\n(from claude)", "streaming": false },
+                { "role": "ai", "text": "It lists files.", "streaming": false },
+                { "role": "user", "text": "and dir?", "streaming": false },
+                { "role": "ai", "text": "", "streaming": false, "error": "stopped" }
+            ],
+            "input": "draft", "context": [], "running": false
+        });
+        let expected = [
+            "> what is ls?",
+            "> (from claude)",
+            "It lists files.",
+            "",
+            "> and dir?",
+            "(failed: stopped)",
+            "",
+            "input: draft",
+            "",
+        ]
+        .join("\n");
+        assert_eq!(chat(&answer), expected);
+        assert_eq!(chat(&json!({ "turns": [] })), "the chat is empty\n");
     }
 }
