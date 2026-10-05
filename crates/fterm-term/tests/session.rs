@@ -512,3 +512,39 @@ fn resizing_does_not_lose_the_scrollback() {
         .count();
     assert!(kept >= 65, "only {kept} of 100 lines are left:\n{text}");
 }
+
+#[cfg(windows)]
+#[test]
+fn a_taller_window_keeps_the_input_on_the_prompt_line() {
+    // PSReadLine draws the input at an absolute row of ConPTY. When the grid gets taller, our rows
+    // must stay where ConPTY has them, or the input goes to the row above the prompt.
+    let (session, _rx) = spawn(SessionOptions::command(
+        "powershell.exe",
+        ["-NoLogo", "-NoProfile"],
+    ));
+    let end = std::time::Instant::now() + timeout();
+    while !session.screen_text().contains("PS ") {
+        assert!(std::time::Instant::now() < end, "no prompt");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    wait_quiet(&session);
+    for (cols, rows) in [(84, 26), (88, 28), (90, 30)] {
+        session.resize(GridSize::new(cols, rows), (8, 16));
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    wait_quiet(&session);
+    // PSReadLine moves to its row with CSI H from the third letter on.
+    for c in ["c", "l", "a", "s", "s"] {
+        session.write(c.as_bytes().to_vec());
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    wait_quiet(&session);
+    let screen = session.screen_text();
+    session.write(b"\x1b\rexit\r".to_vec());
+    let lines: Vec<&str> = screen.lines().filter(|l| l.contains("cl")).collect();
+    assert_eq!(lines.len(), 1, "the input is on two rows:\n{screen}");
+    assert!(
+        lines[0].starts_with("PS ") && lines[0].ends_with("> class"),
+        "the input is not on the prompt line:\n{screen}"
+    );
+}

@@ -240,7 +240,11 @@ impl Session {
             r.resize(size.columns, size.rows, std::time::Instant::now())
         });
         *self.size.lock().unwrap() = size;
-        self.term.lock().resize(size);
+        if cfg!(windows) {
+            resize_like_conpty(&mut self.term.lock(), size);
+        } else {
+            self.term.lock().resize(size);
+        }
         if let Some(notifier) = &mut *self.notifier.lock().unwrap() {
             notifier.on_resize(window_size(size, cell));
         }
@@ -391,6 +395,30 @@ fn find_in_path(program: &str) -> bool {
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }
 
+/// Resizes `term` the way ConPTY resizes its own buffer. A taller alacritty grid pulls lines down
+/// from the history; ConPTY has no history and adds rows at the bottom. With
+/// `PSEUDOCONSOLE_RESIZE_QUIRK` ConPTY does not draw its screen again, so programs that move to an
+/// absolute row (PSReadLine) would write over the wrong row. So the pulled lines go back up.
+pub fn resize_like_conpty<T: EventListener>(term: &mut Term<T>, size: GridSize) {
+    use alacritty_terminal::term::TermMode;
+    use alacritty_terminal::vte::ansi::Handler;
+    let added = size.rows.saturating_sub(term.screen_lines());
+    // The alternate screen has no history, so nothing is pulled there.
+    let pulled = if term.mode().contains(TermMode::ALT_SCREEN) {
+        0
+    } else {
+        added.min(term.grid().history_size())
+    };
+    term.resize(size);
+    if pulled > 0 {
+        term.scroll_up(pulled);
+        term.move_up(pulled);
+        // The cursor that DECSC saved went down too.
+        let saved = &mut term.grid_mut().saved_cursor.point.line;
+        *saved = Line((saved.0 - pulled as i32).max(0));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alacritty_terminal::event::VoidListener;
@@ -399,6 +427,59 @@ mod tests {
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
     use super::*;
+
+    fn feed(term: &mut Term<VoidListener>, text: &str) {
+        Processor::<StdSyncHandler>::new().advance(term, text.as_bytes());
+    }
+
+    #[test]
+    fn a_taller_window_keeps_the_rows_where_conpty_has_them() {
+        // ConPTY clears and draws the prompt at row 1. alacritty puts one empty line into the history
+        // for that clear, and a taller grid pulls history lines down; ConPTY has no history and adds
+        // rows at the bottom. Then PSReadLine draws the input with `CSI 1;26 H` over the wrong row.
+        let mut term = Term::new(term_config(), &GridSize::new(80, 24), VoidListener);
+        feed(&mut term, "\x1b[2J\x1b[m\x1b[HPS C:\\work\\github\\fterm> ");
+        resize_like_conpty(&mut term, GridSize::new(90, 30));
+        assert_eq!(term.grid().cursor.point, Point::new(Line(0), Column(25)));
+        feed(&mut term, "\x1b[1;26Hcla");
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'P');
+        assert_eq!(term.grid()[Line(0)][Column(25)].c, 'c');
+        assert!(
+            term.grid()[Line(1)][Column(25)].c == ' ',
+            "no input on the next row"
+        );
+    }
+
+    #[test]
+    fn a_taller_window_keeps_the_saved_cursor_too() {
+        let mut term = Term::new(term_config(), &GridSize::new(80, 24), VoidListener);
+        feed(&mut term, "\x1b[2J\x1b[HPS> \x1b7");
+        resize_like_conpty(&mut term, GridSize::new(80, 30));
+        feed(&mut term, "\x1b[5;1H\x1b8");
+        assert_eq!(term.grid().cursor.point, Point::new(Line(0), Column(4)));
+    }
+
+    #[test]
+    fn a_taller_window_after_long_output_keeps_the_history() {
+        // 40 lines in a grid of 10: 30 go to the history. A taller grid must not pull them down,
+        // and they must stay in the history.
+        let mut term = Term::new(term_config(), &GridSize::new(40, 10), VoidListener);
+        let lines: String = (1..=40).map(|n| format!("line-{n}\r\n")).collect();
+        feed(&mut term, &lines);
+        let before = term.grid().cursor.point.line;
+        let history = term.grid().history_size();
+        resize_like_conpty(&mut term, GridSize::new(40, 16));
+        assert_eq!(term.grid().cursor.point.line, before);
+        assert_eq!(term.grid().history_size(), history);
+        assert_eq!(
+            term.grid()[Line(0)][Column(5)].c,
+            '3',
+            "line-32 is still the top row"
+        );
+        // Smaller and wider work as before.
+        resize_like_conpty(&mut term, GridSize::new(60, 8));
+        assert_eq!(term.screen_lines(), 8);
+    }
 
     /// Double click on column `col` of line 0, and return the selected word.
     fn double_click(text: &str, col: usize) -> String {

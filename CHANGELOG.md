@@ -20,6 +20,8 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   dim) of the text, as the user sees it. So an agent can find red errors, or what is selected in a menu.
 
 ### Fixed
+- On Windows, after you made the window taller, PowerShell wrote what you typed one row (or more) above
+  the prompt, and the old text stayed there. The rows now stay where ConPTY has them.
 - A test of the data folder failed on Linux and macOS (it used a Windows path).
 
 ## [0.1.0] - 2026-10-02
