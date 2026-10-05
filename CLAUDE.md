@@ -62,9 +62,9 @@ Key flows that span files:
   through an `EventLoopProxy`; the window thread draws only on change. Events carry a `PaneId`
   (`UserEvent::Term(PaneId, TermEvent)`). Use `Session::with_term` / `with_term_mut`; change the selection
   only through `StickySelection::set`.
-- **OSC sequences** alacritty drops (7, 9/99/777, 133, 633;E, and `777;fterm-agent;<state>;<text>`) are
-  pulled out by `fterm-term/src/osc.rs` before the parser and arrive as `TermEvent::Osc`; `fterm/src/agent.rs`
-  and `notify.rs` consume them.
+- **OSC sequences** alacritty drops (7, 9/99/777, 133, 633;E, `777;fterm-agent;<state>;<text>`, and
+  `777;fterm-tab;color;<color>`) are pulled out by `fterm-term/src/osc.rs` before the parser and arrive as
+  `TermEvent::Osc`; the app handles them in `app.rs`, `agent.rs`, and `notify.rs`.
 - **Lua config functions** never change the app directly: `fterm.spawn`, `fterm.send_text`, … queue
   `ApiCall`s that the app runs after the function returns. The config hot-reloads; a broken file keeps the old one.
 - **Adding an API method** touches several places: the method list in `fterm/src/api.rs` (`METHODS`),

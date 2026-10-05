@@ -8,17 +8,23 @@
 | `fterm-mux` | Tabs and the tree of panes in each tab. A pure model. | No |
 | `fterm-config` | The Luau config: settings, colors, profiles, key bindings, Lua functions. | No |
 | `fterm-render` | Font, glyph atlas, tab bar, and drawing with wgpu. | Yes |
+| `fterm-history` | The history of commands and folders (JSON lines files). | No |
+| `fterm-scene` | Braille scenes: a canvas of dots, draw commands, and charts. | No |
+| `fterm-api` | The local API: JSON-RPC over a socket, the server, the client, finding windows, the guide for agents. | No |
+| `fterm-ai` | The AI clients (Anthropic, OpenAI-like) with streamed answers. | No |
 | `fterm` | The app: window, keys, events. It connects the other crates. | Yes |
+| `ftermctl` | A console program: the CLI for the API, and the MCP server (`ftermctl mcp`). | No |
 
 `fterm-term` has no GPU and no window code. So we can test it with real
-processes and real escape codes, and later use it from the CLI and MCP (Phase 7).
+processes and real escape codes.
 
 ## The pty loop
 
 `fterm-term/src/io_loop.rs` is our own pty read and write loop (a port of the alacritty loop).
 - The bytes from the pty go through `osc::Scanner` first, then to the alacritty parser.
   The scanner finds the sequences that alacritty drops: OSC 7 (folder), OSC 9 / 99 / 777 (notifications),
-  OSC 133 (shell integration), and `OSC 777;fterm-agent;<state>;<text>` (agent state). They come as `TermEvent::Osc`.
+  OSC 133 (shell integration), `OSC 777;fterm-agent;<state>;<text>` (agent state), and
+  `OSC 777;fterm-tab;color;<#rrggbb|none>` (tab color). They come as `TermEvent::Osc`.
 - ConPTY passes all these sequences (tested on Windows 11 with a real ConPTY).
 - After the child process ends, the loop reads until the output is quiet (150 ms, at most 2 s),
   and it looks for the exit event after every wait (at most 200 ms). So a command that ends at once
@@ -48,6 +54,9 @@ processes and real escape codes, and later use it from the CLI and MCP (Phase 7)
   A split has a direction (right or down) and a ratio. `Layout` gives the rects of the panes,
   the dividers (for drawing and for the mouse), and the neighbor of a pane (for Alt + arrows).
 - Zoom: `Tab::zoomed` shows one pane in the whole tab area; the tree does not change.
+- Tab color: `Tab::color` (RGB or none). A profile (`tab_color`), Lua (`fterm.set_tab_color`), the API
+  (`set_tab_color`), and the escape sequence `777;fterm-tab;color` all go to `App::set_tab_color`.
+  `tabbar.rs` draws it as a line at the top of the tab, and the session file keeps it.
 - Every pane has its own grid size. After a split, a close, a drag, a zoom, or a window resize,
   `resize_all_panes` sends the new size to every session.
 - The app keeps one `Session` per pane (`PaneId`). Events from a session come with its pane id
@@ -97,10 +106,23 @@ processes and real escape codes, and later use it from the CLI and MCP (Phase 7)
   a named pipe on Windows (only the owner and the system can open it), a unix socket in a 0700 folder elsewhere.
 - The server has a listener thread and one thread per client, so a slow call (`wait_for`) does not stop
   other clients. It knows `subscribe` / `unsubscribe` itself; the app answers all other methods.
+- A client thread sends each call to the event loop (`fterm/src/api.rs`, `UserEvent::Api`) and waits for the
+  answer. Most methods answer at once (`app/api_calls.rs`, `api_dispatch`). The slow ones keep the reply
+  and answer later: `wait_for` (`App::waits`), `screenshot` (at the next frame), and `ai_ask` with `wait`
+  (`App::ai_waits`, at the end of the AI answer). A timer sends a timeout to old waits.
+- Reading or typing into a pane of somebody else, `spawn`, and reading the AI chat need a yes from the user
+  (`access.rs`). `ai_ask` also needs `ai.api_access` in the config: it costs the user's money.
 - Each window writes `instances/<pid>.json` with its socket, and every pane gets `FTERM_SOCKET`.
-  So `fterm cli` and `fterm mcp` find the right window.
-- MCP clients (Claude Code, OpenCode) speak stdio, not pipes: `fterm mcp` is a small process between them
+  So `ftermctl` and `ftermctl mcp` find the right window.
+- MCP clients (Claude Code, OpenCode) speak stdio, not pipes: `ftermctl mcp` is a small process between them
   and the pipe.
+
+## The AI panel
+- `ai_chat.rs` is the model: the turns, the input, the context chips. It has no drawing and no network.
+- `app/ai_calls.rs`: `ai_submit` sends a question. The keyboard (`ai_send`) and the API (`ai_ask`) both use it,
+  so `on_ai_request` sees every question. The answer streams on the thread `fterm-ai` and comes back as
+  `UserEvent::Ai(id, event)`. At its end, `ai_event` sends the API event `ai_answer`.
+- There is one chat in each window. Only one answer runs at a time.
 
 ## Colors
 
