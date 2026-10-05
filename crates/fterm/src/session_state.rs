@@ -38,6 +38,9 @@ pub struct SavedWindow {
 pub struct SavedTab {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// The color of the tab, `#rrggbb`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     /// The active pane: its number in the order of `Layout::panes`.
     pub active: usize,
     pub layout: SavedLayout,
@@ -586,6 +589,7 @@ mod tests {
                 .iter()
                 .map(|cwd| SavedTab {
                     title: None,
+                    color: None,
                     active: 0,
                     layout: SavedLayout::Pane(SavedPane {
                         cwd: Some((*cwd).to_owned()),
@@ -649,6 +653,22 @@ mod tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn a_tab_keeps_its_color() {
+        let old: SavedTab =
+            serde_json::from_str(r#"{"active":0,"layout":{"pane":{"program":"pwsh"}}}"#).unwrap();
+        assert_eq!(old.color, None);
+        let tab = SavedTab {
+            color: Some("#f38ba8".into()),
+            ..old.clone()
+        };
+        let text = serde_json::to_string(&tab).unwrap();
+        assert!(text.contains(r##""color":"#f38ba8""##), "{text}");
+        let back: SavedTab = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.color.as_deref(), Some("#f38ba8"));
+        assert!(!serde_json::to_string(&old).unwrap().contains("color"));
     }
 
     #[test]
@@ -762,11 +782,13 @@ mod tests {
             tabs: vec![
                 SavedTab {
                     title: None,
+                    color: None,
                     active: 0,
                     layout: SavedLayout::Pane(pane(1)),
                 },
                 SavedTab {
                     title: Some("build".into()),
+                    color: Some("#a6e3a1".into()),
                     active: 2,
                     layout: save_layout(&tree(), &|id| pane(id.0)),
                 },

@@ -25,6 +25,8 @@ Panes and tabs:
   spawn [--right|--down] [--profile P] [--cwd DIR] [--pane N]
                                          open a tab (or a split next to pane N); prints the new pane id
   focus N | close N [--force] | zoom [N] | title [--pane N] TEXT
+  tab-color [--pane N] \"#rrggbb\"|none    a color line at the top of the tab of a pane
+                                         (quote the color: # starts a comment in shells)
   panel [events|agents]                  show a panel of the dock (no name = close the dock)
 
 Braille scenes (2x4 dots in each cell):

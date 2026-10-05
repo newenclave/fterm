@@ -11,6 +11,8 @@ use crate::frame::{Instance, KIND_COLOR_GLYPH, KIND_GLYPH, KIND_SOLID, Rect};
 
 /// Space above and below the text, in pixels (physical).
 pub const BAR_PADDING: f32 = 4.0;
+/// The height of the color line at the top of a colored tab.
+pub const TAB_COLOR_LINE: f32 = 3.0;
 /// Tab width limits, in cells.
 pub const MIN_TAB_CELLS: f32 = 8.0;
 pub const MAX_TAB_CELLS: f32 = 30.0;
@@ -164,6 +166,8 @@ pub struct TabBarInput<'a> {
     pub editing: Option<(usize, &'a str)>,
     /// A colored dot before the title of a tab (for example, the agent state). Empty = no dots.
     pub badges: &'a [Option<Rgb>],
+    /// The color of each tab: a line at its top. Empty = no colors.
+    pub colors: &'a [Option<Rgb>],
     /// A colored dot and a short text at the right end (for example, unread events). Give `layout_tabs`
     /// the width without `corner_rect`, so the tabs do not cover it.
     pub corner: Option<(&'a str, Rgb)>,
@@ -189,11 +193,20 @@ pub fn build_tab_bar(
         let rect = tab.rect;
         let active = i == input.active;
         let hovered = matches!(input.hover, Hit::Tab(h) | Hit::Close(h) if h == i);
+        let tab_color = input.colors.get(i).copied().flatten();
         if active {
             quads.push(solid(rect, ACTIVE_BG));
-            quads.push(solid(Rect::new(rect.x, 0.0, rect.width, 2.0), ACCENT));
+            if tab_color.is_none() {
+                quads.push(solid(Rect::new(rect.x, 0.0, rect.width, 2.0), ACCENT));
+            }
         } else if hovered {
             quads.push(solid(rect, HOVER_BG));
+        }
+        if let Some(color) = tab_color {
+            quads.push(solid(
+                Rect::new(rect.x, 0.0, rect.width, TAB_COLOR_LINE),
+                color,
+            ));
         }
 
         // Title: 1 cell of space on the left, the × button on the right.
@@ -447,6 +460,7 @@ mod tests {
             hover,
             editing,
             badges: &[],
+            colors: &[],
             corner: None,
             cell: CELL,
             width: 1000.0,
@@ -521,6 +535,7 @@ mod tests {
             hover: Hit::None,
             editing: None,
             badges: &badges,
+            colors: &[],
             corner: None,
             cell: CELL,
             width: 1000.0,
@@ -540,6 +555,51 @@ mod tests {
             .find(|x| *x > 0.0 && *x < 3.0 * CELL.width)
             .unwrap();
         assert_eq!(second_tab_title - first_tab_title, CELL.width);
+    }
+
+    #[test]
+    fn a_colored_tab_has_a_line_at_the_top() {
+        let layout = layout_tabs(3, 1000.0, CELL);
+        let titles = vec!["a".to_owned(), "b".to_owned(), "c".to_owned()];
+        let red = Rgb {
+            r: 243,
+            g: 139,
+            b: 168,
+        };
+        let green = Rgb {
+            r: 166,
+            g: 227,
+            b: 161,
+        };
+        let colors = [Some(red), None, Some(green)];
+        let input = TabBarInput {
+            layout: &layout,
+            titles: &titles,
+            active: 0,
+            hover: Hit::None,
+            editing: None,
+            badges: &[],
+            colors: &colors,
+            corner: None,
+            cell: CELL,
+            width: 1000.0,
+        };
+        let quads = build_tab_bar(&input, &mut |_| Ok(Some(GLYPH))).unwrap();
+        // An inactive tab: a line of its color across its top.
+        let tab2 = layout.tabs[2].rect;
+        assert_eq!(
+            solid_with(&quads, green),
+            vec![[tab2.x, 0.0, tab2.width, TAB_COLOR_LINE]]
+        );
+        // The active tab: its color takes the place of the accent line.
+        let tab0 = layout.tabs[0].rect;
+        assert_eq!(
+            solid_with(&quads, red),
+            vec![[tab0.x, 0.0, tab0.width, TAB_COLOR_LINE]]
+        );
+        assert!(solid_with(&quads, ACCENT).is_empty());
+        // The text stays as it was.
+        assert!(solid_with(&quads, ACTIVE_BG).len() == 1);
     }
 
     #[test]
@@ -565,6 +625,7 @@ mod tests {
             hover: Hit::None,
             editing: None,
             badges: &[],
+            colors: &[],
             corner: Some(("3", pink)),
             cell: CELL,
             width: 1000.0,

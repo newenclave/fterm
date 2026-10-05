@@ -1562,7 +1562,10 @@ impl App {
         let running = self.running.as_ref().expect("the window is open");
         let size = running.grid_for(running.tab_area());
         let id = self.spawn_pane(size, profile)?;
-        self.running.as_mut().unwrap().mux.new_tab(id);
+        let color = self.profile(profile).and_then(|p| p.tab_color);
+        let running = self.running.as_mut().unwrap();
+        let tab = running.mux.new_tab(id);
+        running.mux.set_color(tab, color);
         self.tab_changed();
         Ok(id)
     }
@@ -1927,6 +1930,14 @@ impl App {
             }
             ApiCall::Copy(text) => self.copy_text(text),
             ApiCall::Action(builtin) => self.run_builtin(event_loop, builtin),
+            ApiCall::SetTabColor { pane, color } => {
+                let pane = pane
+                    .map(PaneId)
+                    .or_else(|| self.running.as_ref().and_then(|r| r.mux.active_pane()));
+                if let Some(pane) = pane {
+                    self.set_tab_color(pane, color);
+                }
+            }
         }
     }
 
@@ -3324,7 +3335,7 @@ impl App {
                 .dock
                 .select(selected, dock_rows.len(), layout.visible_rows());
         }
-        let (titles, badges) = match &mut self.running {
+        let (titles, badges, tab_colors) = match &mut self.running {
             Some(running) => {
                 if focused {
                     for id in running.visible_panes() {
@@ -3340,7 +3351,18 @@ impl App {
                     .into_iter()
                     .map(|kind| kind.map(badge_color))
                     .collect();
-                (running.tab_titles(), badges)
+                let tab_colors: Vec<_> =
+                    running
+                        .mux
+                        .tabs()
+                        .iter()
+                        .map(|t| {
+                            t.color.map(|[r, g, b]| {
+                                fterm_term::alacritty_terminal::vte::ansi::Rgb { r, g, b }
+                            })
+                        })
+                        .collect();
+                (running.tab_titles(), badges, tab_colors)
             }
             None => return,
         };
@@ -3479,6 +3501,7 @@ impl App {
                     hover,
                     editing,
                     badges: &badges,
+                    colors: &tab_colors,
                     corner: corner
                         .as_deref()
                         .map(|text| (text, level_color(Level::Attention))),
@@ -3776,6 +3799,14 @@ impl ApplicationHandler<UserEvent> for App {
                     self.notify(Some(pane), &title, body, Level::Info, Source::Terminal);
                 } else if let OscEvent::Agent { state, message } = &osc {
                     self.agent_state(event_loop, pane, state, message);
+                } else if let OscEvent::TabColor(text) = &osc {
+                    // A bad color from a program is not worth a toast: it is only logged.
+                    match fterm_config::colors::tab_color(text) {
+                        Ok(color) => {
+                            self.set_tab_color(pane, color);
+                        }
+                        Err(err) => tracing::warn!(pane = pane.0, "tab color: {err}"),
+                    }
                 } else if let Some(ShellEvent::CommandDone {
                     exit,
                     took,

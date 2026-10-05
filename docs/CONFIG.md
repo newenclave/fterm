@@ -95,6 +95,7 @@ profiles = {
   { name = "Ollama", command = "ollama", args = { "run", "llama3.2" } },
   { name = "Build", command = "cmd.exe", args = { "/k", "cargo watch" }, env = { RUST_LOG = "debug" } },
   { name = "Ubuntu", wsl = "Ubuntu" },   -- a WSL distro: no command is needed
+  { name = "Prod", command = "ssh", args = { "prod-server" }, tab_color = "#f38ba8" },
 }
 ```
 
@@ -106,6 +107,7 @@ profiles = {
 | `cwd` | The start folder. `~` is your home folder. |
 | `env` | More environment variables. |
 | `wsl` | A WSL distro (for example `"Ubuntu"`). fterm starts `wsl.exe -d Ubuntu --cd ~` and knows that the pane has Linux folders. |
+| `tab_color` | A color (`#rrggbb`) for the tabs that this profile opens: a line at the top of the tab (see [Tab colors](#tab-colors)). |
 
 With no `profiles` in the config, fterm finds them itself: PowerShell 7, Windows PowerShell, cmd,
 Git Bash, one profile for each WSL distro (from `wsl.exe -l -q`; on Linux and macOS: your shell, bash, zsh, fish),
@@ -162,6 +164,7 @@ A function gets an object `fterm` with these functions:
 | `fterm.send_text("text\r")` | Type text into the active pane (`\r` = Enter). |
 | `fterm.notify("text")` | Show a short message. |
 | `fterm.copy("text")` | Put text into the clipboard. |
+| `fterm.set_tab_color("#f38ba8", pane)` | Give the tab of a pane a color (no `pane` = the active pane; `"none"` = no color). |
 | `fterm.action("zoom")` | Run an action from the list above. |
 
 ```lua
@@ -283,8 +286,29 @@ on_agent = function(a, fterm)
     fterm.notify({ title = a.name .. " is ready", level = "success" })
     return false                                            -- my notification, not the normal one
   end
+  -- The tab of the agent shows its state: yellow while it waits for you, none when it works again.
+  fterm.set_tab_color(a.state == "waiting" and "#f9e2af" or "none", a.pane)
 end,
 ```
+
+## Tab colors
+A tab can have a color: a line at the top of the tab, so you see it from other tabs. The text of the tab
+does not change. On the active tab, the color takes the place of the usual accent line.
+
+Who can set it:
+- **A profile:** `tab_color = "#f38ba8"` (see [Profiles](#profiles)).
+- **Lua:** `fterm.set_tab_color("#f38ba8", pane)` in a key, a command, or an event function (for example `on_agent`).
+- **Agents and scripts:** the API method `set_tab_color`, `ftermctl tab-color --pane N #f38ba8`,
+  and the MCP tool `set_tab_color` (see [API.md](API.md) and [MCP.md](MCP.md)).
+- **Any program in the pane**, also over SSH, with an escape sequence:
+  ```sh
+  printf '\033]777;fterm-tab;color;#a6e3a1\007'     # bash, zsh
+  ```
+  ```powershell
+  [Console]::Write([char]27 + "]777;fterm-tab;color;#a6e3a1" + [char]7)
+  ```
+
+A color is `#rrggbb` or `#rgb`. `none` takes the color away. The colors are saved with the session.
 
 ## History
 fterm saves the commands that you run and the folders where you were (it needs shell integration, see below).

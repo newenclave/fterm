@@ -496,6 +496,11 @@ pub enum ApiCall {
     },
     Copy(String),
     Action(BuiltinAction),
+    /// A color for the tab of a pane (`None` = the active pane); `color: None` = no color.
+    SetTabColor {
+        pane: Option<u64>,
+        color: Option<[u8; 3]>,
+    },
 }
 
 /// A loaded config and its Lua state (Lua functions in the config need it).
@@ -856,6 +861,15 @@ fn make_api(lua: &Lua, queue: &Rc<RefCell<Vec<ApiCall>>>) -> mlua::Result<Table>
                 }
             };
             q.borrow_mut().push(call);
+            Ok(())
+        })?,
+    )?;
+    let q = queue.clone();
+    api.set(
+        "set_tab_color",
+        lua.create_function(move |_, (color, pane): (String, Option<u64>)| {
+            let color = crate::colors::tab_color(&color).map_err(mlua::Error::runtime)?;
+            q.borrow_mut().push(ApiCall::SetTabColor { pane, color });
             Ok(())
         })?,
     )?;
@@ -1484,6 +1498,12 @@ fn profile(table: &Table, path: &str) -> Result<Profile, String> {
     }
     let cwd = string_field(table, "cwd", &format!("{path}.cwd"))?
         .map(|dir| expand_home(&dir, home_dir().as_deref()));
+    let tab_color = match string_field(table, "tab_color", &format!("{path}.tab_color"))? {
+        Some(text) => {
+            crate::colors::tab_color(&text).map_err(|err| format!("{path}.tab_color: {err}"))?
+        }
+        None => None,
+    };
     let mut env = Vec::new();
     if let Some(env_table) = table_field(table, "env", &format!("{path}.env"))? {
         for pair in env_table.pairs::<String, Value>() {
@@ -1511,6 +1531,7 @@ fn profile(table: &Table, path: &str) -> Result<Profile, String> {
         cwd,
         env,
         wsl,
+        tab_color,
     })
 }
 
@@ -1815,6 +1836,46 @@ mod tests {
     }
 
     #[test]
+    fn lua_functions_can_color_a_tab() {
+        let loaded = load(
+            r##"
+            return { keys = { { key = "f6", action = function(fterm)
+              fterm.set_tab_color("#f38ba8")
+              fterm.set_tab_color("none", 4)
+            end }, { key = "f7", action = function(fterm)
+              fterm.set_tab_color("red")
+            end } } }
+            "##,
+        );
+        let get = |key: &str| {
+            let Some(Action::Lua(index)) = loaded
+                .config
+                .keys
+                .get(&KeyChord::parse(key).unwrap())
+                .cloned()
+            else {
+                panic!("no {key}");
+            };
+            loaded.call(index)
+        };
+        assert_eq!(
+            get("f6").unwrap(),
+            [
+                ApiCall::SetTabColor {
+                    pane: None,
+                    color: Some([0xf3, 0x8b, 0xa8])
+                },
+                ApiCall::SetTabColor {
+                    pane: Some(4),
+                    color: None
+                },
+            ]
+        );
+        let err = get("f7").unwrap_err();
+        assert!(err.contains("#rrggbb"), "{err}");
+    }
+
+    #[test]
     fn lua_functions_can_use_the_whole_api() {
         let loaded = load(
             r#"
@@ -1892,6 +1953,23 @@ mod tests {
         .config;
         assert_eq!(config.font_size, 20.0);
         assert_eq!(config.profiles.len(), 2);
+    }
+
+    #[test]
+    fn a_profile_can_color_its_tabs() {
+        let loaded = load(
+            r##"return { profiles = { { name = "Prod", command = "ssh", tab_color = "#f38ba8" } } }"##,
+        );
+        assert_eq!(
+            loaded.config.profiles[0].tab_color,
+            Some([0xf3, 0x8b, 0xa8])
+        );
+        let plain = load(r#"return { profiles = { { name = "x", command = "cmd.exe" } } }"#);
+        assert_eq!(plain.config.profiles[0].tab_color, None);
+        let bad = error(
+            r#"return { profiles = { { name = "x", command = "cmd.exe", tab_color = "red" } } }"#,
+        );
+        assert!(bad.contains("profiles[1].tab_color"), "{bad}");
     }
 
     #[test]

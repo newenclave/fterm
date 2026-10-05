@@ -307,6 +307,19 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             w.pane_into(&mut params)?;
             call("screenshot", params)
         }
+        "tab-color" => {
+            let w = read(&["pane"], &[])?;
+            let color = w.text();
+            if color.trim().is_empty() {
+                return Err(
+                    "tab-color needs a color (#rrggbb) or `none`; put the color in quotes: # starts a comment in shells"
+                        .to_owned(),
+                );
+            }
+            let mut params = json!({ "color": color.trim() });
+            w.pane_into(&mut params)?;
+            call("set_tab_color", params)
+        }
         "title" => {
             let w = read(&["pane"], &[])?;
             let mut params = json!({ "title": w.text() });
@@ -490,6 +503,22 @@ mod tests {
             Command::DrawStdin { pane: Some(4) },
             "`-` = the commands come on stdin"
         );
+    }
+
+    #[test]
+    fn tab_colors() {
+        assert_eq!(
+            call("tab-color --pane 3 #f38ba8"),
+            (
+                "set_tab_color".into(),
+                json!({"pane": 3, "color": "#f38ba8"})
+            )
+        );
+        assert_eq!(
+            call("tab-color none"),
+            ("set_tab_color".into(), json!({"color": "none"}))
+        );
+        assert!(cli("tab-color").is_err(), "a color is needed");
     }
 
     #[test]

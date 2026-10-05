@@ -14,6 +14,8 @@ pub enum OscEvent {
     Prompt(PromptMark),
     /// An agent state from a hook: OSC 777;fterm-agent;<state>;<message>.
     Agent { state: String, message: String },
+    /// A color for the tab of the pane: OSC 777;fterm-tab;color;<#rrggbb or none>.
+    TabColor(String),
     /// The command line that the user typed (OSC 633;E, the VS Code format). It comes before 133;C.
     CommandLine(String),
     /// Not from the shell: the pty loop adds it right after 133;B. The place of the cursor at that moment,
@@ -153,6 +155,10 @@ fn parse(payload: &str) -> Option<OscEvent> {
                     state: parts.next()?.to_owned(),
                     message: parts.next().unwrap_or_default().to_owned(),
                 }),
+                "fterm-tab" => match parts.next()? {
+                    "color" => Some(OscEvent::TabColor(parts.next()?.trim().to_owned())),
+                    _ => None,
+                },
                 _ => None,
             }
         }
@@ -348,6 +354,19 @@ mod tests {
             scan(&[b"\x1b]99;i=1:d=0;Hello\x1b\\"]),
             [notify(None, "Hello")]
         );
+    }
+
+    #[test]
+    fn tab_color() {
+        assert_eq!(
+            scan(&[b"\x1b]777;fterm-tab;color;#f38ba8\x07"]),
+            [OscEvent::TabColor("#f38ba8".into())]
+        );
+        assert_eq!(
+            scan(&[b"\x1b]777;fterm-tab;color;none\x1b\\"]),
+            [OscEvent::TabColor("none".into())]
+        );
+        assert_eq!(scan(&[b"\x1b]777;fterm-tab;size;9\x07"]), []);
     }
 
     #[test]

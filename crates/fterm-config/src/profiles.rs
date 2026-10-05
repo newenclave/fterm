@@ -12,6 +12,8 @@ pub struct Profile {
     pub env: Vec<(String, String)>,
     /// The WSL distro of the profile (its panes have Linux folders).
     pub wsl: Option<String>,
+    /// The color of the tabs that this profile opens.
+    pub tab_color: Option<[u8; 3]>,
 }
 
 impl Profile {
@@ -23,6 +25,7 @@ impl Profile {
             cwd: None,
             env: Vec::new(),
             wsl: None,
+            tab_color: None,
         }
     }
 }

@@ -32,6 +32,7 @@ pub const METHODS: &[&str] = &[
     "scene_open",
     "scene_draw",
     "screenshot",
+    "set_tab_color",
     "ai_read",
     "ai_ask",
     "ai_input",
@@ -176,6 +177,22 @@ pub fn place_param(params: &Value) -> Result<SpawnWhere, RpcError> {
     }
 }
 
+/// `color` of `set_tab_color`: `#rrggbb` or `#rgb`, or `"none"` / `null` for no color.
+pub fn tab_color_param(params: &Value) -> Result<Option<[u8; 3]>, RpcError> {
+    match params.get("color") {
+        None => Err(RpcError::invalid_params(
+            "give `color`: #rrggbb, or \"none\" for no color",
+        )),
+        Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => {
+            fterm_config::colors::tab_color(text).map_err(RpcError::invalid_params)
+        }
+        Some(_) => Err(RpcError::invalid_params(
+            "`color` must be a string like \"#f38ba8\"",
+        )),
+    }
+}
+
 /// Where a screenshot of `pane` goes: `path` (a .png file), else a file in the temp folder.
 pub fn shot_path(
     params: &Value,
@@ -250,6 +267,24 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_tab_color() {
+        assert_eq!(
+            tab_color_param(&json!({"color": "#f38ba8"})).unwrap(),
+            Some([0xf3, 0x8b, 0xa8])
+        );
+        assert_eq!(
+            tab_color_param(&json!({"color": "#fa0"})).unwrap(),
+            Some([0xff, 0xaa, 0x00])
+        );
+        // No color again.
+        assert_eq!(tab_color_param(&json!({"color": "none"})).unwrap(), None);
+        assert_eq!(tab_color_param(&json!({"color": null})).unwrap(), None);
+        assert!(tab_color_param(&json!({})).is_err(), "say the color");
+        assert!(tab_color_param(&json!({"color": "red"})).is_err());
+        assert!(tab_color_param(&json!({"color": 5})).is_err());
+    }
 
     #[test]
     fn where_a_screenshot_goes() {

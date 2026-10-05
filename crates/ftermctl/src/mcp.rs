@@ -156,6 +156,14 @@ pub fn tools() -> Value {
             }, "required": ["title"] }
         },
         {
+            "name": "set_tab_color",
+            "description": "Give the tab of a pane a color: a line at the top of the tab, so the user sees it from other tabs. For example red for failed tests, green when done. \"none\" takes the color away.",
+            "inputSchema": { "type": "object", "properties": {
+                "pane": pane,
+                "color": { "type": "string", "description": "#rrggbb (or #rgb), or \"none\"." }
+            }, "required": ["color"] }
+        },
+        {
             "name": "screenshot_pane",
             "description": "Take a picture (PNG) of a pane, as the user sees it: colors, scenes, the layout. Use it to check what you drew or how a program looks. The pane must be on the screen (in the active tab).",
             "inputSchema": { "type": "object", "properties": {
@@ -430,6 +438,14 @@ impl<B: Backend> Server<B> {
                     Some(error) => Err(format!("The AI answer failed: {error}")),
                     None => Ok(v["text"].as_str().unwrap_or("").to_owned()),
                 }
+            }),
+            "set_tab_color" => need("color").and_then(|_| {
+                self.backend
+                    .call(
+                        "set_tab_color",
+                        pick(&[("pane", "pane"), ("color", "color")]),
+                    )
+                    .map(|_| "Done.".to_owned())
             }),
             "set_title" => need("title").and_then(|_| {
                 self.backend
@@ -783,6 +799,7 @@ mod tests {
             "screenshot_pane",
             "ai_read",
             "ai_ask",
+            "set_tab_color",
         ] {
             assert!(names.contains(&name), "{name}");
         }
@@ -792,6 +809,26 @@ mod tests {
         }
         let run = tools.iter().find(|t| t["name"] == "run_command").unwrap();
         assert_eq!(run["inputSchema"]["required"], json!(["command"]));
+    }
+
+    #[test]
+    fn a_tab_color() {
+        let mut s = server();
+        let result = tool(
+            &mut s,
+            "set_tab_color",
+            json!({ "pane": 2, "color": "#a6e3a1" }),
+        );
+        assert_eq!(result["isError"], json!(false), "{result}");
+        assert_eq!(
+            s.backend.calls[0],
+            (
+                "set_tab_color".into(),
+                json!({ "pane": 2, "color": "#a6e3a1" })
+            )
+        );
+        let result = tool(&mut s, "set_tab_color", json!({ "pane": 2 }));
+        assert_eq!(result["isError"], json!(true), "the color is needed");
     }
 
     #[test]

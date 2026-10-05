@@ -14,6 +14,10 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 - **Screenshots of panes.** The API method `screenshot`, `ftermctl screenshot [--pane N] [FILE.png]`,
   and the MCP tool `screenshot_pane`. An agent gets the PNG as a picture, so it can see what it drew in a
   scene, or how a program looks. It works when the window is under other windows too.
+- **Tab colors.** A tab can have a color line at its top, so you see it from other tabs. A profile
+  (`tab_color`), Lua (`fterm.set_tab_color`), agents and scripts (`set_tab_color`, `ftermctl tab-color`, the
+  MCP tool `set_tab_color`), and any program (`ESC ] 777 ; fterm-tab ; color ; #rrggbb BEL`) can set it.
+  It is saved with the session.
 - **Full screen** with no window frame: Alt + Enter (the action `toggle_fullscreen`), like WezTerm.
 - **Text with colors and styles.** `get_text` with `styled: true`, `ftermctl get-text --styled`, and
   `read_pane` with `styled` give the colors (`#rrggbb`) and the styles (bold, italic, underline, strike,

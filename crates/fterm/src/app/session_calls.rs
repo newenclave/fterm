@@ -58,6 +58,7 @@ impl App {
             .iter()
             .map(|tab| SavedTab {
                 title: tab.custom_title.clone(),
+                color: tab.color.map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")),
                 active: tab
                     .layout
                     .panes()
@@ -422,7 +423,13 @@ impl App {
             let panes = layout.panes();
             let active = panes[tab.active.min(panes.len() - 1)];
             if let Some(running) = &mut self.running {
-                running.mux.add_tab(layout, active, tab.title.clone());
+                let id = running.mux.add_tab(layout, active, tab.title.clone());
+                // A bad color in the file (or from on_restore) is only skipped.
+                let color = tab
+                    .color
+                    .as_deref()
+                    .and_then(|c| fterm_config::colors::tab_color(c).ok().flatten());
+                running.mux.set_color(id, color);
                 opened += 1;
             }
         }

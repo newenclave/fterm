@@ -531,6 +531,14 @@ impl App {
                 Ok(json!({}))
             }
             "set_title" => self.api_set_title(client, params),
+            "set_tab_color" => {
+                let pane = self.target_pane(client, params)?;
+                let color = crate::api::tab_color_param(params)?;
+                if !self.set_tab_color(pane, color) {
+                    return Err(not_found("tab"));
+                }
+                Ok(json!({}))
+            }
             "send_message" => self.api_send_message(client, params),
             "read_messages" => {
                 let pane = self.target_pane(client, params)?;
@@ -706,6 +714,7 @@ impl App {
                     "title": titles.get(i),
                     "active": i == running.mux.active_index(),
                     "zoomed": tab.zoomed.is_some(),
+                    "color": tab.color.map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")),
                     "panes": panes,
                 })
             })
@@ -939,6 +948,19 @@ impl App {
             event_loop.exit();
         }
         Ok(json!({}))
+    }
+
+    /// Colors the tab of `pane` (`None` = no color). `false` = no such pane.
+    pub(super) fn set_tab_color(&mut self, pane: PaneId, color: Option<[u8; 3]>) -> bool {
+        let Some(running) = self.running.as_mut() else {
+            return false;
+        };
+        let Some(tab) = running.mux.pane_tab(pane) else {
+            return false;
+        };
+        running.mux.set_color(tab, color);
+        running.window.request_redraw();
+        true
     }
 
     fn api_set_title(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {

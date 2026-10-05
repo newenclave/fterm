@@ -77,6 +77,8 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
 - `focus_pane` shows a pane to the user (its tab, and the keyboard goes there). Use it when the user
   should look at something now, not for your own work.
 - `set_title` sets the title of the tab of a pane, for example "tests" or "server".
+- `set_tab_color` (`ftermctl tab-color --pane N "#f38ba8"`) puts a color line at the top of the tab of a pane,
+  so the user sees it from other tabs: for example red when tests fail, green when they pass. `none` takes it away.
 - `close_pane` closes a pane (see the rules).
 
 ## Rules
@@ -101,6 +103,7 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
 | Wait | `ftermctl wait-for --pane N EVENT [--pattern TEXT] [--timeout S]` |
 | A message | `ftermctl send-message N TEXT`, `ftermctl read-messages` |
 | A notification | `ftermctl notify TITLE --body TEXT --level info` |
+| A tab color | `ftermctl tab-color --pane N "#rrggbb"` (or `none`; quote the color: `#` starts a comment in shells) |
 | A scene | `ftermctl scene`, `ftermctl draw --pane N JSON` (or `-` for stdin) |
 | A picture of a pane | `ftermctl screenshot --pane N [FILE.png]` |
 | The AI panel | `ftermctl ai read [--last N]`, `ftermctl ai ask --wait TEXT`, `ftermctl ai input TEXT` |

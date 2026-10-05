@@ -18,6 +18,8 @@ pub struct Tab {
     pub custom_title: Option<String>,
     /// One pane that takes the whole tab for now (zoom).
     pub zoomed: Option<PaneId>,
+    /// A color of the tab (RGB) from an agent, Lua, a profile, or an escape sequence.
+    pub color: Option<[u8; 3]>,
 }
 
 /// What `close_pane` closed.
@@ -60,6 +62,7 @@ impl Mux {
             active_pane,
             custom_title: title,
             zoomed: None,
+            color: None,
         });
         id
     }
@@ -73,6 +76,7 @@ impl Mux {
             active_pane: pane,
             custom_title: None,
             zoomed: None,
+            color: None,
         };
         let at = if self.tabs.is_empty() {
             0
@@ -240,6 +244,13 @@ impl Mux {
     pub fn active_layout_mut(&mut self) -> Option<&mut Layout> {
         let active = self.active;
         self.tabs.get_mut(active).map(|tab| &mut tab.layout)
+    }
+
+    /// Sets the color of a tab. `None` = no color.
+    pub fn set_color(&mut self, tab: TabId, color: Option<[u8; 3]>) {
+        if let Some(index) = self.tab_index(tab) {
+            self.tabs[index].color = color;
+        }
     }
 
     /// Sets the user's name for a tab. An empty name goes back to the auto title.
@@ -422,6 +433,18 @@ mod tests {
         assert_eq!(mux.tabs()[0].custom_title.as_deref(), Some("build"));
         mux.rename(tab, "   ");
         assert_eq!(mux.tabs()[0].custom_title, None);
+    }
+
+    #[test]
+    fn a_tab_gets_a_color_and_loses_it() {
+        let (mut mux, panes) = mux_with(2);
+        let tab = mux.pane_tab(panes[1]).unwrap();
+        assert_eq!(mux.tabs()[1].color, None);
+        mux.set_color(tab, Some([0xf3, 0x8b, 0xa8]));
+        assert_eq!(mux.tabs()[1].color, Some([0xf3, 0x8b, 0xa8]));
+        assert_eq!(mux.tabs()[0].color, None, "only that tab");
+        mux.set_color(tab, None);
+        assert_eq!(mux.tabs()[1].color, None);
     }
 
     #[test]

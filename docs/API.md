@@ -14,7 +14,7 @@ Agents (Claude Code, OpenCode), scripts, and `ftermctl` use it. MCP is in [MCP.m
 - Turn the API off with `api = { enabled = false }` in the config.
 
 ## Who may do what
-- `hello`, `list`, `focus`, `zoom`, `set_title`, `notify`, `panel`, `send_message`, `ai_input`, `ai_stop`,
+- `hello`, `list`, `focus`, `zoom`, `set_title`, `set_tab_color`, `notify`, `panel`, `send_message`, `ai_input`, `ai_stop`,
   and the events: everybody.
 - Reading or typing into **your own pane** (the pane in `hello`) or a pane that you opened with `spawn`: yes.
 - Reading or typing into **another pane** (`send_text`, `get_text`, `screenshot`, `close`, `wait_for`, `read_messages`),
@@ -46,6 +46,7 @@ ftermctl run --pane 3 --wait cargo test        # type it, wait for the end, prin
 ftermctl get-text --pane 3 --last-output       # the output of the last command
 ftermctl get-text --pane 3 --styled            # the screen with colors and styles, as JSON
 ftermctl send-text --pane 3 --enter git status
+ftermctl tab-color --pane 3 "#f38ba8"         # a red line at the top of its tab ("none" = no color)
 ftermctl screenshot --pane 3 shot.png          # a PNG of the pane; prints the full path
 ftermctl wait-for --pane 3 text --pattern "ready" --timeout 60
 ftermctl notify "Deploy is done" --level success
@@ -75,6 +76,7 @@ A missing `pane` means: the pane of the client (from `hello`), else the active p
 | `close` | `pane`, `force` (needed when a program runs in it) | |
 | `zoom` | `pane` | |
 | `set_title` | `pane`, `title` (the title of its tab; empty = the automatic title) | |
+| `set_tab_color` | `pane`, `color`: `"#rrggbb"` or `"#rgb"`; `"none"` or `null` = no color | |
 | `notify` | `title`, `body`, `level` (`info`, `success`, `warning`, `error`, `attention`) | |
 | `panel` | `name`: `"events"`, `"agents"`, or nothing (close the dock) | |
 | `wait_for` | `pane`, `event`: `"command_done"`, `"agent_done"`, `"agent_waiting"`, `"message"`, `"text"` (with `pattern`), or `"scene_resized"`; `timeout_ms` (default 30000, at most one hour) | the event (for example `command`, `exit`, `took_ms`) |

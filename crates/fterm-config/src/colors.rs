@@ -45,6 +45,15 @@ pub fn parse_color(text: &str) -> Result<Rgb, String> {
     }
 }
 
+/// The color of a tab: `#rrggbb` or `#rgb`; `"none"` (or empty) = no color.
+pub fn tab_color(text: &str) -> Result<Option<[u8; 3]>, String> {
+    let text = text.trim();
+    if text.is_empty() || text.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    parse_color(text).map(|c| Some([c.r, c.g, c.b]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
