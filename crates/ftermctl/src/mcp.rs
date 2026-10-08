@@ -171,10 +171,10 @@ pub fn tools() -> Value {
         },
         {
             "name": "set_theme",
-            "description": "Change the colors of the whole fterm window (the terminal and the UI) until fterm closes. Give `name` (from list_themes), or `theme`: a theme as JSON, for example {\"name\": \"Mine\", \"terminal\": {\"background\": \"#101418\", \"foreground\": \"#e0e0e0\"}, \"ui\": {\"accent\": \"#ff8800\"}}. Missing colors are made from the others (see docs/THEMES.md). Change it only when the user asks.",
+            "description": "Change the colors of the whole fterm window (the terminal and the UI) until fterm closes. Give `name` (from list_themes), or `theme`: a theme as JSON, for example {\"name\": \"Mine\", \"terminal\": {\"background\": \"#101418\", \"foreground\": \"#e0e0e0\"}, \"ui\": {\"accent\": \"#ff8800\"}}. Missing colors are made from the others. Add \"harmonize\": {\"strength\": 0.8} so the colors that programs print themselves (truecolor, Far Manager's palette) fit the theme and stay readable (0..1; see docs/THEMES.md). Change it only when the user asks.",
             "inputSchema": { "type": "object", "properties": {
                 "name": { "type": "string", "description": "A theme name from list_themes." },
-                "theme": { "type": "object", "description": "A whole theme: name, terminal (background, foreground, cursor, selection, ansi[8], bright[8]), ui (roles like accent, surface, text_dim)." }
+                "theme": { "type": "object", "description": "A whole theme: name, terminal (background, foreground, cursor, selection, ansi[8], bright[8]), ui (roles like accent, surface, text_dim), harmonize (strength 0..1, min_contrast 1..21)." }
             }}
         },
         {

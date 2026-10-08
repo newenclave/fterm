@@ -89,6 +89,12 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
 - `list_themes` and `set_theme` (`ftermctl theme`, `ftermctl theme NAME`) show and change the colors of the
   whole window. Change the theme only when the user asks. `set_theme` with `theme` takes a whole theme as JSON
   (see `docs/THEMES.md`).
+- **When you make a theme:** it has `terminal` (the 16 colors, the background, the text), `ui` (only UI roles, like
+  `accent`, `surface`, `text_dim`), and `harmonize`. Programs (also you, Claude Code) often print their own exact
+  colors, and Far Manager sets its own palette; `"harmonize": { "strength": 0.8, "min_contrast": 3 }` makes those
+  fit the theme and stay readable (0 = as they are, 1 = fully in the theme's colors; a gray theme with 1 makes
+  them gray). Other settings are not theme keys: `palette_changes = false` and `harmonize = { ... }` go into
+  `fterm.lua` (or a profile). The user tries the strength live with Ctrl+Shift+] and Ctrl+Shift+[.
 - `close_pane` closes a pane (see the rules).
 
 ## Rules
