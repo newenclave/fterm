@@ -391,10 +391,20 @@ Waits. Do we need them at all, and where are they useful? On Windows only iTerm2
 
 ### Sessions that live on (like tmux), here and on other machines
 Like tmux: the tabs and panes run in a server process. You close the window, the programs go on; you open fterm
-again and attach to them. And not only on this machine: also on another one, over the network (the user said
-"SSL": SSH, or our own connection with TLS). WezTerm does this with its mux server ("multiplexing domains").
+again and attach to them. And not only on this machine: also on another one, over SSH. WezTerm does this with its
+mux server ("multiplexing domains").
 Things to think about:
-- a small `fterm-mux` server on the other machine (Linux first), and fterm attaches to it over SSH;
+- a small `fterm-mux` server on the other machine (Linux first), and fterm attaches to it over SSH. The other
+  machine already has an SSH server (sshd), so we need only the client side: fterm starts `fterm-mux proxy` there
+  and talks to it over the SSH channel (stdin/stdout);
+- the SSH client, two ways:
+  - the system `ssh` (OpenSSH, also in Windows 10 and 11): the simplest; your `~/.ssh/config`, keys, ssh-agent,
+    known hosts, and 2FA work as they are;
+  - a Rust library inside fterm: `russh` (pure Rust, async on tokio, client and server, Apache-2.0) or `ssh2`
+    (bindings to the C libssh2, client only). More control (reconnect, our own dialogs), but more code, and we
+    must read the SSH config and talk to the agent ourselves. WezTerm has its own crate `wezterm-ssh` on top of
+    libssh and libssh2;
+  - maybe start with the system `ssh`, and take `russh` when we need more;
 - what goes over the wire: the screen changes (like WezTerm) or the raw pty output;
 - the API, agents, and the Agents panel for remote panes too;
 - what happens when the network drops (attach again, nothing lost).
