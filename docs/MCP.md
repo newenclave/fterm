@@ -70,6 +70,8 @@ When FTERM_PANE_ID is set, you run in the fterm terminal: run `ftermctl guide` o
 | `focus_pane` | Shows a pane to you. |
 | `close_pane` | Closes a pane (`force` when a program runs in it). |
 | `set_title` | Sets the title of the tab. |
+| `list_themes` | The color themes of fterm; the theme in use has a `*`. |
+| `set_theme` | Changes all colors of the window until fterm closes: a theme by name, or a whole theme as JSON (the agent can make one). |
 | `set_tab_color` | Gives the tab a color (a line at its top), for example red when tests fail. `"none"` takes it away. |
 | `open_scene` | Opens a Braille scene (a pane to draw into) on the right or below. Gives its id, its size in dots, and the aspect of the dots. |
 | `draw_scene` | Draws commands into a scene: dots, lines, rects, circles, text, colors, charts (see [SCENE.md](SCENE.md)). |

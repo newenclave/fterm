@@ -14,6 +14,12 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 - **Screenshots of panes.** The API method `screenshot`, `ftermctl screenshot [--pane N] [FILE.png]`,
   and the MCP tool `screenshot_pane`. An agent gets the PNG as a picture, so it can see what it drew in a
   scene, or how a program looks. It works when the window is under other windows too.
+- **Themes.** One theme gives all colors: the terminal and the whole UI (the tab bar, the dock, toasts,
+  the palette, the frames of panes). A theme is JSON with color roles; missing UI colors are made from the
+  terminal colors. Windows Terminal color schemes work as themes. Catppuccin Mocha (the default) and Latte
+  are built in; other themes are files in a `themes` folder next to `fterm.lua`. Choose one in the config
+  (`theme = "Nord"`, or `{ light = ..., dark = ... }` to follow the system), in the palette ("Theme…"),
+  with `ftermctl theme`, or with the API and MCP (`set_theme`). See docs/THEMES.md.
 - **Tab colors.** A tab can have a color line at its top, so you see it from other tabs. A profile
   (`tab_color`), Lua (`fterm.set_tab_color`), agents and scripts (`set_tab_color`, `ftermctl tab-color`, the
   MCP tool `set_tab_color`), and any program (`ESC ] 777 ; fterm-tab ; color ; #rrggbb BEL`) can set it.

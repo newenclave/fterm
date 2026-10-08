@@ -59,7 +59,8 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `braille_style` | `"pixels"` or `"dots"` | `"pixels"` | Braille chars as square pixels with no gaps, or as round dots. |
 | `gpu` | table | `{ backend = "auto", power = "high" }` | The GPU that draws the window. See "The GPU". |
 | `data_dir` | string | the folders of the user | One folder for the history, the sessions, and the shell scripts. See "A portable fterm". |
-| `colors` | table | Catppuccin Mocha | See "Colors". |
+| `theme` | string or table | `"Catppuccin Mocha"` | All colors: the terminal and the UI. See [THEMES.md](THEMES.md). |
+| `colors` | table | the theme | Change some terminal colors of the theme. See "Colors". |
 | `default_profile` | string | the first profile | The profile for new tabs and splits. |
 | `profiles` | list | found by fterm | See "Profiles". |
 | `keys` | list | see `KEYS.md` | See "Keys". |
@@ -69,7 +70,8 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `on_notification` | function | none | See every notification first: drop, change, or route it. |
 
 ### Colors
-All fields can be left out. Colors are `#rrggbb` or `#rgb`.
+`colors` changes some terminal colors of the theme (see [THEMES.md](THEMES.md) for themes: all colors of
+the terminal and of the UI). All fields can be left out. Colors are `#rrggbb` or `#rgb`.
 
 ```lua
 colors = {
@@ -154,6 +156,7 @@ also work on other layouts (for example, Russian).
 | `panel_ai`, `explain_error`, `ask_ai_selection`, `set_ai_key`, `text_to_command` | The AI panel and text to command (see [AI.md](AI.md)). |
 | `sessions` (Ctrl+Shift+S), `save_session_as`, `restore_session` | Saved sessions (see [Sessions](#sessions)). |
 | `toggle_fullscreen` (Alt+Enter) | Full screen with no window frame. |
+| `choose_theme` | The list of themes; Enter uses one until fterm closes (see [THEMES.md](THEMES.md)). |
 
 ### Lua functions
 A function gets an object `fterm` with these functions:

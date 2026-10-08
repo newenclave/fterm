@@ -52,6 +52,9 @@ def files(bin_dir: Path, system: str) -> list[tuple[Path, str]]:
         (ROOT / "LICENSE", "LICENSE"),
         (ROOT / "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-NOTICES.md"),
         (ROOT / "assets/fonts/OFL.txt", "OFL.txt"),
+        # The built-in themes, as examples for your own: copy one and change it.
+        (ROOT / "assets/themes/catppuccin-mocha.json", "themes/catppuccin-mocha.json"),
+        (ROOT / "assets/themes/catppuccin-latte.json", "themes/catppuccin-latte.json"),
     ]
     if system == "linux":
         out += [(ROOT / "assets/linux/fterm.desktop", "fterm.desktop"), (ROOT / "assets/icon/fterm-256.png", "fterm.png")]
