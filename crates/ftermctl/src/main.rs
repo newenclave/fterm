@@ -6,6 +6,7 @@
 
 mod cli;
 mod mcp;
+mod review;
 mod run;
 mod show;
 
@@ -25,6 +26,10 @@ Panes and tabs:
   spawn [--right|--down] [--profile P] [--cwd DIR] [--pane N]
                                          open a tab (or a split next to pane N); prints the new pane id
   focus N | close N [--force] | zoom [N] | title [--pane N] TEXT
+  review FILE|- [--title T] [--timeout S]
+                                         show a plan (markdown) in a Review tab and wait: prints the
+                                         answer; exit 0 approved, 1 changes, 2 cancelled
+  review --hook                          the same as a Claude Code hook for ExitPlanMode (docs/REVIEW.md)
   theme [NAME | --file x.json]           no NAME: list the themes (* = in use); NAME: use a theme
                                          until fterm closes (see docs/THEMES.md)
   tab-color [--pane N] \"#rrggbb\"|none    a color line at the top of the tab of a pane
@@ -126,6 +131,12 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             wait,
             timeout_ms,
         } => run_command(cli, *pane, text, *wait, *timeout_ms),
+        Command::Review {
+            source,
+            title,
+            timeout_ms,
+            hook,
+        } => run_review(cli, source.as_deref(), title.as_deref(), *timeout_ms, *hook),
         Command::ThemeFile { path } => {
             let text = std::fs::read_to_string(path)
                 .map_err(|err| format!("cannot read {path}: {err}"))?;
@@ -201,6 +212,85 @@ fn run_command(
     let exit = result["exit"].as_i64().unwrap_or(0);
     // Exit codes of a process are 0..=255.
     Ok(ExitCode::from(exit.clamp(0, 255) as u8))
+}
+
+/// `review`: shows a plan in a Review tab and waits for the user. With `--hook` it is a Claude Code
+/// `PreToolUse` hook for `ExitPlanMode`: the hook input comes on stdin, and the answer for Claude goes to
+/// stdout. Out of fterm, or with no answer, the hook says nothing, so Claude shows its own dialog.
+fn run_review(
+    cli: &Cli,
+    source: Option<&str>,
+    title: Option<&str>,
+    timeout_ms: Option<u64>,
+    hook: bool,
+) -> Result<ExitCode, String> {
+    let read_stdin = || {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+            .map_err(|err| format!("cannot read stdin: {err}"))?;
+        Ok::<_, String>(text.trim_start_matches('\u{feff}').to_owned())
+    };
+    let hook_input: Option<Value> = if hook {
+        let text = read_stdin()?;
+        match serde_json::from_str(&text) {
+            Ok(input) => Some(input),
+            // Not a hook input: no answer, Claude goes on as usual.
+            Err(_) => return Ok(ExitCode::SUCCESS),
+        }
+    } else {
+        None
+    };
+    let plan = match (&hook_input, source) {
+        (Some(input), _) => match review::hook_plan(input) {
+            Some(plan) => plan,
+            None => return Ok(ExitCode::SUCCESS),
+        },
+        (None, Some("-")) => read_stdin()?,
+        (None, Some(path)) => {
+            std::fs::read_to_string(path).map_err(|err| format!("cannot read {path}: {err}"))?
+        }
+        (None, None) => return Err("review needs a file".to_owned()),
+    };
+    let mut params = json!({
+        "title": title.map_or_else(|| review::plan_title(&plan), str::to_owned),
+        "text": plan,
+    });
+    if let Some(ms) = timeout_ms {
+        params["timeout_ms"] = json!(ms);
+    }
+    if hook {
+        params["from"] = json!("claude");
+        // A hook outside fterm (or with no window) gives no answer.
+        if std::env::var_os("FTERM_SOCKET").is_none() && cli.window.is_none() {
+            return Ok(ExitCode::SUCCESS);
+        }
+        let Ok(mut client) = connect(cli.window) else {
+            return Ok(ExitCode::SUCCESS);
+        };
+        let Ok(result) = client.call("review", params) else {
+            return Ok(ExitCode::SUCCESS);
+        };
+        if let Some(answer) = hook_input
+            .as_ref()
+            .and_then(|input| review::hook_answer(input, &result))
+        {
+            println!("{answer}");
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    let mut client = connect(cli.window)?;
+    let result = client
+        .call("review", params)
+        .map_err(|err| err.to_string())?;
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).unwrap_or_default()
+        );
+    } else {
+        println!("{}", result["feedback"].as_str().unwrap_or_default());
+    }
+    Ok(ExitCode::from(review::exit_code(&result)))
 }
 
 fn print_answer(as_json: bool, method: &str, answer: &Value) {

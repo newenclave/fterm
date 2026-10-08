@@ -156,6 +156,15 @@ pub fn tools() -> Value {
             }, "required": ["title"] }
         },
         {
+            "name": "review_plan",
+            "description": "Show your plan to the user in an fterm Review tab and wait for the answer. The user marks each item Ok, comments on it, changes its text, adds or removes items. You get the decision (approved / changes / cancelled) and the feedback that names the items by number. Use it when you have a plan with several steps and want the user's review before you start.",
+            "inputSchema": { "type": "object", "properties": {
+                "title": { "type": "string", "description": "A short title for the tab." },
+                "plan": { "type": "string", "description": "The plan as markdown: headings, list items (nested), paragraphs. Each one is an item to review." },
+                "timeout_seconds": { "type": "integer", "description": "How long to wait. The default is 3600." }
+            }, "required": ["plan"] }
+        },
+        {
             "name": "list_themes",
             "description": "List the color themes of fterm (built-in ones and files). The theme in use has a `*`.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -452,6 +461,22 @@ impl<B: Backend> Server<B> {
                     None => Ok(v["text"].as_str().unwrap_or("").to_owned()),
                 }
             }),
+            "review_plan" => need("plan").and_then(|plan| {
+                let mut params = json!({ "text": plan });
+                if let Some(title) = args.get("title").filter(|t| !t.is_null()) {
+                    params["title"] = title.clone();
+                }
+                if let Some(ms) = seconds("timeout_seconds") {
+                    params["timeout_ms"] = json!(ms);
+                }
+self.backend.call("review", params).map(|v| {
+                    format!(
+                        "Decision: {}\n\n{}",
+                        v["decision"].as_str().unwrap_or("cancelled"),
+                        v["feedback"].as_str().unwrap_or_default()
+                    )
+                })
+            }),
             "list_themes" => self.backend.call("themes", json!({})).map(|v| {
                 let current = v["current"].as_str().unwrap_or_default();
                 v["themes"]
@@ -672,6 +697,10 @@ mod tests {
                 }),
                 "get_text" => json!({ "pane": 1, "text": "hello\nworld" }),
                 "send_message" => json!({ "id": 3 }),
+                "review" => json!({
+                    "decision": "changes",
+                    "feedback": "Changes requested:\n- Item 2: comment: more tests",
+                }),
                 "themes" => {
                     json!({ "current": "Catppuccin Mocha", "themes": ["Catppuccin Mocha", "Nord"] })
                 }
@@ -843,6 +872,7 @@ mod tests {
             "set_tab_color",
             "list_themes",
             "set_theme",
+            "review_plan",
         ] {
             assert!(names.contains(&name), "{name}");
         }
@@ -852,6 +882,29 @@ mod tests {
         }
         let run = tools.iter().find(|t| t["name"] == "run_command").unwrap();
         assert_eq!(run["inputSchema"]["required"], json!(["command"]));
+    }
+
+    #[test]
+    fn a_plan_review() {
+        let mut s = server();
+        let result = tool(
+            &mut s,
+            "review_plan",
+            json!({ "title": "Themes", "plan": "# A\n- one", "timeout_seconds": 60 }),
+        );
+        assert_eq!(result["isError"], json!(false), "{result}");
+        assert_eq!(
+            s.backend.calls[0],
+            (
+                "review".into(),
+                json!({ "title": "Themes", "text": "# A\n- one", "timeout_ms": 60_000 })
+            )
+        );
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("Decision: changes"), "{text}");
+        assert!(text.contains("Item 2"), "{text}");
+        let result = tool(&mut s, "review_plan", json!({}));
+        assert_eq!(result["isError"], json!(true), "a plan is needed");
     }
 
     #[test]

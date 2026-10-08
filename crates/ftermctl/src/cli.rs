@@ -28,6 +28,13 @@ pub enum Command {
     DrawStdin {
         pane: Option<u64>,
     },
+    /// `review FILE|-` or `review --hook`: ftermctl reads the plan, waits for the user, and prints the answer.
+    Review {
+        source: Option<String>,
+        title: Option<String>,
+        timeout_ms: Option<u64>,
+        hook: bool,
+    },
     /// `theme --file x.json`: ftermctl reads the file (fterm may have another current folder).
     ThemeFile {
         path: String,
@@ -311,6 +318,20 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             w.pane_into(&mut params)?;
             call("screenshot", params)
         }
+        "review" => {
+            let w = read(&["title", "timeout"], &["hook"])?;
+            let hook = w.flag("hook");
+            let source = w.words.first().cloned();
+            if source.is_none() && !hook {
+                return Err("review needs a file, `-` (stdin), or --hook".to_owned());
+            }
+            Command::Review {
+                source,
+                title: w.value("title").map(str::to_owned),
+                timeout_ms: w.number("timeout")?.map(|s| s * 1000),
+                hook,
+            }
+        }
         "theme" => {
             let w = read(&["file"], &[])?;
             if let Some(path) = w.value("file") {
@@ -521,6 +542,40 @@ mod tests {
             Command::DrawStdin { pane: Some(4) },
             "`-` = the commands come on stdin"
         );
+    }
+
+    #[test]
+    fn reviews() {
+        assert_eq!(
+            cli("review plan.md --title Themes --timeout 60")
+                .unwrap()
+                .command,
+            Command::Review {
+                source: Some("plan.md".into()),
+                title: Some("Themes".into()),
+                timeout_ms: Some(60_000),
+                hook: false,
+            }
+        );
+        assert_eq!(
+            cli("review -").unwrap().command,
+            Command::Review {
+                source: Some("-".into()),
+                title: None,
+                timeout_ms: None,
+                hook: false,
+            }
+        );
+        assert_eq!(
+            cli("review --hook").unwrap().command,
+            Command::Review {
+                source: None,
+                title: None,
+                timeout_ms: None,
+                hook: true,
+            }
+        );
+        assert!(cli("review").is_err(), "a file, `-`, or --hook");
     }
 
     #[test]

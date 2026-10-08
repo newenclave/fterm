@@ -73,6 +73,13 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
   for you; do the task yourself.
 - `ftermctl ai input TEXT` puts a text into the input of the panel without sending it, for the user.
 
+**Ask the user to review a plan**
+- `review_plan` with `plan` (markdown) and `title` (`ftermctl review plan.md`) opens a Review tab and waits.
+  The user marks each item Ok, comments on it, changes its text, adds or removes items.
+- You get the decision (`approved`, `changes`, or `cancelled`) and the feedback, which names the items by their
+  numbers (headings and paragraphs count too). Change the plan by the feedback and ask again if needed.
+- Use it for a plan with several steps, before you start the work.
+
 **Other tools**
 - `focus_pane` shows a pane to the user (its tab, and the keyboard goes there). Use it when the user
   should look at something now, not for your own work.
@@ -106,6 +113,7 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
 | Wait | `ftermctl wait-for --pane N EVENT [--pattern TEXT] [--timeout S]` |
 | A message | `ftermctl send-message N TEXT`, `ftermctl read-messages` |
 | A notification | `ftermctl notify TITLE --body TEXT --level info` |
+| A plan review | `ftermctl review plan.md` (waits; exit 0 approved, 1 changes, 2 cancelled) |
 | A theme | `ftermctl theme` (list), `ftermctl theme NAME` |
 | A tab color | `ftermctl tab-color --pane N "#rrggbb"` (or `none`; quote the color: `#` starts a comment in shells) |
 | A scene | `ftermctl scene`, `ftermctl draw --pane N JSON` (or `-` for stdin) |
