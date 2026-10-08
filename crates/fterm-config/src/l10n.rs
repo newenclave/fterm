@@ -663,6 +663,54 @@ mod tests {
     }
 
     #[test]
+    fn notifications_take_their_texts_from_the_language() {
+        // A text in a `notify(` call must come from `tr!`, not a literal (an empty body is fine).
+        let app = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fterm/src");
+        let mut files = Vec::new();
+        for dir in [app.clone(), app.join("app")] {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                if entry.path().extension().is_some_and(|x| x == "rs") {
+                    files.push(entry.path());
+                }
+            }
+        }
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            let code = text.split("#[cfg(test)]").next().unwrap_or_default();
+            for (at, _) in code.match_indices(".notify(") {
+                let call = &code[at..];
+                let call = &call[..call.find(';').unwrap_or(call.len())];
+                // The literals, but not the keys of `tr!("...")` and `trn!("...")`.
+                let parts: Vec<&str> = call.split('"').collect();
+                let literal = (1..parts.len()).step_by(2).find_map(|i| {
+                    let before = parts[i - 1].trim_end();
+                    let key = before.ends_with("tr!(") || before.ends_with("trn!(");
+                    // A text has a word in it ("\n" and "{path}: {err}" are not texts).
+                    let mut plain = String::new();
+                    let mut inside = false;
+                    for c in parts[i].chars() {
+                        match c {
+                            '{' => inside = true,
+                            '}' => inside = false,
+                            c if !inside => plain.push(c),
+                            _ => {}
+                        }
+                    }
+                    let words = plain
+                        .split(|c: char| !c.is_alphabetic())
+                        .any(|w| w.chars().count() >= 2);
+                    (!key && words).then_some(parts[i])
+                });
+                assert!(
+                    literal.is_none(),
+                    "{}: a notify text is not from tr!: {literal:?}",
+                    file.display()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn the_macros_use_the_current_language() {
         // The current language is English in tests: a missing key comes back as the key.
         assert_eq!(crate::tr!("test.none"), "test.none");
