@@ -6,6 +6,11 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-08
+
+More for agents (plan reviews, screenshots, colored text, the AI panel), themes for the whole window,
+and colors of programs that fit the theme.
+
 ### Added
 - **The AI panel for agents.** The API methods `ai_read`, `ai_ask`, `ai_input`, `ai_stop`, `ai_clear` and the
   event `ai_answer`, `ftermctl ai read|ask|input|stop|clear`, and the MCP tools `ai_read` and `ai_ask`.
@@ -52,7 +57,6 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 - A message box with a very long line (for example a long path) went out of the window.
 - On Windows, after you made the window taller, PowerShell wrote what you typed one row (or more) above
   the prompt, and the old text stayed there. The rows now stay where ConPTY has them.
-- A test of the data folder failed on Linux and macOS (it used a Windows path).
 
 ## [0.1.0] - 2026-10-02
 
@@ -93,5 +97,6 @@ The first version. Portable archives for Windows, Linux, and macOS.
 - The text of the prompt lost its first letter when the task ended with a space.
 - Less memory at start (from about 337 MB down to about 161 MB on DX12).
 
-[Unreleased]: https://github.com/newenclave/fterm/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/newenclave/fterm/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/newenclave/fterm/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/newenclave/fterm/releases/tag/v0.1.0

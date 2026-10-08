@@ -984,7 +984,7 @@ dependencies = [
 
 [[package]]
 name = "fterm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "fterm-ai"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "keyring",
  "serde",
@@ -1023,7 +1023,7 @@ dependencies = [
 
 [[package]]
 name = "fterm-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "interprocess",
  "serde",
@@ -1033,7 +1033,7 @@ dependencies = [
 
 [[package]]
 name = "fterm-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mlua",
  "serde_json",
@@ -1042,7 +1042,7 @@ dependencies = [
 
 [[package]]
 name = "fterm-history"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1050,11 +1050,11 @@ dependencies = [
 
 [[package]]
 name = "fterm-mux"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "fterm-render"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -1070,7 +1070,7 @@ dependencies = [
 
 [[package]]
 name = "fterm-scene"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "fterm-term"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alacritty_terminal",
  "miow",
@@ -1093,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "ftermctl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fterm-api",
  "serde_json",
