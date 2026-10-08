@@ -332,7 +332,7 @@ struct ListView {
     query: String,
     rows: Vec<PaletteRow>,
     title: String,
-    footer: &'static str,
+    footer: String,
     bad: Vec<bool>,
 }
 
@@ -931,7 +931,7 @@ impl App {
                 if count > 0 {
                     format!("{} {count}", kind.label())
                 } else {
-                    kind.label().to_owned()
+                    kind.label()
                 }
             })
             .collect()
@@ -2330,11 +2330,7 @@ impl App {
     fn copy_text(&mut self, text: String) {
         let lines = text.lines().count().max(1);
         self.clipboard.copy(&text);
-        let message = if lines == 1 {
-            "Copied 1 line".to_owned()
-        } else {
-            format!("Copied {lines} lines")
-        };
+        let message = trn!("title.copied", lines);
         self.title_message(&message);
     }
 
@@ -3060,9 +3056,10 @@ impl App {
                 .map_or(Ok(()), std::fs::create_dir_all)
                 .and_then(|()| std::fs::write(&path, SAMPLE_CONFIG));
             if let Err(err) = made {
-                self.message = Some(error_lines(&format!(
-                    "Cannot make {}: {err}",
-                    path.display()
+                self.message = Some(error_lines(&tr!(
+                    "box.cannot_make",
+                    path = path.display(),
+                    error = err
                 )));
                 return;
             }
@@ -3072,9 +3069,10 @@ impl App {
             }
         }
         if let Err(err) = open::that_detached(&path) {
-            self.message = Some(error_lines(&format!(
-                "Cannot open {}: {err}",
-                path.display()
+            self.message = Some(error_lines(&tr!(
+                "box.cannot_open",
+                path = path.display(),
+                error = err
             )));
         }
     }
@@ -4044,7 +4042,7 @@ impl App {
                     query: p.query().to_owned(),
                     rows,
                     title: String::new(),
-                    footer: "",
+                    footer: String::new(),
                     bad: Vec::new(),
                 }
             })
@@ -4087,23 +4085,20 @@ impl App {
             (dock.active, dock.selected(), dock.scroll(), dock.filter);
         let reader_scroll = dock.reader_scroll();
         let dock_hints = match (dock_active, dock_filter) {
-            (PanelKind::Events, _) if reader.is_some() => "Enter go · Ctrl+C copy · Esc back",
-            (PanelKind::Events, EventFilter::All) => {
-                "Enter go · Space read · F important only · M read · Tab · Esc"
-            }
-            (PanelKind::Events, EventFilter::Important) => {
-                "Enter go · Space read · F show all · M read · Tab · Esc"
-            }
-            (PanelKind::Agents, _) => "Enter go · Tab next panel · Esc back",
-            (PanelKind::Ai, _) => "Enter send · Shift+Enter new line · Esc stop / back · PageUp",
+            (PanelKind::Events, _) if reader.is_some() => tr!("dock.reader_keys"),
+            (PanelKind::Events, EventFilter::All) => tr!("dock.events_keys"),
+            (PanelKind::Events, EventFilter::Important) => tr!("dock.events_important_keys"),
+            (PanelKind::Agents, _) => tr!("dock.agents_keys"),
+            (PanelKind::Ai, _) => tr!("dock.ai_keys"),
         };
         let dock_empty = match (dock_active, dock_filter) {
-            (PanelKind::Events, EventFilter::All) => "No events yet.",
-            (PanelKind::Events, EventFilter::Important) => "No important events.",
-            (PanelKind::Agents, _) => {
-                "No agents. For exact states: palette → Install Claude Code hooks."
-            }
-            (PanelKind::Ai, _) => "",
+            (PanelKind::Events, EventFilter::All) => tr!("dock.no_events"),
+            (PanelKind::Events, EventFilter::Important) => tr!("dock.no_important"),
+            (PanelKind::Agents, _) => tr!(
+                "dock.no_agents",
+                action = tr!("action.install_claude_hooks")
+            ),
+            (PanelKind::Ai, _) => String::new(),
         };
         let dock_active_index = PanelKind::ALL
             .iter()
@@ -4185,8 +4180,8 @@ impl App {
                             selected: Some(dock_selected),
                             scroll: dock_scroll,
                             focused: dock_focused && focused,
-                            empty: dock_empty,
-                            hints: dock_hints,
+                            empty: &dock_empty,
+                            hints: &dock_hints,
                             chat: ai_view.as_ref().map(
                                 |(lines, input, cursor, title, _, chips)| {
                                     fterm_render::dock::ChatView {
@@ -4225,7 +4220,7 @@ impl App {
                             query: &list.query,
                             rows: &list.rows,
                             title: &list.title,
-                            footer: list.footer,
+                            footer: &list.footer,
                             bad: &list.bad,
                         },
                         view,

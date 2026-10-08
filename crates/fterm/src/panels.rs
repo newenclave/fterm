@@ -32,11 +32,11 @@ impl PanelKind {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Events => "Events",
-            Self::Agents => "Agents",
-            Self::Ai => "AI",
+            Self::Events => fterm_config::tr!("panel.events"),
+            Self::Agents => fterm_config::tr!("panel.agents"),
+            Self::Ai => fterm_config::tr!("panel.ai"),
         }
     }
 
@@ -239,13 +239,13 @@ pub fn event_lines(
         .into_iter()
         .map(|t| line(t, ChatStyle::User))
         .collect();
-    let ago = short_ago(now.saturating_duration_since(n.time));
-    let ago = if ago == "now" {
-        ago
-    } else {
-        format!("{ago} ago")
-    };
-    let mut meta = format!("{} · from {} · {ago}", n.level.name(), n.source.name());
+    let ago = long_ago(now.saturating_duration_since(n.time), false);
+    let mut meta = fterm_config::tr!(
+        "reader.meta",
+        level = n.level.label(),
+        source = n.source.label(),
+        ago = ago
+    );
     if let Some(place) = place {
         meta.push_str(&format!(" · {place}"));
     }
@@ -256,7 +256,7 @@ pub fn event_lines(
     );
     out.push(line(String::new(), ChatStyle::Note));
     if n.body.trim().is_empty() {
-        out.push(line("(no text)".to_owned(), ChatStyle::Note));
+        out.push(line(fterm_config::tr!("reader.no_text"), ChatStyle::Note));
     }
     for text in n.body.trim_end().lines() {
         if text.trim().is_empty() {
@@ -276,10 +276,19 @@ pub fn event_lines(
 pub fn short_ago(d: Duration) -> String {
     let secs = d.as_secs();
     match secs {
-        0..5 => "now".to_owned(),
-        5..60 => format!("{secs} s"),
-        60..3600 => format!("{} min", secs / 60),
-        _ => format!("{} h", secs / 3600),
+        0..5 => fterm_config::tr!("time.now"),
+        5..60 => fterm_config::tr!("time.s", s = secs),
+        60..3600 => fterm_config::tr!("time.min", m = secs / 60),
+        _ => fterm_config::tr!("time.h", h = secs / 3600),
+    }
+}
+
+/// "now" (or "just now" when `just`), or "5 min ago".
+pub fn long_ago(d: Duration, just: bool) -> String {
+    match (d.as_secs(), just) {
+        (0..5, true) => fterm_config::tr!("time.just_now"),
+        (0..5, false) => fterm_config::tr!("time.now"),
+        _ => fterm_config::tr!("time.ago", time = short_ago(d)),
     }
 }
 
@@ -346,12 +355,11 @@ pub fn agent_rows(
         .map(|e| {
             let detail = if e.state.message.trim().is_empty() {
                 match e.state.kind {
-                    AgentKind::Working => "Working",
-                    AgentKind::Waiting => "Waits for you",
-                    AgentKind::Done => "Done",
-                    AgentKind::Error => "Failed",
+                    AgentKind::Working => fterm_config::tr!("state.working"),
+                    AgentKind::Waiting => fterm_config::tr!("state.waiting"),
+                    AgentKind::Done => fterm_config::tr!("state.done"),
+                    AgentKind::Error => fterm_config::tr!("state.error"),
                 }
-                .to_owned()
             } else {
                 e.state.message.clone()
             };

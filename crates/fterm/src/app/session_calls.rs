@@ -421,12 +421,10 @@ impl App {
             self.config.config.restore_agents,
         );
         let mut reruns = 0;
-        let ago = match crate::panels::short_ago(Duration::from_millis(
-            now_ms().saturating_sub(saved.saved),
-        )) {
-            now if now == "now" => "just now".to_owned(),
-            age => format!("{age} ago"),
-        };
+        let ago = crate::panels::long_ago(
+            Duration::from_millis(now_ms().saturating_sub(saved.saved)),
+            true,
+        );
         for tab in &saved.tabs {
             let layout = restore_layout(&tab.layout, &mut |pane| {
                 if pane.scene {

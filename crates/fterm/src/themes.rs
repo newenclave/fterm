@@ -72,7 +72,7 @@ pub fn theme_rows(names: &[String], current: &str) -> Vec<crate::history_popup::
         .map(|name| crate::history_popup::PopupRow {
             text: name.clone(),
             hint: if name.eq_ignore_ascii_case(current) {
-                "in use".to_owned()
+                fterm_config::tr!("popup.in_use")
             } else {
                 String::new()
             },

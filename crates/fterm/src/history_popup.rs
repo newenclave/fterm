@@ -1,6 +1,7 @@
 //! The history popups: commands (Alt+F8) and folders (Alt+F12), in the style of the command palette.
 //! Pure: the rows, the filter, the selection, and the bytes that go to the shell.
 
+use fterm_config::tr;
 use fterm_history::{CommandEntry, DirEntry};
 
 use crate::palette::{VISIBLE_ROWS, score};
@@ -116,16 +117,18 @@ impl HistoryPopup {
     /// The text on the right of the input line: what the popup shows.
     pub fn title(&self) -> String {
         match self.kind {
-            PopupKind::Dirs => "Folders".to_owned(),
-            PopupKind::Sessions => "Sessions".to_owned(),
-            PopupKind::Themes => "Themes".to_owned(),
+            PopupKind::Dirs => tr!("popup.folders"),
+            PopupKind::Sessions => tr!("popup.sessions"),
+            PopupKind::Themes => tr!("popup.themes"),
             PopupKind::Commands => {
-                let mut title = "Commands".to_owned();
+                let mut title = tr!("popup.commands");
                 if self.only_here {
-                    title.push_str(" · this folder");
+                    title.push_str(" · ");
+                    title.push_str(&tr!("popup.this_folder"));
                 }
                 if self.only_ok {
-                    title.push_str(" · exit 0");
+                    title.push_str(" · ");
+                    title.push_str(&tr!("popup.exit_0"));
                 }
                 title
             }
@@ -133,18 +136,15 @@ impl HistoryPopup {
     }
 
     /// The key hints under the list.
-    pub fn footer(&self) -> &'static str {
+    pub fn footer(&self) -> String {
         match self.kind {
-            PopupKind::Commands => {
-                "Enter put · Shift+Enter run · Ctrl+D folder · Ctrl+G exit 0 · Ctrl+C copy · Del forget"
-            }
-            PopupKind::Dirs => {
-                "Enter cd · Shift+Enter tab · Ctrl+Enter split · Ctrl+P pin · Del forget"
-            }
-            PopupKind::Sessions => {
-                "Enter restore · Del forget · Save session as… is in the palette"
-            }
-            PopupKind::Themes => "Enter use · the themes folder is next to fterm.lua",
+            PopupKind::Commands => tr!("popup.commands_keys"),
+            PopupKind::Dirs => tr!("popup.folders_keys"),
+            PopupKind::Sessions => tr!(
+                "popup.sessions_keys",
+                action = tr!("action.save_session_as")
+            ),
+            PopupKind::Themes => tr!("popup.themes_keys"),
         }
     }
 }
@@ -157,7 +157,7 @@ pub fn command_rows(entries: &[CommandEntry], now: u64) -> Vec<PopupRow> {
             let ago = ago(now, e.last);
             let bad = e.exit.is_some_and(|code| code != 0);
             let hint = match e.exit {
-                Some(code) if code != 0 => format!("exit {code} · {ago}"),
+                Some(code) if code != 0 => tr!("popup.exit_ago", code = code, ago = ago),
                 _ => ago,
             };
             PopupRow {
@@ -177,7 +177,7 @@ pub fn dir_rows(entries: &[DirEntry], now: u64, exists: impl Fn(&str) -> bool) -
         .map(|e| {
             let there = exists(&e.dir);
             let hint = if !there {
-                "not found".to_owned()
+                tr!("popup.not_found")
             } else if e.pinned {
                 format!("★ {}", ago(now, e.last))
             } else {

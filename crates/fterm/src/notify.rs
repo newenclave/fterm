@@ -38,6 +38,17 @@ impl Level {
         }
     }
 
+    /// The word for people (the name stays for the config and the API).
+    pub fn label(self) -> String {
+        match self {
+            Level::Info => fterm_config::tr!("level.info"),
+            Level::Success => fterm_config::tr!("level.success"),
+            Level::Warning => fterm_config::tr!("level.warning"),
+            Level::Error => fterm_config::tr!("level.error"),
+            Level::Attention => fterm_config::tr!("level.attention"),
+        }
+    }
+
     pub fn from_name(name: &str) -> Option<Self> {
         [
             Level::Info,
@@ -77,6 +88,18 @@ impl Source {
             Source::Lua => "lua",
             Source::App => "app",
             Source::Api => "api",
+        }
+    }
+
+    /// The word for people (the name stays for the config and the API).
+    pub fn label(self) -> String {
+        match self {
+            Source::Terminal => fterm_config::tr!("source.terminal"),
+            Source::Command => fterm_config::tr!("source.command"),
+            Source::Agent => fterm_config::tr!("source.agent"),
+            Source::Lua => fterm_config::tr!("source.lua"),
+            Source::App => fterm_config::tr!("source.app"),
+            Source::Api => fterm_config::tr!("source.api"),
         }
     }
 }
