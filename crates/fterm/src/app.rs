@@ -91,6 +91,7 @@ pub enum UserEvent {
 
 mod ai_calls;
 mod api_calls;
+mod review_calls;
 mod session_calls;
 
 /// The last command of a pane (for the API).
@@ -124,6 +125,8 @@ struct Pane {
     intro_lines: usize,
     /// A Braille scene pane (Phase 11): its canvas. The pane's grid shows it; there is no program.
     scene: Option<std::sync::Mutex<fterm_scene::Scene>>,
+    /// A Review tab: the review that the grid shows; keys go to it.
+    review: Option<review_calls::ReviewPane>,
 }
 
 /// Everything that exists only while the window is open.
@@ -407,6 +410,8 @@ pub struct App {
     shots: Vec<api_calls::PendingShot>,
     /// `ai_ask` calls that wait for the end of the answer.
     ai_waits: Vec<api_calls::AiWait>,
+    /// `review` calls that wait for the user.
+    reviews: Vec<review_calls::PendingReview>,
     /// Messages between agents, by pane.
     inbox: crate::inbox::Inbox,
     /// The AI chat, the flag that stops its running answer, and the API key prompt.
@@ -497,6 +502,7 @@ impl App {
             waits: Vec::new(),
             shots: Vec::new(),
             ai_waits: Vec::new(),
+            reviews: Vec::new(),
             inbox: crate::inbox::Inbox::default(),
             ai: crate::ai_chat::Session::default(),
             ai_stop: None,
@@ -1418,6 +1424,7 @@ impl App {
 
     /// Gives the theme to the renderer.
     pub(crate) fn apply_theme(&mut self) {
+        self.redraw_reviews();
         let palette = self.palette();
         let ui = self.ui;
         if let Some(running) = &mut self.running {
@@ -1650,6 +1657,7 @@ impl App {
                 rerun: None,
                 intro_lines: 0,
                 scene: Some(std::sync::Mutex::new(scene)),
+                review: None,
             },
         );
         tracing::info!(
@@ -1830,6 +1838,7 @@ impl App {
                 rerun: None,
                 intro_lines: 0,
                 scene: None,
+                review: None,
             },
         );
         Ok(id)
@@ -3717,6 +3726,7 @@ impl App {
     }
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        self.draw_reviews();
         let focused = self.focused;
         // The events count as read when the Events panel goes away (or fterm goes to the back).
         let events_seen = self
@@ -4358,6 +4368,9 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(at) = self.expire_waits(now) {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
+        if let Some(at) = self.expire_reviews(now) {
+            wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
+        }
         if self.running.is_some() {
             let at = self.autosave(now);
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
@@ -4507,6 +4520,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if let Some(action) = action {
                     self.run_action(event_loop, action);
+                    return;
+                }
+                if self.active_review().is_some() {
+                    self.review_key(&event);
                     return;
                 }
                 if event.logical_key == Key::Named(NamedKey::Escape) && self.stop_command() {

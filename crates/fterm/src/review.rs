@@ -438,9 +438,91 @@ pub struct Row {
 }
 
 impl Row {
-    /// The text with no looks (for tests and for the width).
+    /// The text with no looks (for tests).
+    #[cfg(test)]
     pub fn plain(&self) -> String {
         self.spans.iter().map(|s| s.text.as_str()).collect()
+    }
+}
+
+/// A key for a review, from the window (the app turns winit keys into these).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key<'a> {
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+    Home,
+    End,
+    Left,
+    Right,
+    Enter {
+        ctrl: bool,
+        shift: bool,
+    },
+    Escape,
+    Backspace,
+    Delete,
+    /// Typed text (Space too).
+    Text(&'a str),
+}
+
+/// What a key did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The key is not for the review.
+    Nothing,
+    /// The review changed: draw it again.
+    Changed,
+    /// The user sends the review.
+    Send,
+}
+
+impl Review {
+    /// One key: `page` = how many items a PageUp or PageDown moves.
+    pub fn key(&mut self, key: Key, page: usize) -> Outcome {
+        let page = page.max(1) as isize;
+        if let Some(input) = self.input_mut() {
+            match key {
+                Key::Enter {
+                    shift: true,
+                    ctrl: false,
+                } => input.insert("\n"),
+                Key::Enter { .. } => self.save_input(),
+                Key::Escape => self.cancel_input(),
+                Key::Backspace => input.backspace(),
+                Key::Delete => input.delete(),
+                Key::Left => input.left(),
+                Key::Right => input.right(),
+                Key::Home => input.home(),
+                Key::End => input.end(),
+                Key::Text(text) => input.insert(text),
+                Key::Up | Key::Down | Key::PageUp | Key::PageDown => return Outcome::Nothing,
+            }
+            return Outcome::Changed;
+        }
+        match key {
+            Key::Up => self.move_by(-1),
+            Key::Down => self.move_by(1),
+            Key::PageUp => self.move_by(-page),
+            Key::PageDown => self.move_by(page),
+            Key::Home => self.selected = 0,
+            Key::End => self.move_by(isize::MAX / 2),
+            Key::Delete => self.toggle_remove(),
+            Key::Enter { ctrl: true, .. } => return Outcome::Send,
+            Key::Text(text) => match text {
+                " " | "o" => self.toggle_ok(),
+                "O" => self.rest_ok(),
+                "c" | "C" => self.start_comment(),
+                "e" | "E" => self.start_edit(),
+                "a" | "A" => self.start_add(),
+                "d" | "D" => self.toggle_remove(),
+                "s" | "S" => return Outcome::Send,
+                _ => return Outcome::Nothing,
+            },
+            _ => return Outcome::Nothing,
+        }
+        Outcome::Changed
     }
 }
 
@@ -546,11 +628,11 @@ pub fn rows(review: &mut Review, cols: usize, rows: usize) -> Vec<Row> {
         } else if item.mark == Mark::Remove {
             ('✗', Look::Remove)
         } else if item.edited.is_some() {
-            ('✎', Look::Changed)
+            ('~', Look::Changed)
         } else if item.comment.is_some() {
             ('»', Look::Comment)
         } else if item.mark == Mark::Ok {
-            ('✔', Look::Ok)
+            ('✓', Look::Ok)
         } else {
             (' ', Look::Dim)
         };
@@ -939,7 +1021,7 @@ let x = 1;
         // The number the agent sees in the feedback, and the mark.
         let model = text.iter().find(|l| l.contains("Theme model")).unwrap();
         // Headings and text count too: the agent gets the same numbers in the feedback.
-        assert!(model.contains('✔') && model.contains("4."), "{model}");
+        assert!(model.contains('✓') && model.contains("4."), "{model}");
         let config = text.iter().position(|l| l.contains("Config")).unwrap();
         assert!(
             screen[config].selected,
@@ -1007,5 +1089,89 @@ let x = 1;
         assert!(ansi.starts_with("\x1b[H"), "from the top left");
         assert!(ansi.contains("38;2;"), "colors of the theme");
         assert!(ansi.contains("the new text"));
+    }
+
+    #[test]
+    fn keys_in_the_list() {
+        let mut r = review();
+        assert_eq!(r.key(Key::Down, 10), Outcome::Changed);
+        assert_eq!(r.selected, 1);
+        assert_eq!(r.key(Key::Text(" "), 10), Outcome::Changed);
+        assert_eq!(r.items[1].mark, Mark::Ok);
+        r.key(Key::Text("d"), 10);
+        assert_eq!(r.items[1].mark, Mark::Remove);
+        r.key(Key::Text("o"), 10);
+        assert_eq!(r.items[1].mark, Mark::Ok);
+        r.key(Key::End, 10);
+        assert_eq!(r.selected, 2);
+        r.key(Key::Home, 10);
+        assert_eq!(r.selected, 0);
+        r.key(Key::Text("O"), 10);
+        assert!(
+            r.items.iter().all(|i| i.mark == Mark::Ok),
+            "Shift+O: the rest Ok"
+        );
+        assert_eq!(r.key(Key::Text("s"), 10), Outcome::Send);
+        assert_eq!(
+            r.key(
+                Key::Enter {
+                    ctrl: true,
+                    shift: false
+                },
+                10
+            ),
+            Outcome::Send
+        );
+        assert_eq!(r.key(Key::Text("z"), 10), Outcome::Nothing);
+        assert_eq!(
+            r.key(Key::Escape, 10),
+            Outcome::Nothing,
+            "Esc in the list is not ours"
+        );
+    }
+
+    #[test]
+    fn keys_in_an_input() {
+        let mut r = review();
+        r.key(Key::Text("c"), 10);
+        assert!(matches!(r.mode, Mode::Comment(_)));
+        // Letters are text now, not commands.
+        for t in ["s", "o", " ", "k"] {
+            assert_eq!(r.key(Key::Text(t), 10), Outcome::Changed);
+        }
+        r.key(
+            Key::Enter {
+                ctrl: false,
+                shift: true,
+            },
+            10,
+        );
+        r.key(Key::Text("x"), 10);
+        r.key(Key::Backspace, 10);
+        r.key(Key::Text("y"), 10);
+        r.key(
+            Key::Enter {
+                ctrl: false,
+                shift: false,
+            },
+            10,
+        );
+        assert!(matches!(r.mode, Mode::Browse));
+        assert_eq!(r.items[0].comment.as_deref(), Some("so k\ny"));
+        r.key(Key::Text("e"), 10);
+        r.key(Key::Text("!"), 10);
+        r.key(Key::Escape, 10);
+        assert!(matches!(r.mode, Mode::Browse));
+        assert_eq!(r.items[0].edited, None, "Esc: no change");
+        r.key(Key::Text("a"), 10);
+        r.key(Key::Text("new"), 10);
+        r.key(
+            Key::Enter {
+                ctrl: true,
+                shift: false,
+            },
+            10,
+        );
+        assert_eq!(r.items[1].text, "new", "Ctrl+Enter in an input saves it");
     }
 }

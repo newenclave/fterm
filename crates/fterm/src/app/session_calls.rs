@@ -52,10 +52,18 @@ impl App {
                 })
                 .unwrap_or_default()
         };
+        // A Review tab waits for an agent that is gone after a restart: it is not saved.
+        let is_review = |tab: &fterm_mux::mux::Tab| {
+            tab.layout
+                .panes()
+                .iter()
+                .all(|p| running.panes.get(p).is_some_and(|p| p.review.is_some()))
+        };
         let tabs = running
             .mux
             .tabs()
             .iter()
+            .filter(|tab| !is_review(tab))
             .map(|tab| SavedTab {
                 title: tab.custom_title.clone(),
                 color: tab.color.map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")),
@@ -86,7 +94,13 @@ impl App {
             name: None,
             saved: now_ms(),
             window,
-            active_tab: running.mux.active_index(),
+            active_tab: running
+                .mux
+                .tabs()
+                .iter()
+                .take(running.mux.active_index())
+                .filter(|tab| !is_review(tab))
+                .count(),
             tabs,
             dock: SavedDock {
                 open: running.dock.open,

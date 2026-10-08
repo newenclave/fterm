@@ -138,6 +138,9 @@ impl App {
         if request.method == "ai_ask" {
             return self.api_ai_ask(request);
         }
+        if request.method == "review" {
+            return self.api_review(event_loop, request);
+        }
         let result =
             self.api_dispatch(event_loop, request.client, &request.method, &request.params);
         let _ = request.reply.send(result);
@@ -259,6 +262,7 @@ impl App {
         self.waits.retain(|w| w.client != client);
         self.ai_waits.retain(|w| w.client != client);
         self.api_questions.retain(|a| a.client != client);
+        self.review_client_gone(client);
         if let Some(running) = &self.running {
             running.window.request_redraw();
         }
@@ -487,6 +491,7 @@ impl App {
 
     /// A pane closed: its inbox goes, and its waits get an error.
     pub(super) fn api_pane_closed(&mut self, pane: PaneId) {
+        self.review_pane_closed(pane);
         self.inbox.remove(pane);
         let (gone, waiting): (Vec<Wait>, Vec<Wait>) = std::mem::take(&mut self.waits)
             .into_iter()
@@ -690,6 +695,13 @@ impl App {
             "id": pane.0,
             "tab": tab,
             "program": display_name(p.session.program()),
+            "kind": if p.review.is_some() {
+                "review"
+            } else if p.scene.is_some() {
+                "scene"
+            } else {
+                "terminal"
+            },
             "title": p.app_title,
             "cwd": p.shell.cwd,
             "active": running.mux.active_pane() == Some(pane),

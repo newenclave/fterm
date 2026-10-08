@@ -35,6 +35,7 @@ pub const METHODS: &[&str] = &[
     "set_tab_color",
     "themes",
     "set_theme",
+    "review",
     "ai_read",
     "ai_ask",
     "ai_input",
@@ -131,6 +132,9 @@ pub fn timeout_for(method: &str, params: &Value) -> Duration {
         // The access question can come first, then the answer.
         return BASE + asked(AI_TIMEOUT_MS);
     }
+    if method == "review" {
+        return review_timeout(params) + BASE;
+    }
     if method != "wait_for" {
         return BASE;
     }
@@ -177,6 +181,57 @@ pub fn place_param(params: &Value) -> Result<SpawnWhere, RpcError> {
             "`place` must be \"tab\", \"right\", or \"down\", got `{other}`"
         ))),
     }
+}
+
+/// What `review` asks for.
+pub struct ReviewRequest {
+    pub title: String,
+    pub from: String,
+    pub items: Vec<crate::review::ReviewItem>,
+    pub timeout: Duration,
+}
+
+/// `review`: `title`, `from` (default: the client name), `text` (markdown) or `items` (a list of texts),
+/// `timeout_ms` (default one hour, at most a day).
+pub fn review_param(params: &Value, client_name: &str) -> Result<ReviewRequest, RpcError> {
+    let items = match (str_param(params, "text")?, params.get("items")) {
+        (Some(text), _) => crate::review::parse_markdown(&text),
+        (None, Some(Value::Array(list))) => {
+            let texts: Vec<String> = list
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| RpcError::invalid_params("`items` must be a list of texts"))
+                })
+                .collect::<Result<_, _>>()?;
+            crate::review::from_items(&texts)
+        }
+        (None, Some(_)) => {
+            return Err(RpcError::invalid_params("`items` must be a list of texts"));
+        }
+        (None, None) => Vec::new(),
+    };
+    if items.is_empty() {
+        return Err(RpcError::invalid_params(
+            "give `text` (a markdown plan) or `items` (a list of texts); there is nothing to review",
+        ));
+    }
+    Ok(ReviewRequest {
+        title: str_param(params, "title")?.unwrap_or_else(|| "Review".to_owned()),
+        from: str_param(params, "from")?.unwrap_or_else(|| client_name.to_owned()),
+        items,
+        timeout: review_timeout(params),
+    })
+}
+
+/// How long a review waits: `timeout_ms`, one hour by default, at most a day.
+fn review_timeout(params: &Value) -> Duration {
+    let ms = params
+        .get("timeout_ms")
+        .and_then(Value::as_f64)
+        .unwrap_or(3_600_000.0);
+    Duration::from_millis(ms.clamp(0.0, 86_400_000.0) as u64)
 }
 
 /// The theme of `set_theme`: `name` (a built-in theme or a file), or `theme` (a whole theme as JSON).
@@ -289,6 +344,46 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_review_request() {
+        let r = review_param(
+            &json!({"title": "Plan", "text": "# A\n- one\n- two"}),
+            "claude",
+        )
+        .unwrap();
+        assert_eq!(r.title, "Plan");
+        assert_eq!(r.from, "claude", "the client name");
+        assert_eq!(r.items.len(), 3);
+        assert_eq!(r.timeout, std::time::Duration::from_secs(3600), "one hour");
+        let r = review_param(
+            &json!({"items": ["a", "b"], "from": "opencode", "timeout_ms": 1000}),
+            "x",
+        )
+        .unwrap();
+        assert_eq!(
+            (r.title.as_str(), r.from.as_str(), r.items.len()),
+            ("Review", "opencode", 2)
+        );
+        assert_eq!(r.timeout, std::time::Duration::from_secs(1));
+        let long = review_param(&json!({"items": ["a"], "timeout_ms": 1e12}), "x").unwrap();
+        assert_eq!(
+            long.timeout,
+            std::time::Duration::from_secs(24 * 3600),
+            "at most a day"
+        );
+        assert!(review_param(&json!({}), "x").is_err(), "no items");
+        assert!(
+            review_param(&json!({"text": "  \n "}), "x").is_err(),
+            "no items"
+        );
+        assert!(review_param(&json!({"items": "a"}), "x").is_err());
+        // The server waits as long as the review.
+        assert_eq!(
+            timeout_for("review", &json!({"timeout_ms": 1000})),
+            std::time::Duration::from_secs(1 + 120)
+        );
+    }
 
     #[test]
     fn a_theme_by_name_or_as_json() {
