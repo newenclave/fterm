@@ -14,12 +14,32 @@ pub fn settings_path(claude_config_dir: Option<&Path>, home: Option<&Path>) -> O
     Some(base.join("settings.json"))
 }
 
+/// All the fterm hooks: the agent states, and with `ftermctl` the plan review of Claude Code plan mode
+/// (stub).
+pub fn fterm_hooks(states: &Value, ftermctl: Option<&Path>) -> Value {
+    let mut all = states.clone();
+    let Some(exe) = ftermctl else {
+        return all;
+    };
+    // Forward slashes work in the bash of Claude Code (Git Bash on Windows) and in cmd.
+    let path = exe.to_string_lossy().replace('\\', "/");
+    all["hooks"]["PreToolUse"] = serde_json::json!([{
+        "matcher": "ExitPlanMode",
+        "hooks": [{
+            "type": "command",
+            "command": format!("\"{path}\" review --hook"),
+            "timeout": 3600
+        }]
+    }]);
+    all
+}
+
 /// An entry of a hook event is from fterm: one of its commands sends the fterm agent sequence.
 fn is_ours(entry: &Value) -> bool {
     entry["hooks"].as_array().into_iter().flatten().any(|hook| {
         hook["command"]
             .as_str()
-            .is_some_and(|c| c.contains("fterm-agent"))
+            .is_some_and(|c| c.contains("fterm-agent") || c.ends_with("review --hook"))
     })
 }
 
@@ -130,5 +150,36 @@ mod tests {
         assert!(merge_hooks(&json!({ "hooks": [] }), &ours()).is_err());
         let err = merge_hooks(&json!({ "hooks": { "Stop": {} } }), &ours()).unwrap_err();
         assert!(err.contains("hooks.Stop"), "{err}");
+    }
+
+    #[test]
+    fn the_plan_review_hook() {
+        let exe = PathBuf::from("C:/tools/fterm/ftermctl.exe");
+        let all = fterm_hooks(&ours(), Some(&exe));
+        let entry = &all["hooks"]["PreToolUse"][0];
+        assert_eq!(entry["matcher"], "ExitPlanMode");
+        let hook = &entry["hooks"][0];
+        assert_eq!(hook["type"], "command");
+        assert_eq!(hook["timeout"], 3600, "the user takes time to review");
+        let command = hook["command"].as_str().unwrap();
+        assert!(command.ends_with(" review --hook"), "{command}");
+        assert!(
+            command.contains("C:/tools/fterm/ftermctl.exe"),
+            "slashes work in bash and cmd: {command}"
+        );
+        assert!(
+            command.starts_with('"'),
+            "a path with spaces works: {command}"
+        );
+        // The agent states are there too.
+        assert_eq!(all["hooks"]["Stop"], ours()["hooks"]["Stop"]);
+        // No ftermctl: only the states.
+        assert_eq!(fterm_hooks(&ours(), None), ours());
+        // Installed once, the review hook is known as ours.
+        let (once, added) = merge_hooks(&json!({}), &all).unwrap();
+        assert!(added.contains(&"PreToolUse".to_owned()));
+        let (twice, added) = merge_hooks(&once, &all).unwrap();
+        assert_eq!(twice, once);
+        assert!(added.is_empty());
     }
 }

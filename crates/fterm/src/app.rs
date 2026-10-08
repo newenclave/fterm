@@ -2965,8 +2965,19 @@ impl App {
                 );
             }
         };
-        let ours: serde_json::Value =
+        let states: serde_json::Value =
             serde_json::from_str(crate::agent::CLAUDE_HOOKS).expect("the fterm hooks are JSON");
+        // The plan review needs ftermctl; it is next to fterm.
+        let ftermctl = std::env::current_exe().ok().and_then(|exe| {
+            let name = if cfg!(windows) {
+                "ftermctl.exe"
+            } else {
+                "ftermctl"
+            };
+            let path = exe.with_file_name(name);
+            path.is_file().then_some(path)
+        });
+        let ours = crate::claude_hooks::fterm_hooks(&states, ftermctl.as_deref());
         let (merged, added) = match crate::claude_hooks::merge_hooks(&settings, &ours) {
             Ok(result) => result,
             Err(err) => {
@@ -2997,6 +3008,8 @@ impl App {
                 String::new(),
                 shown,
                 format!("Hooks for: {}", added.join(", ")),
+                "PreToolUse (ExitPlanMode) shows the plans of plan mode in a Review tab."
+                    .to_owned(),
                 "Your other settings and hooks stay. The old file is kept".to_owned(),
                 "as settings.json.bak-fterm. New Claude Code sessions use them.".to_owned(),
                 String::new(),
