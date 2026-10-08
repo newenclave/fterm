@@ -192,17 +192,32 @@ pub fn cell_colors_with(
         return cell_colors_plain(fg, bg, flags, palette, overrides);
     };
     // Only the colors that the program chose: the first 16 are the theme already.
-    let foreign = |c: Color| match c {
+    // The colors that the program chose: its own (truecolor, the 256-color cube), or palette colors that
+    // it changed (OSC 4, 10, 11; Far Manager sets the old console colors). The theme's own stay.
+    let changed = |i: usize| overrides[i].is_some();
+    let bright = |i: usize| {
+        if flags.contains(Flags::BOLD) && i < 8 {
+            i + 8
+        } else {
+            i
+        }
+    };
+    let foreign_fg = match fg {
         Color::Spec(_) => true,
-        Color::Indexed(i) => i >= 16,
-        Color::Named(_) => false,
+        Color::Indexed(i) => i >= 16 || changed(bright(i as usize)),
+        Color::Named(n) => changed(bright(n as usize)),
+    };
+    let foreign_bg = match bg {
+        Color::Spec(_) => true,
+        Color::Indexed(i) => i >= 16 || changed(i as usize),
+        Color::Named(n) => changed(n as usize),
     };
     let mut fg_rgb = palette.fg(fg, flags, overrides);
     let mut bg_rgb = palette.bg(bg, overrides);
-    if foreign(fg) {
+    if foreign_fg {
         fg_rgb = h.color(fg_rgb);
     }
-    if foreign(bg) {
+    if foreign_bg {
         bg_rgb = h.color(bg_rgb);
     }
     if flags.contains(Flags::INVERSE) {
@@ -349,6 +364,34 @@ mod tests {
         p.set_harmonize(Settings::default());
         let (plain, _) = cell_colors(red, BG, Flags::empty(), &p, &o);
         assert_eq!(plain, rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn a_palette_that_a_program_changed_fits_the_theme_too() {
+        use crate::harmonize::Settings;
+        let mut p = Palette::default();
+        p.set_harmonize(Settings {
+            strength: 1.0,
+            min_contrast: 3.0,
+        });
+        // Like Far: the program sets blue (index 4) to the old console navy (OSC 4).
+        let navy = rgb(0x00, 0x00, 0x80);
+        let mut changed = Colors::default();
+        changed[4] = Some(navy);
+        let blue = Color::Named(NamedColor::Blue);
+        let (_, bg) = cell_colors(FG, blue, Flags::empty(), &p, &changed);
+        assert_ne!(bg, navy, "the program's navy fits the theme");
+        assert!(bg.b > bg.r && bg.b > bg.g, "still blue: {bg:?}");
+        let (_, bg) = cell_colors(FG, Color::Indexed(4), Flags::empty(), &p, &changed);
+        assert_ne!(bg, navy, "by number too");
+        // A color the program did not change is the theme's own.
+        let o = Colors::default();
+        let (_, bg) = cell_colors(FG, blue, Flags::empty(), &p, &o);
+        assert_eq!(bg, p.get(NamedColor::Blue as usize, &o));
+        // No harmonizer: the program's color as it set it.
+        let plain = Palette::default();
+        let (_, bg) = cell_colors(FG, blue, Flags::empty(), &plain, &changed);
+        assert_eq!(bg, navy);
     }
 
     #[test]
