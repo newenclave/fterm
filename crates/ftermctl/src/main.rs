@@ -25,6 +25,8 @@ Panes and tabs:
   spawn [--right|--down] [--profile P] [--cwd DIR] [--pane N]
                                          open a tab (or a split next to pane N); prints the new pane id
   focus N | close N [--force] | zoom [N] | title [--pane N] TEXT
+  theme [NAME | --file x.json]           no NAME: list the themes (* = in use); NAME: use a theme
+                                         until fterm closes (see docs/THEMES.md)
   tab-color [--pane N] \"#rrggbb\"|none    a color line at the top of the tab of a pane
                                          (quote the color: # starts a comment in shells)
   panel [events|agents]                  show a panel of the dock (no name = close the dock)
@@ -124,6 +126,18 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             wait,
             timeout_ms,
         } => run_command(cli, *pane, text, *wait, *timeout_ms),
+        Command::ThemeFile { path } => {
+            let text = std::fs::read_to_string(path)
+                .map_err(|err| format!("cannot read {path}: {err}"))?;
+            let theme: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+                .map_err(|err| format!("{path}: bad JSON: {err}"))?;
+            let mut client = connect(cli.window)?;
+            let answer = client
+                .call("set_theme", json!({ "theme": theme }))
+                .map_err(|err| err.to_string())?;
+            print_answer(cli.json, "set_theme", &answer);
+            Ok(ExitCode::SUCCESS)
+        }
         Command::DrawStdin { pane } => {
             let mut text = String::new();
             std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
@@ -219,6 +233,8 @@ fn print_answer(as_json: bool, method: &str, answer: &Value) {
             answer["pane"], answer["width"], answer["height"]
         ),
         "scene_draw" => {}
+        "themes" => print!("{}", show::themes(answer)),
+        "set_theme" => println!("{}", answer["name"].as_str().unwrap_or("")),
         "screenshot" => println!("{}", answer["path"].as_str().unwrap_or("")),
         "send_message" => println!("message {}", answer["id"]),
         "wait_for" => println!("{}", serde_json::to_string(answer).unwrap_or_default()),

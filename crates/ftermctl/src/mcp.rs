@@ -156,6 +156,19 @@ pub fn tools() -> Value {
             }, "required": ["title"] }
         },
         {
+            "name": "list_themes",
+            "description": "List the color themes of fterm (built-in ones and files). The theme in use has a `*`.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "set_theme",
+            "description": "Change the colors of the whole fterm window (the terminal and the UI) until fterm closes. Give `name` (from list_themes), or `theme`: a theme as JSON, for example {\"name\": \"Mine\", \"terminal\": {\"background\": \"#101418\", \"foreground\": \"#e0e0e0\"}, \"ui\": {\"accent\": \"#ff8800\"}}. Missing colors are made from the others (see docs/THEMES.md). Change it only when the user asks.",
+            "inputSchema": { "type": "object", "properties": {
+                "name": { "type": "string", "description": "A theme name from list_themes." },
+                "theme": { "type": "object", "description": "A whole theme: name, terminal (background, foreground, cursor, selection, ansi[8], bright[8]), ui (roles like accent, surface, text_dim)." }
+            }}
+        },
+        {
             "name": "set_tab_color",
             "description": "Give the tab of a pane a color: a line at the top of the tab, so the user sees it from other tabs. For example red for failed tests, green when done. \"none\" takes the color away.",
             "inputSchema": { "type": "object", "properties": {
@@ -439,6 +452,30 @@ impl<B: Backend> Server<B> {
                     None => Ok(v["text"].as_str().unwrap_or("").to_owned()),
                 }
             }),
+            "list_themes" => self.backend.call("themes", json!({})).map(|v| {
+                let current = v["current"].as_str().unwrap_or_default();
+                v["themes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(|name| {
+                        let mark = if name == current { "* " } else { "  " };
+                        format!("{mark}{name}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }),
+            "set_theme" => {
+                let params = pick(&[("name", "name"), ("theme", "theme")]);
+                if params.as_object().is_some_and(|o| o.is_empty()) {
+                    Err("give `name` or `theme`".to_owned())
+                } else {
+                    self.backend
+                        .call("set_theme", params)
+                        .map(|v| format!("The theme is {}.", v["name"]))
+                }
+            }
             "set_tab_color" => need("color").and_then(|_| {
                 self.backend
                     .call(
@@ -635,6 +672,10 @@ mod tests {
                 }),
                 "get_text" => json!({ "pane": 1, "text": "hello\nworld" }),
                 "send_message" => json!({ "id": 3 }),
+                "themes" => {
+                    json!({ "current": "Catppuccin Mocha", "themes": ["Catppuccin Mocha", "Nord"] })
+                }
+                "set_theme" => json!({ "name": "Nord" }),
                 "ai_read" => json!({
                     "turns": [
                         { "role": "user", "text": "what is ls?", "streaming": false },
@@ -800,6 +841,8 @@ mod tests {
             "ai_read",
             "ai_ask",
             "set_tab_color",
+            "list_themes",
+            "set_theme",
         ] {
             assert!(names.contains(&name), "{name}");
         }
@@ -809,6 +852,37 @@ mod tests {
         }
         let run = tools.iter().find(|t| t["name"] == "run_command").unwrap();
         assert_eq!(run["inputSchema"]["required"], json!(["command"]));
+    }
+
+    #[test]
+    fn themes() {
+        let mut s = server();
+        let result = tool(&mut s, "list_themes", json!({}));
+        assert_eq!(s.backend.calls[0], ("themes".into(), json!({})));
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("* Catppuccin Mocha") && text.contains("Nord"),
+            "{text}"
+        );
+
+        let result = tool(&mut s, "set_theme", json!({ "name": "Nord" }));
+        assert_eq!(result["isError"], json!(false), "{result}");
+        assert_eq!(
+            s.backend.calls[1],
+            ("set_theme".into(), json!({ "name": "Nord" }))
+        );
+        let theme = json!({ "name": "Mine", "ui": { "accent": "#ff8800" } });
+        tool(&mut s, "set_theme", json!({ "theme": theme }));
+        assert_eq!(
+            s.backend.calls[2],
+            ("set_theme".into(), json!({ "theme": theme }))
+        );
+        let result = tool(&mut s, "set_theme", json!({}));
+        assert_eq!(
+            result["isError"],
+            json!(true),
+            "a name or a theme is needed"
+        );
     }
 
     #[test]

@@ -33,6 +33,8 @@ pub const METHODS: &[&str] = &[
     "scene_draw",
     "screenshot",
     "set_tab_color",
+    "themes",
+    "set_theme",
     "ai_read",
     "ai_ask",
     "ai_input",
@@ -177,6 +179,26 @@ pub fn place_param(params: &Value) -> Result<SpawnWhere, RpcError> {
     }
 }
 
+/// The theme of `set_theme`: `name` (a built-in theme or a file), or `theme` (a whole theme as JSON).
+pub fn theme_param(params: &Value) -> Result<crate::themes::Override, RpcError> {
+    use crate::themes::Override;
+    let name = str_param(params, "name")?;
+    match (name, params.get("theme")) {
+        (Some(name), None) => Ok(Override::Named(name)),
+        (None, Some(json)) => {
+            let mut theme = fterm_config::theme::Theme::from_json(json)
+                .map_err(|err| RpcError::invalid_params(format!("theme: {err}")))?;
+            if theme.name.is_empty() {
+                theme.name = "From the API".to_owned();
+            }
+            Ok(Override::Inline(Box::new(theme)))
+        }
+        _ => Err(RpcError::invalid_params(
+            "give `name` (a theme name) or `theme` (a theme as JSON), not both",
+        )),
+    }
+}
+
 /// `color` of `set_tab_color`: `#rrggbb` or `#rgb`, or `"none"` / `null` for no color.
 pub fn tab_color_param(params: &Value) -> Result<Option<[u8; 3]>, RpcError> {
     match params.get("color") {
@@ -267,6 +289,33 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_theme_by_name_or_as_json() {
+        use crate::themes::Override;
+        assert_eq!(
+            theme_param(&json!({"name": "Nord"})).unwrap(),
+            Override::Named("Nord".into())
+        );
+        let Override::Inline(theme) =
+            theme_param(&json!({"theme": {"name": "Agent", "ui": {"accent": "#ff8800"}}})).unwrap()
+        else {
+            panic!("not inline");
+        };
+        assert_eq!((theme.name.as_str(), theme.ui.accent.r), ("Agent", 0xff));
+        // A theme with no name gets one, so the list can show it.
+        let Override::Inline(theme) = theme_param(&json!({"theme": {"ui": {}}})).unwrap() else {
+            panic!("not inline");
+        };
+        assert_eq!(theme.name, "From the API");
+        assert!(theme_param(&json!({})).is_err(), "a name or a theme");
+        assert!(
+            theme_param(&json!({"name": "a", "theme": {}})).is_err(),
+            "not both"
+        );
+        let bad = theme_param(&json!({"theme": {"ui": {"accent": "blue"}}})).unwrap_err();
+        assert!(bad.message.contains("ui.accent"), "{}", bad.message);
+    }
 
     #[test]
     fn a_tab_color() {

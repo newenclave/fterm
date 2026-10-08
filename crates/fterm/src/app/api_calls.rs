@@ -531,6 +531,20 @@ impl App {
                 Ok(json!({}))
             }
             "set_title" => self.api_set_title(client, params),
+            "themes" => {
+                let names = fterm_config::theme::list_themes(&self.theme_dirs());
+                Ok(json!({ "current": self.theme.name, "themes": names }))
+            }
+            "set_theme" => {
+                let theme = crate::api::theme_param(params)?;
+                // A bad theme file: `load_theme` showed a toast; the client gets the reason too.
+                if let crate::themes::Override::Named(name) = &theme {
+                    fterm_config::theme::find_theme(name, &self.theme_dirs())
+                        .map_err(RpcError::invalid_params)?;
+                }
+                let name = self.use_theme(theme).map_err(RpcError::invalid_params)?;
+                Ok(json!({ "name": name }))
+            }
             "set_tab_color" => {
                 let pane = self.target_pane(client, params)?;
                 let color = crate::api::tab_color_param(params)?;
@@ -872,7 +886,7 @@ impl App {
             .map_or(200, |n| n as usize)
             .min(MAX_LINES);
         let styled = bool_param(params, "styled")?.unwrap_or(false);
-        let palette = super::palette_for(&self.config);
+        let palette = self.palette();
         let running = self.running.as_ref().expect("checked in api_call");
         let p = &running.panes[&pane];
         let session = &p.session;

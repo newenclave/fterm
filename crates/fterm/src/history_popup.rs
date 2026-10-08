@@ -12,6 +12,8 @@ pub enum PopupKind {
     Dirs,
     /// Saved sessions (Phase 9b).
     Sessions,
+    /// The themes (built-in ones and files).
+    Themes,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -116,6 +118,7 @@ impl HistoryPopup {
         match self.kind {
             PopupKind::Dirs => "Folders".to_owned(),
             PopupKind::Sessions => "Sessions".to_owned(),
+            PopupKind::Themes => "Themes".to_owned(),
             PopupKind::Commands => {
                 let mut title = "Commands".to_owned();
                 if self.only_here {
@@ -141,6 +144,7 @@ impl HistoryPopup {
             PopupKind::Sessions => {
                 "Enter restore · Del forget · Save session as… is in the palette"
             }
+            PopupKind::Themes => "Enter use · the themes folder is next to fterm.lua",
         }
     }
 }
@@ -418,6 +422,9 @@ mod tests {
         let sessions = HistoryPopup::new(PopupKind::Sessions, vec![], String::new(), None);
         assert_eq!(sessions.title(), "Sessions");
         assert!(sessions.footer().contains("Enter restore"));
+        let themes = HistoryPopup::new(PopupKind::Themes, vec![], String::new(), None);
+        assert_eq!(themes.title(), "Themes");
+        assert!(themes.footer().contains("Enter use"));
         assert!(p.footer().contains("Shift+Enter"));
         assert!(d.footer().contains("Ctrl+P"));
     }

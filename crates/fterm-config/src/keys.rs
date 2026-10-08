@@ -204,11 +204,13 @@ pub enum BuiltinAction {
     InstallClaudeSkill,
     /// Full screen with no window frame (like Alt+Enter in WezTerm).
     ToggleFullscreen,
+    /// The list of themes; Enter uses one.
+    ChooseTheme,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 49] = [
+    pub const ALL: [BuiltinAction; 50] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -258,6 +260,7 @@ impl BuiltinAction {
         Self::NewScene,
         Self::InstallClaudeSkill,
         Self::ToggleFullscreen,
+        Self::ChooseTheme,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -312,6 +315,7 @@ impl BuiltinAction {
             Self::NewScene => "new_scene",
             Self::InstallClaudeSkill => "install_claude_skill",
             Self::ToggleFullscreen => "toggle_fullscreen",
+            Self::ChooseTheme => "choose_theme",
         };
         name.to_owned()
     }
@@ -354,6 +358,7 @@ impl BuiltinAction {
             Self::NewScene => "New Braille scene (split right)".to_owned(),
             Self::InstallClaudeSkill => "Install the fterm skill for Claude Code".to_owned(),
             Self::ToggleFullscreen => "Full screen on or off".to_owned(),
+            Self::ChooseTheme => "Theme…".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -610,6 +615,14 @@ mod tests {
             keys.get(&chord("ctrl+shift+a")),
             Some(&Action::Builtin(BuiltinAction::PanelAgents))
         );
+    }
+
+    #[test]
+    fn choose_theme_action() {
+        let action = BuiltinAction::from_name("choose_theme").unwrap();
+        assert_eq!(action, BuiltinAction::ChooseTheme);
+        assert_eq!(action.label(), "Theme…");
+        assert!(BuiltinAction::ALL.contains(&action));
     }
 
     #[test]

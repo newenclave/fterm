@@ -99,6 +99,18 @@ pub fn chat(answer: &Value) -> String {
     out
 }
 
+/// The themes, one per line; `*` marks the theme in use.
+pub fn themes(answer: &Value) -> String {
+    let current = answer["current"].as_str().unwrap_or_default();
+    let mut out = String::new();
+    for name in answer["themes"].as_array().into_iter().flatten() {
+        let name = name.as_str().unwrap_or_default();
+        let mark = if name == current { '*' } else { ' ' };
+        out.push_str(&format!("{mark} {name}\n"));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

@@ -28,6 +28,10 @@ pub enum Command {
     DrawStdin {
         pane: Option<u64>,
     },
+    /// `theme --file x.json`: ftermctl reads the file (fterm may have another current folder).
+    ThemeFile {
+        path: String,
+    },
     Mcp,
 }
 
@@ -307,6 +311,20 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             w.pane_into(&mut params)?;
             call("screenshot", params)
         }
+        "theme" => {
+            let w = read(&["file"], &[])?;
+            if let Some(path) = w.value("file") {
+                return Ok(Command::ThemeFile {
+                    path: path.to_owned(),
+                });
+            }
+            let name = w.text();
+            if name.trim().is_empty() {
+                call("themes", json!({}))
+            } else {
+                call("set_theme", json!({ "name": name.trim() }))
+            }
+        }
         "tab-color" => {
             let w = read(&["pane"], &[])?;
             let color = w.text();
@@ -502,6 +520,21 @@ mod tests {
             cli("draw --pane 4 -").unwrap().command,
             Command::DrawStdin { pane: Some(4) },
             "`-` = the commands come on stdin"
+        );
+    }
+
+    #[test]
+    fn themes() {
+        assert_eq!(call("theme"), ("themes".into(), json!({})));
+        assert_eq!(
+            call("theme Catppuccin Latte"),
+            ("set_theme".into(), json!({"name": "Catppuccin Latte"}))
+        );
+        assert_eq!(
+            cli("theme --file nord.json").unwrap().command,
+            Command::ThemeFile {
+                path: "nord.json".into()
+            }
         );
     }
 

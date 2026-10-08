@@ -22,6 +22,7 @@ mod paths;
 mod screenshot;
 mod session_state;
 mod text_command;
+mod themes;
 mod title;
 mod waits;
 mod window_icon;

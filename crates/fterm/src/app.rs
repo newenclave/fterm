@@ -27,7 +27,7 @@ use fterm_term::alacritty_terminal::grid::{Dimensions, Scroll};
 use fterm_term::alacritty_terminal::index::{Point, Side};
 use fterm_term::alacritty_terminal::selection::{Selection, SelectionType};
 use fterm_term::alacritty_terminal::term::TermMode;
-use fterm_term::colors::{ColorOverrides, Palette};
+use fterm_term::colors::Palette;
 use fterm_term::copy_mode::{self, CopyAction, CopyResult};
 use fterm_term::input::typed_input;
 use fterm_term::links::url_at;
@@ -77,6 +77,8 @@ pub enum UserEvent {
     Term(PaneId, TermEvent),
     /// The config file changed on disk.
     ConfigChanged,
+    /// A theme file changed on disk.
+    ThemeFilesChanged,
     /// A request from an API client (`ftermctl`, `ftermctl mcp`, a script).
     Api(crate::api::ApiRequest),
     /// An API client closed its connection.
@@ -348,10 +350,19 @@ pub struct App {
     profiles: Vec<Profile>,
     /// Watches the config file. Kept here so it does not stop.
     _watcher: Option<notify::RecommendedWatcher>,
+    /// The theme in use, and its UI colors.
+    theme: fterm_config::theme::Theme,
+    ui: UiColors,
+    /// A theme chosen while fterm runs (the palette or the API).
+    theme_override: Option<crate::themes::Override>,
+    /// The system is in dark mode (for `theme = { light = ..., dark = ... }`).
+    system_dark: bool,
     /// A message box (for example, an error in the config). Any key closes it.
     message: Option<Vec<String>>,
     /// Editors save in several steps: we load the config a moment after the last change.
     reload_at: Option<Instant>,
+    /// When to read the theme files again (after they changed on disk).
+    theme_reload_at: Option<Instant>,
     /// The PowerShell shell integration script (written at start).
     shell_script: Option<std::path::PathBuf>,
     /// The command palette, when it is open.
@@ -452,8 +463,13 @@ impl App {
             config_path,
             profiles,
             _watcher: None,
+            theme: fterm_config::theme::Theme::default(),
+            ui: UiColors::default(),
+            theme_override: None,
+            system_dark: true,
             message,
             reload_at: None,
+            theme_reload_at: None,
             events_seen: false,
             history: None,
             history_popup: None,
@@ -834,9 +850,7 @@ impl App {
             // The AI panel draws its chat, not rows.
             PanelKind::Ai => Vec::new(),
             PanelKind::Events => {
-                // TODO(theme): use the UI colors of the theme.
-                let ui = UiColors::default();
-                event_rows(self.center.history(), running.dock.filter, now, &ui)
+                event_rows(self.center.history(), running.dock.filter, now, &self.ui)
             }
             PanelKind::Agents => {
                 let titles = running.tab_titles();
@@ -854,8 +868,7 @@ impl App {
                         }
                     }
                 }
-                // TODO(theme): use the UI colors of the theme.
-                agent_rows(&entries, now, &UiColors::default())
+                agent_rows(&entries, now, &self.ui)
             }
         }
     }
@@ -1137,17 +1150,35 @@ impl App {
             return;
         }
         let file = self.config_path.file_name().map(|f| f.to_owned());
+        let theme_dirs: Vec<std::path::PathBuf> = self
+            .theme_dirs()
+            .into_iter()
+            .filter(|d| d.is_dir())
+            .collect();
+        let watched_themes = theme_dirs.clone();
         let proxy = self.proxy.clone();
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
             let Ok(event) = event else {
                 return;
             };
+            if !(event.kind.is_modify() || event.kind.is_create() || event.kind.is_remove()) {
+                return;
+            }
             let ours = event
                 .paths
                 .iter()
                 .any(|path| path.file_name() == file.as_deref());
-            if ours && (event.kind.is_modify() || event.kind.is_create()) {
+            let theme = event.paths.iter().any(|path| {
+                path.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+                    && path
+                        .parent()
+                        .is_some_and(|d| watched_themes.iter().any(|t| t == d))
+            });
+            if ours && !event.kind.is_remove() {
                 let _ = proxy.send_event(UserEvent::ConfigChanged);
+            } else if theme {
+                let _ = proxy.send_event(UserEvent::ThemeFilesChanged);
             }
         });
         match watcher {
@@ -1156,9 +1187,86 @@ impl App {
                 if let Err(err) = watcher.watch(&dir, notify::RecursiveMode::NonRecursive) {
                     tracing::warn!("cannot watch the config: {err}");
                 }
+                for themes in &theme_dirs {
+                    if let Err(err) = watcher.watch(themes, notify::RecursiveMode::NonRecursive) {
+                        tracing::warn!("cannot watch {}: {err}", themes.display());
+                    }
+                }
                 self._watcher = Some(watcher);
             }
             Err(err) => tracing::warn!("cannot watch the config: {err}"),
+        }
+    }
+
+    /// The terminal palette: the theme, with `colors` of the config on top.
+    pub(crate) fn palette(&self) -> Palette {
+        Palette::with_colors(&crate::themes::palette_colors(
+            &self.theme,
+            &self.config.config.colors,
+        ))
+    }
+
+    /// The folders with theme files.
+    pub(crate) fn theme_dirs(&self) -> Vec<std::path::PathBuf> {
+        crate::themes::theme_dirs(&self.config_path, crate::paths::data_dir().as_deref())
+    }
+
+    /// Finds the theme to use (the config, the system mode, a theme chosen while fterm runs).
+    /// An error keeps the last good theme and shows a toast. Gives true when the theme is in use.
+    pub(crate) fn load_theme(&mut self) -> bool {
+        let dirs = self.theme_dirs();
+        let picked = crate::themes::pick(
+            &self.config.config.theme,
+            self.theme_override.as_ref(),
+            self.system_dark,
+            |name| fterm_config::theme::find_theme(name, &dirs),
+        );
+        match picked {
+            Ok(theme) => {
+                self.ui = crate::themes::ui_colors(&theme);
+                self.theme = theme;
+                true
+            }
+            Err(err) => {
+                tracing::warn!("theme: {err}");
+                self.notify(None, "Theme error", &err, Level::Error, Source::App);
+                false
+            }
+        }
+    }
+
+    /// `choose_theme`: the list of themes.
+    fn open_theme_popup(&mut self) {
+        self.palette = None;
+        self.history_popup = Some(HistoryPopup::new(
+            PopupKind::Themes,
+            Vec::new(),
+            String::new(),
+            None,
+        ));
+        self.refresh_history_popup();
+    }
+
+    /// Uses a theme until the config changes or fterm closes. On an error the old theme stays.
+    pub(crate) fn use_theme(&mut self, theme: crate::themes::Override) -> Result<String, String> {
+        let old = self.theme_override.replace(theme);
+        if self.load_theme() {
+            self.apply_theme();
+            Ok(self.theme.name.clone())
+        } else {
+            self.theme_override = old;
+            Err("the theme was not changed".to_owned())
+        }
+    }
+
+    /// Gives the theme to the renderer.
+    pub(crate) fn apply_theme(&mut self) {
+        let palette = self.palette();
+        let ui = self.ui;
+        if let Some(running) = &mut self.running {
+            running.renderer.set_palette(palette);
+            running.renderer.set_ui(ui);
+            running.window.request_redraw();
         }
     }
 
@@ -1171,6 +1279,8 @@ impl App {
                 self.config = config;
                 self.profiles = profiles_for(&self.config);
                 self.apply_notification_config();
+                self.theme_override = None;
+                self.load_theme();
                 self.apply_config();
                 // Say which file it read: with FTERM_CONFIG it is not always the one you think.
                 let path = self.config_path.display().to_string();
@@ -1199,6 +1309,7 @@ impl App {
 
     /// Gives the config to the renderer: font, padding, colors, Braille.
     fn apply_config(&mut self) {
+        let palette = self.palette();
         let Some(running) = &mut self.running else {
             return;
         };
@@ -1216,7 +1327,8 @@ impl App {
                 tracing::error!("cannot change the font: {err:#}");
             }
         }
-        running.renderer.set_palette(palette_for(&self.config));
+        running.renderer.set_palette(palette);
+        running.renderer.set_ui(self.ui);
         let braille = match config.braille_style {
             fterm_config::load::BrailleStyle::Pixels => BrailleStyle::Pixels,
             fterm_config::load::BrailleStyle::Dots => BrailleStyle::Dots,
@@ -1286,7 +1398,8 @@ impl App {
             config.font_size * scale,
             config.padding * scale,
         )?;
-        renderer.set_palette(palette_for(&self.config));
+        renderer.set_palette(self.palette());
+        renderer.set_ui(self.ui);
         if config.braille_style == fterm_config::load::BrailleStyle::Dots {
             renderer.set_braille_style(gpu.device(), BrailleStyle::Dots);
         }
@@ -1979,6 +2092,9 @@ impl App {
         if action == A::RestoreSession {
             return self.restore_last_session();
         }
+        if action == A::ChooseTheme {
+            return self.open_theme_popup();
+        }
         if action == A::Sessions {
             return self.open_sessions_popup();
         }
@@ -2144,6 +2260,7 @@ impl App {
             | A::RestoreSession
             | A::Sessions
             | A::SaveSessionAs
+            | A::ChooseTheme
             | A::NewScene => {}
             A::ToggleRemoteControl => {
                 let Some(pane) = running.mux.active_pane() else {
@@ -2238,12 +2355,16 @@ impl App {
         if kind == PopupKind::Sessions {
             return self.session_rows();
         }
+        if kind == PopupKind::Themes {
+            let names = fterm_config::theme::list_themes(&self.theme_dirs());
+            return crate::themes::theme_rows(&names, &self.theme.name);
+        }
         let Some(history) = &self.history else {
             return Vec::new();
         };
         let now = now_ms();
         match kind {
-            PopupKind::Sessions => Vec::new(),
+            PopupKind::Sessions | PopupKind::Themes => Vec::new(),
             PopupKind::Commands => {
                 let filter = CommandFilter {
                     cwd: if only_here {
@@ -2351,6 +2472,11 @@ impl App {
             .is_some_and(|pane| pane.shell.is_running());
         match popup.kind {
             PopupKind::Sessions => return self.restore_entry(&row.key),
+            PopupKind::Themes => {
+                // An error was shown as a toast.
+                let _ = self.use_theme(crate::themes::Override::Named(row.key));
+                return;
+            }
             PopupKind::Dirs if run || split => {
                 self.spawn_cwd = Some(row.text.clone());
                 let place = if split {
@@ -2481,7 +2607,7 @@ impl App {
                     let result = match kind {
                         PopupKind::Commands => history.forget_command(&row.text),
                         PopupKind::Dirs => history.forget_dir(&row.text, now_ms()),
-                        PopupKind::Sessions => Ok(()),
+                        PopupKind::Sessions | PopupKind::Themes => Ok(()),
                     };
                     if let Err(err) = result {
                         tracing::warn!("cannot change the history: {err}");
@@ -3341,8 +3467,7 @@ impl App {
                 .dock
                 .select(selected, dock_rows.len(), layout.visible_rows());
         }
-        // TODO(theme): use the UI colors of the theme.
-        let ui = UiColors::default();
+        let ui = self.ui;
         let (titles, badges, tab_colors) = match &mut self.running {
             Some(running) => {
                 if focused {
@@ -3645,7 +3770,11 @@ impl ApplicationHandler<UserEvent> for App {
             Ok(running) => {
                 // winit sends `Focused` only on a change, so read the first state here.
                 self.focused = running.window.has_focus();
+                self.system_dark = running.window.theme() != Some(winit::window::Theme::Light);
                 self.running = Some(running);
+                if self.load_theme() {
+                    self.apply_theme();
+                }
                 self.start_api();
                 if let Some(dir) = std::env::var_os("FTERM_RECORD").filter(|d| !d.is_empty()) {
                     // A recording can have secrets: it must not stay on by mistake.
@@ -3737,6 +3866,10 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Term(pane, event) => (pane, event),
             UserEvent::ConfigChanged => {
                 self.reload_at = Some(Instant::now() + CONFIG_DEBOUNCE);
+                return;
+            }
+            UserEvent::ThemeFilesChanged => {
+                self.theme_reload_at = Some(Instant::now() + CONFIG_DEBOUNCE);
                 return;
             }
             UserEvent::Api(_)
@@ -3883,6 +4016,16 @@ impl ApplicationHandler<UserEvent> for App {
             Some(at) => wake_at = Some(at),
             None => {}
         }
+        match self.theme_reload_at {
+            Some(at) if now >= at => {
+                self.theme_reload_at = None;
+                if self.load_theme() {
+                    self.apply_theme();
+                }
+            }
+            Some(at) => wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at))),
+            None => {}
+        }
         if self.autoscroll() {
             let tick = now + AUTOSCROLL_TICK;
             wake_at = Some(wake_at.map_or(tick, |t: Instant| t.min(tick)));
@@ -3933,6 +4076,16 @@ impl ApplicationHandler<UserEvent> for App {
                 running.gpu.resize(size);
                 self.resize_all_panes();
                 self.running.as_ref().unwrap().window.request_redraw();
+            }
+            WindowEvent::ThemeChanged(theme) => {
+                self.system_dark = theme == winit::window::Theme::Dark;
+                let follows = matches!(
+                    self.config.config.theme,
+                    fterm_config::theme::ThemeChoice::System { .. }
+                );
+                if follows && self.theme_override.is_none() && self.load_theme() {
+                    self.apply_theme();
+                }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 let running = self.running.as_mut().unwrap();
@@ -4133,25 +4286,6 @@ fn profiles_for(config: &LoadedConfig) -> Vec<Profile> {
     } else {
         config.config.profiles.clone()
     }
-}
-
-fn palette_for(config: &LoadedConfig) -> Palette {
-    let c = &config.config.colors;
-    let rgb = |c: Option<fterm_config::colors::Rgb>| {
-        c.map(|c| fterm_term::alacritty_terminal::vte::ansi::Rgb {
-            r: c.r,
-            g: c.g,
-            b: c.b,
-        })
-    };
-    Palette::with_colors(&ColorOverrides {
-        background: rgb(c.background),
-        foreground: rgb(c.foreground),
-        cursor: rgb(c.cursor),
-        selection: rgb(c.selection),
-        ansi: c.ansi.map(rgb),
-        bright: c.bright.map(rgb),
-    })
 }
 
 fn dock_side(place: DockPlace) -> DockSide {
