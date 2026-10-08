@@ -365,6 +365,33 @@ Still to do:
 - Colors per cell, so one scene can have many colors.
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
+## Ideas (not decided yet)
+Ideas from the user. We think about them before we plan them.
+
+### Mark up a picture (annotate)
+Sometimes you paste a picture for an agent, but first you want to mark something on it. Today you open another
+program (the Windows screenshot tool) and draw with a pen there. fterm could do this itself:
+- **What to mark up:** a picture from the clipboard, or a screenshot of a pane (`screenshot` already exists), for
+  example a TUI where something looks wrong.
+- **Tools:** a pen, a rectangle, an arrow, 3–4 colors, Ctrl+Z. Later: text, and blur (to hide a secret).
+- **Where the result goes:** Enter puts the picture into the clipboard. It can also save a file (for example in
+  `data_dir/shots/`) and paste its **path** into the active pane: Claude Code and other agents read a picture from
+  a path in the text. This works the same for all agents.
+- **How to open it:** a key or a palette action ("Annotate clipboard image", "Annotate pane"). Maybe also the API,
+  so an agent can show a picture, ask "mark what is wrong", and get the result back.
+- fterm draws the picture itself, over the window. Nothing goes through ConPTY, so it works on all systems.
+- It needs a picture layer in the renderer (a texture, scale, positions). The same layer can show pictures for
+  agents later (`show_image`), and maybe iTerm2 pictures in the output (Phase 3b).
+- **Open questions:** the clipboard, a pane, or both? The result to the clipboard, a file + path, or both?
+  Over the whole window (like the palette) or in its own tab (like Review)?
+
+### Pictures in the terminal (Phase 3b)
+Waits. Do we need them at all, and where are they useful? On Windows only iTerm2 (OSC 1337) gets through ConPTY
+(see Phase 3b). Also open: load `conpty.dll` from PATH, or only next to `fterm.exe`?
+
+### Plugins
+The user is thinking about it.
+
 ## Next step
-Choose the next phase: 3b (images) or 10 (release).
+Choose the next phase: 10 (release on all systems), or one of the ideas above.
 Write a detailed plan for it. Then build it.
