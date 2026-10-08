@@ -255,10 +255,10 @@ pub fn human_duration(d: Duration) -> String {
     let secs = d.as_secs();
     let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
     match (h, m, s) {
-        (0, 0, s) => format!("{s} s"),
-        (0, m, 0) => format!("{m} min"),
-        (0, m, s) => format!("{m} min {s} s"),
-        (h, m, _) => format!("{h} h {m} min"),
+        (0, 0, s) => fterm_config::tr!("time.s", s = s),
+        (0, m, 0) => fterm_config::tr!("time.min", m = m),
+        (0, m, s) => fterm_config::tr!("time.min_s", m = m, s = s),
+        (h, m, _) => fterm_config::tr!("time.h_min", h = h, m = m),
     }
 }
 

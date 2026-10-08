@@ -213,7 +213,13 @@ impl App {
     pub(super) fn restore_last_session(&mut self) {
         match sessions_dir().and_then(|dir| newest_closed(&dir)) {
             Some(entry) => self.restore_from(entry),
-            None => self.notify(None, "No saved session", "", Level::Info, Source::App),
+            None => self.notify(
+                None,
+                &tr!("toast.no_saved_session"),
+                "",
+                Level::Info,
+                Source::App,
+            ),
         }
     }
 
@@ -226,15 +232,21 @@ impl App {
             Ok(None) => {
                 return self.notify(
                     None,
-                    "Not restored",
-                    "on_restore in your config said no.",
+                    &tr!("toast.not_restored"),
+                    &tr!("toast.not_restored_body"),
                     Level::Info,
                     Source::App,
                 );
             }
             // A broken function must not lose the session.
             Err(err) => {
-                self.notify(None, "on_restore failed", &err, Level::Error, Source::App);
+                self.notify(
+                    None,
+                    &tr!("toast.on_restore_failed"),
+                    &err,
+                    Level::Error,
+                    Source::App,
+                );
                 entry.session
             }
         };
@@ -261,7 +273,13 @@ impl App {
                 kind,
                 session,
             }),
-            None => self.notify(None, "The session is gone", "", Level::Warning, Source::App),
+            None => self.notify(
+                None,
+                &tr!("toast.session_gone"),
+                "",
+                Level::Warning,
+                Source::App,
+            ),
         }
     }
 
@@ -291,8 +309,11 @@ impl App {
         if rows.is_empty() {
             return self.notify(
                 None,
-                "No saved sessions",
-                "A session is saved when fterm closes, or with \"Save session as…\".",
+                &tr!("toast.no_saved_sessions"),
+                &tr!(
+                    "toast.no_saved_sessions_body",
+                    action = tr!("action.save_session_as")
+                ),
                 Level::Info,
                 Source::App,
             );
@@ -363,10 +384,16 @@ impl App {
             return;
         };
         match save_named(&dir, name, &session) {
-            Ok(_) => self.notify(None, "Session saved", name, Level::Success, Source::App),
+            Ok(_) => self.notify(
+                None,
+                &tr!("toast.session_saved"),
+                name,
+                Level::Success,
+                Source::App,
+            ),
             Err(err) => self.notify(
                 None,
-                "Cannot save the session",
+                &tr!("toast.session_save_error"),
                 &err.to_string(),
                 Level::Error,
                 Source::App,
@@ -448,7 +475,13 @@ impl App {
             }
         }
         if opened == 0 {
-            return self.notify(None, "Nothing to restore", "", Level::Info, Source::App);
+            return self.notify(
+                None,
+                &tr!("toast.nothing_to_restore"),
+                "",
+                Level::Info,
+                Source::App,
+            );
         }
         let mut first = first;
         if let Some(tab) = fresh {
@@ -490,21 +523,8 @@ impl App {
         }
         tracing::info!(tabs = opened, reruns, "session restored");
         if reruns > 0 && programs != Rerun::Run && agents != Rerun::Run {
-            let body = if reruns == 1 {
-                "A pane ran a program: its command is in the prompt again. Press Enter to run it."
-                    .to_owned()
-            } else {
-                format!(
-                    "{reruns} panes ran programs: their commands are in the prompt again. Press Enter to run them."
-                )
-            };
-            self.notify(
-                None,
-                "Programs can run again",
-                &body,
-                Level::Info,
-                Source::App,
-            );
+            let body = trn!("toast.reruns_body", reruns);
+            self.notify(None, &tr!("toast.reruns"), &body, Level::Info, Source::App);
         }
         self.resize_all_panes();
         self.tab_changed();

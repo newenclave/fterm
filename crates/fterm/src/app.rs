@@ -11,7 +11,7 @@ use fterm_config::load::{
     OsNotify, SAMPLE_CONFIG, ToastPosition, config_path, load_file,
 };
 use fterm_config::profiles::{Profile, detect_profiles, launch_command, path_extension, which};
-use fterm_config::tr;
+use fterm_config::{tr, trn};
 use fterm_history::{CommandFilter, CommandRecord, History, Limits, now_ms, should_save};
 use fterm_mux::{Closed, Direction, Edge, Mux, PaneId, Rect, TabId};
 use fterm_render::Renderer;
@@ -542,7 +542,13 @@ impl App {
         if let Some(lines) = app.message.take() {
             // A config error at start: a toast, not a box in the way.
             let text = lines.join("\n");
-            app.notify(None, "Config error", &text, Level::Error, Source::App);
+            app.notify(
+                None,
+                &tr!("toast.config_error"),
+                &text,
+                Level::Error,
+                Source::App,
+            );
         }
         app
     }
@@ -755,7 +761,13 @@ impl App {
             Ok(out) => out,
             Err(err) => {
                 tracing::warn!("on_agent: {err}");
-                self.notify(None, "Lua error", &err, Level::Error, Source::App);
+                self.notify(
+                    None,
+                    &tr!("toast.lua_error"),
+                    &err,
+                    Level::Error,
+                    Source::App,
+                );
                 AgentOut {
                     notify: true,
                     calls: Vec::new(),
@@ -798,10 +810,10 @@ impl App {
             .and_then(|i| running.tab_titles().get(i).cloned())
             .unwrap_or_default();
         let (title, level) = match exit {
-            Some(0) | None => ("Command finished".to_owned(), Level::Success),
-            Some(code) => (format!("Command failed (exit {code})"), Level::Error),
+            Some(0) | None => (tr!("toast.command_finished"), Level::Success),
+            Some(code) => (tr!("toast.command_failed", code = code), Level::Error),
         };
-        let body = format!("{tab} · took {}", human_duration(took));
+        let body = tr!("toast.command_took", tab = tab, time = human_duration(took));
         self.notify(Some(pane), &title, &body, level, Source::Command);
     }
 
@@ -875,7 +887,13 @@ impl App {
             Ok(_) => return,
             Err(err) => {
                 tracing::warn!("on_history: {err}");
-                self.notify(None, "Lua error", &err, Level::Error, Source::App);
+                self.notify(
+                    None,
+                    &tr!("toast.lua_error"),
+                    &err,
+                    Level::Error,
+                    Source::App,
+                );
                 return;
             }
         };
@@ -1410,10 +1428,9 @@ impl App {
         self.harmonize_live = Some(strength);
         self.original_colors = false;
         self.apply_theme();
-        let body = format!(
-            "harmonize = {{ strength = {strength:.1} }} in fterm.lua keeps it. Ctrl+Shift+] more, Ctrl+Shift+[ less."
-        );
-        let title = format!("Harmonize: {strength:.1}");
+        let value = format!("{strength:.1}");
+        let body = tr!("toast.harmonize_body", value = value);
+        let title = tr!("toast.harmonize", value = value);
         // One toast that says the new value, not a new event for every step.
         let now = Instant::now();
         let shown = self
@@ -1510,7 +1527,13 @@ impl App {
             }
             Err(err) => {
                 tracing::warn!("theme: {err}");
-                self.notify(None, "Theme error", &err, Level::Error, Source::App);
+                self.notify(
+                    None,
+                    &tr!("toast.theme_error"),
+                    &err,
+                    Level::Error,
+                    Source::App,
+                );
                 false
             }
         }
@@ -1569,13 +1592,19 @@ impl App {
                 self.apply_config();
                 // Say which file it read: with FTERM_CONFIG it is not always the one you think.
                 let path = self.config_path.display().to_string();
-                self.notify(None, "Config reloaded", &path, Level::Info, Source::App);
+                self.notify(
+                    None,
+                    &tr!("toast.config_reloaded"),
+                    &path,
+                    Level::Info,
+                    Source::App,
+                );
                 if gpu_changed {
                     // The GPU is made once, at start.
                     self.notify(
                         None,
-                        "Restart fterm for the new gpu settings",
-                        "gpu.backend and gpu.power are used when fterm starts.",
+                        &tr!("toast.gpu_restart"),
+                        &tr!("toast.gpu_restart_body"),
                         Level::Info,
                         Source::App,
                     );
@@ -1583,8 +1612,14 @@ impl App {
             }
             Err(err) => {
                 tracing::warn!("config error: {err}");
-                let text = format!("{err}\nThe old config is still used.");
-                self.notify(None, "Config error", &text, Level::Error, Source::App);
+                let text = tr!("toast.config_error_kept", error = err);
+                self.notify(
+                    None,
+                    &tr!("toast.config_error"),
+                    &text,
+                    Level::Error,
+                    Source::App,
+                );
             }
         }
         if let Some(running) = &self.running {
@@ -1708,14 +1743,14 @@ impl App {
         let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from);
         let home = fterm_config::profiles::home_dir();
         let Some(path) = skill_path(config_dir.as_deref(), home.as_deref()) else {
-            return self.notify(None, "No home folder", "", Level::Error, Source::App);
+            return self.notify(None, &tr!("toast.no_home"), "", Level::Error, Source::App);
         };
         let shown = path.display().to_string();
         let existing = std::fs::read_to_string(&path).ok();
         match skill_plan(existing.as_deref()) {
             SkillPlan::UpToDate => self.notify(
                 None,
-                "The fterm skill is up to date",
+                &tr!("toast.skill_up_to_date"),
                 &shown,
                 Level::Info,
                 Source::App,
@@ -1724,8 +1759,8 @@ impl App {
                 self.copy_text(skill_md());
                 self.notify(
                     None,
-                    "A different fterm skill is there",
-                    &format!("{shown} is not from fterm, so it is not changed. The fterm skill is in the clipboard."),
+                    &tr!("toast.skill_foreign"),
+                    &tr!("toast.skill_foreign_body", path = shown),
                     Level::Warning,
                     Source::App,
                 );
@@ -1738,14 +1773,14 @@ impl App {
                 match written {
                     Ok(()) => self.notify(
                         None,
-                        "The fterm skill for Claude Code is installed",
-                        &format!("{shown}. Claude Code uses it in new sessions."),
+                        &tr!("toast.skill_installed"),
+                        &tr!("toast.skill_installed_body", path = shown),
                         Level::Success,
                         Source::App,
                     ),
                     Err(err) => self.notify(
                         None,
-                        "Cannot write the skill",
+                        &tr!("toast.skill_write_error"),
                         &format!("{shown}: {err}"),
                         Level::Error,
                         Source::App,
@@ -2112,7 +2147,13 @@ impl App {
             Ok(answer) => answer,
             Err(err) => {
                 tracing::warn!("on_close_window: {err}");
-                self.notify(None, "Lua error", &err, Level::Error, Source::App);
+                self.notify(
+                    None,
+                    &tr!("toast.lua_error"),
+                    &err,
+                    Level::Error,
+                    Source::App,
+                );
                 None
             }
         };
@@ -2136,8 +2177,8 @@ impl App {
                 self.close_stopped_at = Some(Instant::now());
                 self.notify(
                     None,
-                    "fterm stays open",
-                    "Closing was stopped by on_close_window in your config. Press × again to close anyway.",
+                    &tr!("toast.stays_open"),
+                    &tr!("toast.stays_open_body"),
                     Level::Info,
                     Source::App,
                 );
@@ -2322,7 +2363,13 @@ impl App {
                 }
                 Err(err) => {
                     tracing::warn!("Lua error: {err}");
-                    self.notify(None, "Lua error", &err, Level::Error, Source::App);
+                    self.notify(
+                        None,
+                        &tr!("toast.lua_error"),
+                        &err,
+                        Level::Error,
+                        Source::App,
+                    );
                 }
             },
         }
@@ -2365,7 +2412,7 @@ impl App {
             tracing::error!("cannot start: {err:#}");
             self.notify(
                 None,
-                "Cannot start",
+                &tr!("toast.cannot_start"),
                 &format!("{err:#}"),
                 Level::Error,
                 Source::App,
@@ -2505,17 +2552,17 @@ impl App {
             A::ToggleOriginalColors => {
                 self.original_colors = !self.original_colors;
                 let (title, body) = if self.original_colors {
-                    ("Original colors", "Programs show their own colors.")
-                } else {
                     (
-                        "Theme colors",
-                        "The colors of programs fit the theme (harmonize).",
+                        tr!("toast.original_colors"),
+                        tr!("toast.original_colors_body"),
                     )
+                } else {
+                    (tr!("toast.theme_colors"), tr!("toast.theme_colors_body"))
                 };
                 if let Some(running) = &self.running {
                     running.window.request_redraw();
                 }
-                return self.notify(None, title, body, Level::Info, Source::App);
+                return self.notify(None, &title, &body, Level::Info, Source::App);
             }
             A::ToggleFullscreen => {
                 // Borderless on the monitor of the window: no frame and no title bar.
@@ -2588,17 +2635,11 @@ impl App {
                 };
                 p.remote = !p.remote;
                 let (title, body) = if p.remote {
-                    (
-                        "Remote control is on",
-                        "Programs can ask to read and type into this pane.",
-                    )
+                    (tr!("toast.remote_on"), tr!("toast.remote_on_body"))
                 } else {
-                    (
-                        "Remote control is off",
-                        "No program can read or type into this pane.",
-                    )
+                    (tr!("toast.remote_off"), tr!("toast.remote_off_body"))
                 };
-                self.notify(Some(pane), title, body, Level::Info, Source::App);
+                self.notify(Some(pane), &title, &body, Level::Info, Source::App);
                 return;
             }
             A::InstallClaudeSkill => return self.install_claude_skill(),
@@ -2606,8 +2647,8 @@ impl App {
                 self.copy_text(crate::agent::CLAUDE_HOOKS.to_owned());
                 self.notify(
                     None,
-                    "Claude Code hooks copied",
-                    "Put them into ~/.claude/settings.json (see docs/CLAUDE.md).",
+                    &tr!("toast.hooks_copied"),
+                    &tr!("toast.hooks_copied_body"),
                     Level::Success,
                     Source::App,
                 );
@@ -2725,8 +2766,8 @@ impl App {
         let Some(history) = &mut self.history else {
             self.notify(
                 None,
-                "The history is off",
-                "Turn it on with history = { enabled = true } in the config.",
+                &tr!("toast.history_off"),
+                &tr!("toast.history_off_body"),
                 Level::Info,
                 Source::App,
             );
@@ -2816,8 +2857,8 @@ impl App {
                 self.copy_text(row.text.clone());
                 self.notify(
                     None,
-                    "A program runs in this pane",
-                    "The text is copied. Paste it where you need it.",
+                    &tr!("toast.program_runs"),
+                    &tr!("toast.program_runs_body"),
                     Level::Info,
                     Source::App,
                 );
@@ -3087,7 +3128,7 @@ impl App {
         let home = fterm_config::profiles::home_dir();
         let Some(path) = crate::claude_hooks::settings_path(config_dir.as_deref(), home.as_deref())
         else {
-            return self.notify(None, "No home folder", "", Level::Error, Source::App);
+            return self.notify(None, &tr!("toast.no_home"), "", Level::Error, Source::App);
         };
         let shown = path.display().to_string();
         let settings = match std::fs::read_to_string(&path) {
@@ -3095,10 +3136,10 @@ impl App {
             Ok(text) => match serde_json::from_str(text.trim_start_matches('\u{feff}')) {
                 Ok(value) => value,
                 Err(err) => {
-                    let body = format!("{shown}: {err}. It is not changed.");
+                    let body = tr!("toast.not_changed", path = shown, error = err);
                     return self.notify(
                         None,
-                        "Bad Claude Code settings",
+                        &tr!("toast.hooks_bad_settings"),
                         &body,
                         Level::Error,
                         Source::App,
@@ -3110,7 +3151,7 @@ impl App {
                 let body = format!("{shown}: {err}");
                 return self.notify(
                     None,
-                    "Cannot read the Claude Code settings",
+                    &tr!("toast.hooks_read_error"),
                     &body,
                     Level::Error,
                     Source::App,
@@ -3133,10 +3174,10 @@ impl App {
         let (merged, added) = match crate::claude_hooks::merge_hooks(&settings, &ours) {
             Ok(result) => result,
             Err(err) => {
-                let body = format!("{shown}: {err}. It is not changed.");
+                let body = tr!("toast.not_changed", path = shown, error = err);
                 return self.notify(
                     None,
-                    "Cannot add the hooks",
+                    &tr!("toast.hooks_add_error"),
                     &body,
                     Level::Error,
                     Source::App,
@@ -3146,7 +3187,7 @@ impl App {
         if added.is_empty() {
             return self.notify(
                 None,
-                "The fterm hooks are already there",
+                &tr!("toast.hooks_already"),
                 &shown,
                 Level::Info,
                 Source::App,
@@ -3193,14 +3234,14 @@ impl App {
                     match written {
                         Ok(()) => self.notify(
                             None,
-                            "The fterm hooks are in Claude Code",
-                            &format!("{shown}. Start Claude Code again to use them."),
+                            &tr!("toast.hooks_added"),
+                            &tr!("toast.hooks_added_body", path = shown),
                             Level::Success,
                             Source::App,
                         ),
                         Err(err) => self.notify(
                             None,
-                            "Cannot write the Claude Code settings",
+                            &tr!("toast.hooks_write_error"),
                             &format!("{shown}: {err}"),
                             Level::Error,
                             Source::App,
@@ -4264,10 +4305,10 @@ impl ApplicationHandler<UserEvent> for App {
                     // A recording can have secrets: it must not stay on by mistake.
                     self.notify(
                         None,
-                        "Recording the output of every pane",
-                        &format!(
-                            "FTERM_RECORD: {}. It can have secrets; remove FTERM_RECORD when you are done.",
-                            std::path::Path::new(&dir).display()
+                        &tr!("toast.recording"),
+                        &tr!(
+                            "toast.recording_body",
+                            folder = std::path::Path::new(&dir).display()
                         ),
                         Level::Warning,
                         Source::App,
@@ -4478,7 +4519,13 @@ impl ApplicationHandler<UserEvent> for App {
             }
             TermEvent::Bell => {
                 if self.config.config.notifications.bell {
-                    self.notify(Some(pane), "Bell", "", Level::Info, Source::Terminal);
+                    self.notify(
+                        Some(pane),
+                        &tr!("toast.bell"),
+                        "",
+                        Level::Info,
+                        Source::Terminal,
+                    );
                 }
             }
             TermEvent::Exit => {

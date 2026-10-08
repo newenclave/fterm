@@ -122,50 +122,73 @@ pub fn plural_category(language: &str, n: u64) -> &'static str {
     }
 }
 
+/// A part of a text: plain text, or `{name}` (a name is letters, digits, and `_`; other `{` stay text).
+enum Piece<'a> {
+    Text(&'a str),
+    Name(&'a str),
+}
+
+fn pieces(text: &str) -> Vec<Piece<'_>> {
+    let mut out = Vec::new();
+    let mut plain = 0;
+    let mut i = 0;
+    let bytes = text.as_bytes();
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let name_len = bytes[i + 1..]
+                .iter()
+                .take_while(|b| b.is_ascii_alphanumeric() || **b == b'_')
+                .count();
+            let close = i + 1 + name_len;
+            if name_len > 0 && bytes.get(close) == Some(&b'}') {
+                if plain < i {
+                    out.push(Piece::Text(&text[plain..i]));
+                }
+                out.push(Piece::Name(&text[i + 1..close]));
+                i = close + 1;
+                plain = i;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if plain < text.len() {
+        out.push(Piece::Text(&text[plain..]));
+    }
+    out
+}
+
 /// `{name}` in `text` becomes the value of `name`; an unknown name stays as it is.
 fn fill(text: &str, args: &[(&str, &dyn Display)]) -> String {
     if args.is_empty() || !text.contains('{') {
         return text.to_owned();
     }
     let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(start) = rest.find('{') {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + 1..];
-        match after.find('}') {
-            Some(end) => {
-                let name = &after[..end];
-                match args.iter().find(|(k, _)| *k == name) {
-                    Some((_, value)) => out.push_str(&value.to_string()),
-                    None => {
-                        out.push('{');
-                        out.push_str(name);
-                        out.push('}');
-                    }
+    for piece in pieces(text) {
+        match piece {
+            Piece::Text(t) => out.push_str(t),
+            Piece::Name(name) => match args.iter().find(|(k, _)| *k == name) {
+                Some((_, value)) => out.push_str(&value.to_string()),
+                None => {
+                    out.push('{');
+                    out.push_str(name);
+                    out.push('}');
                 }
-                rest = &after[end + 1..];
-            }
-            None => {
-                out.push_str(&rest[start..]);
-                rest = "";
-            }
+            },
         }
     }
-    out.push_str(rest);
     out
 }
 
 /// The `{names}` in a text.
 fn placeholders(text: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find('{') {
-        let after = &rest[start + 1..];
-        let Some(end) = after.find('}') else { break };
-        names.push(after[..end].to_owned());
-        rest = &after[end + 1..];
-    }
-    names
+    pieces(text)
+        .into_iter()
+        .filter_map(|p| match p {
+            Piece::Name(n) => Some(n.to_owned()),
+            Piece::Text(_) => None,
+        })
+        .collect()
 }
 
 impl Strings {
@@ -460,6 +483,13 @@ mod tests {
         );
         assert_eq!(fill("no { end", &[("a", &1)]), "no { end");
         assert_eq!(placeholders("{n} of {total}"), ["n", "total"]);
+        // Lua in a text: `{ ... }` with no name stays as it is.
+        let v = "0.8";
+        assert_eq!(
+            fill("harmonize = { strength = {value} }", &[("value", &v)]),
+            "harmonize = { strength = 0.8 }"
+        );
+        assert_eq!(placeholders("x = { enabled = {on} }"), ["on"]);
     }
 
     #[test]

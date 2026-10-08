@@ -70,7 +70,7 @@ impl App {
             Start::Ask => {
                 let lines = crate::review::question_lines(&asked.from, &asked.title);
                 let title = lines[0].clone();
-                let body = format!("R = review it in fterm, Esc = the dialog of {}", asked.from);
+                let body = tr!("toast.plan_question_body", agent = asked.from);
                 self.plan_questions.push(PlanQuestion {
                     request,
                     asked,
@@ -97,16 +97,13 @@ impl App {
     pub(super) fn step_plan_review(&mut self) {
         let mode = self.plan_review().next();
         self.plan_review_live = Some(mode);
-        let what = match mode {
-            PlanReview::Always => "Each plan of plan mode opens in a Review tab.",
-            PlanReview::Ask => "fterm asks first: R = review, Esc = the dialog of Claude Code.",
-            PlanReview::Never => "Claude Code shows its own dialog.",
+        let name = mode.name();
+        let body = match mode {
+            PlanReview::Always => tr!("toast.plan_review_always", mode = name),
+            PlanReview::Ask => tr!("toast.plan_review_ask", mode = name),
+            PlanReview::Never => tr!("toast.plan_review_never", mode = name),
         };
-        let body = format!(
-            "{what} plan_review = \"{}\" in fterm.lua keeps it.",
-            mode.name()
-        );
-        let title = format!("Plan review: {}", mode.name());
+        let title = tr!("toast.plan_review", mode = name);
         self.notify(None, &title, &body, Level::Info, Source::App);
     }
 

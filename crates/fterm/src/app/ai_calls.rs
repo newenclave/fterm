@@ -24,7 +24,7 @@ pub(super) struct PendingCommand {
 /// (`None`: the question is empty, or an answer runs).
 pub(super) struct Refused {
     pub context: Vec<ContextItem>,
-    pub why: Option<(&'static str, String, Level)>,
+    pub why: Option<(String, String, Level)>,
 }
 
 impl App {
@@ -74,7 +74,7 @@ impl App {
             self.ai.input.set(&question);
             self.ai.context = context;
             if let Some((title, body, level)) = why {
-                self.notify(None, title, &body, level, Source::App);
+                self.notify(None, &title, &body, level, Source::App);
             }
         }
     }
@@ -112,8 +112,8 @@ impl App {
                 return Err(Refused {
                     context,
                     why: Some((
-                        "The question was not sent",
-                        "on_ai_request in your config stopped it.".to_owned(),
+                        tr!("toast.ai_not_sent"),
+                        tr!("toast.ai_not_sent_body"),
                         Level::Info,
                     )),
                 });
@@ -121,7 +121,7 @@ impl App {
             Err(err) => {
                 return Err(Refused {
                     context,
-                    why: Some(("Lua error", err, Level::Error)),
+                    why: Some((tr!("toast.lua_error"), err, Level::Error)),
                 });
             }
         }
@@ -220,13 +220,13 @@ impl App {
             // A stopped answer needs no notification: somebody stopped it on purpose.
             if (!showing || !self.focused) && !stopped {
                 let (title, level) = if failed {
-                    ("The AI answer failed", Level::Error)
+                    (tr!("toast.ai_failed"), Level::Error)
                 } else {
-                    ("The AI answer is ready", Level::Success)
+                    (tr!("toast.ai_ready"), Level::Success)
                 };
                 let question = self.ai.last_question.clone().unwrap_or_default();
                 let short: String = question.chars().take(60).collect();
-                self.notify(None, title, &short, level, Source::App);
+                self.notify(None, &title, &short, level, Source::App);
             }
         }
         self.redraw_ai();
@@ -356,8 +356,8 @@ impl App {
         if items.is_empty() {
             return self.notify(
                 None,
-                "No command output",
-                "It needs shell integration (see CONFIG.md).",
+                &tr!("toast.no_output"),
+                &tr!("toast.needs_shell_integration"),
                 Level::Info,
                 Source::App,
             );
@@ -374,7 +374,13 @@ impl App {
             .filter(|t| !t.trim().is_empty());
         match text {
             Some(text) => self.add_context(vec![ContextItem::Selection(text)]),
-            None => self.notify(None, "Nothing is selected", "", Level::Info, Source::App),
+            None => self.notify(
+                None,
+                &tr!("toast.nothing_selected"),
+                "",
+                Level::Info,
+                Source::App,
+            ),
         }
     }
 
@@ -388,8 +394,8 @@ impl App {
         let Some(exit) = exit else {
             return self.notify(
                 None,
-                "No last command",
-                "It needs shell integration (see CONFIG.md).",
+                &tr!("toast.no_last_command"),
+                &tr!("toast.needs_shell_integration"),
                 Level::Info,
                 Source::App,
             );
@@ -424,7 +430,7 @@ impl App {
         let Some(code) = last_code_block(&self.ai.turns) else {
             return self.notify(
                 None,
-                "No command in the answer",
+                &tr!("toast.no_command_in_answer"),
                 "",
                 Level::Info,
                 Source::App,
@@ -437,8 +443,8 @@ impl App {
             self.copy_text(code);
             return self.notify(
                 None,
-                "A program runs in this pane",
-                "The command is copied. Paste it where you need it.",
+                &tr!("toast.program_runs"),
+                &tr!("toast.command_copied_body"),
                 Level::Info,
                 Source::App,
             );
@@ -485,8 +491,8 @@ impl App {
         if pane.shell.is_running() {
             return self.notify(
                 None,
-                "A program runs in this pane",
-                "Text to command works at the prompt of a shell.",
+                &tr!("toast.program_runs"),
+                &tr!("toast.text_to_command_prompt"),
                 Level::Info,
                 Source::App,
             );
@@ -500,8 +506,8 @@ impl App {
         if typed.trim().is_empty() {
             return self.notify(
                 None,
-                "Type a task first",
-                "Write what you want in the prompt (for example: find the 10 biggest files), then press Ctrl+Shift+G.",
+                &tr!("toast.type_task"),
+                &tr!("toast.type_task_body"),
                 Level::Info,
                 Source::App,
             );
@@ -514,7 +520,13 @@ impl App {
         let mut provider = match self.ai_provider() {
             Ok(provider) => provider,
             Err(err) => {
-                return self.notify(None, "Text to command", &err, Level::Error, Source::App);
+                return self.notify(
+                    None,
+                    &tr!("action.text_to_command"),
+                    &err,
+                    Level::Error,
+                    Source::App,
+                );
             }
         };
         if let Some(model) = &self.config.config.ai.command_model {
@@ -606,7 +618,7 @@ impl App {
                 self.pending_command = None;
                 self.notify(
                     None,
-                    "Text to command failed",
+                    &tr!("toast.text_to_command_failed"),
                     &err.to_string(),
                     Level::Error,
                     Source::App,
@@ -620,7 +632,7 @@ impl App {
                 if command.is_empty() {
                     self.notify(
                         None,
-                        "No command came back",
+                        &tr!("toast.no_command_back"),
                         &pending.answer,
                         Level::Warning,
                         Source::App,
@@ -654,7 +666,7 @@ impl App {
             self.copy_text(command.to_owned());
             return self.notify(
                 None,
-                "The command is ready (copied)",
+                &tr!("toast.command_ready"),
                 command,
                 Level::Info,
                 Source::App,
@@ -748,21 +760,21 @@ impl App {
                 match keys::set(&name, &key) {
                     Ok(()) if key.trim().is_empty() => self.notify(
                         None,
-                        "The AI key is deleted",
+                        &tr!("toast.ai_key_deleted"),
                         &name,
                         Level::Info,
                         Source::App,
                     ),
                     Ok(()) => self.notify(
                         None,
-                        "The AI key is saved",
-                        &format!("{name}: in the Windows Credential Manager"),
+                        &tr!("toast.ai_key_saved"),
+                        &tr!("toast.ai_key_saved_body", provider = name),
                         Level::Success,
                         Source::App,
                     ),
                     Err(err) => self.notify(
                         None,
-                        "Cannot save the AI key",
+                        &tr!("toast.ai_key_error"),
                         &err,
                         Level::Error,
                         Source::App,

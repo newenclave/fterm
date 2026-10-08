@@ -80,9 +80,9 @@ pub fn notification_for(
     message: &str,
     name: &str,
 ) -> Option<(String, String, Level)> {
-    let text = |fallback: &str| {
+    let text = |fallback: String| {
         if message.trim().is_empty() {
-            fallback.to_owned()
+            fallback
         } else {
             message.to_owned()
         }
@@ -90,18 +90,18 @@ pub fn notification_for(
     match kind {
         AgentKind::Working => None,
         AgentKind::Waiting => Some((
-            format!("{name} waits for you"),
-            text("It needs your answer."),
+            fterm_config::tr!("agent.waiting", name = name),
+            text(fterm_config::tr!("agent.waiting_body")),
             Level::Attention,
         )),
         AgentKind::Done => Some((
-            format!("{name} is done"),
-            text("The task is finished."),
+            fterm_config::tr!("agent.done", name = name),
+            text(fterm_config::tr!("agent.done_body")),
             Level::Success,
         )),
         AgentKind::Error => Some((
-            format!("{name} failed"),
-            text("The task ended with an error."),
+            fterm_config::tr!("agent.error", name = name),
+            text(fterm_config::tr!("agent.error_body")),
             Level::Error,
         )),
     }

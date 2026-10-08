@@ -1051,7 +1051,7 @@ impl App {
             .collect();
         self.notify(
             Some(to),
-            &format!("Message for {tab}"),
+            &tr!("toast.message_for", tab = tab),
             &format!("{from_name}: {first_line}"),
             Level::Info,
             Source::Api,
