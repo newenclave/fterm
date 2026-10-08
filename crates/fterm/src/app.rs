@@ -536,6 +536,7 @@ impl App {
             palette: None,
         };
         app.apply_notification_config();
+        app.load_language();
         Self::open_history(&mut app.history, &app.config.config.history);
         if let Some(lines) = app.message.take() {
             // A config error at start: a toast, not a box in the way.
@@ -1332,9 +1333,11 @@ impl App {
             return;
         }
         let file = self.config_path.file_name().map(|f| f.to_owned());
+        // The theme and language folders: a change there loads both again.
         let theme_dirs: Vec<std::path::PathBuf> = self
             .theme_dirs()
             .into_iter()
+            .chain(self.l10n_dirs())
             .filter(|d| d.is_dir())
             .collect();
         let watched_themes = theme_dirs.clone();
@@ -1431,6 +1434,59 @@ impl App {
     }
 
     /// The folders with theme files.
+    /// The folders with language files.
+    pub(crate) fn l10n_dirs(&self) -> Vec<std::path::PathBuf> {
+        crate::themes::asset_dirs(
+            &self.config_path,
+            crate::paths::data_dir().as_deref(),
+            "l10n",
+        )
+    }
+
+    /// Uses the language of the config (English when there is none). A file that cannot be read keeps the
+    /// language in use; problems in a file are shown, but the file is used.
+    pub(crate) fn load_language(&mut self) {
+        use fterm_config::l10n;
+        let system = sys_locale::get_locale();
+        let language = self.config.config.language.clone();
+        let choice = l10n::Choice::of(language.as_deref(), system.as_deref());
+        match l10n::load(&choice, &self.l10n_dirs()) {
+            Ok((strings, problems)) => {
+                let changed = *l10n::current() != strings;
+                let name = strings.name.clone();
+                l10n::set(strings);
+                if !problems.is_empty() {
+                    tracing::warn!("language {name}: {problems:?}");
+                    let title = fterm_config::tr!("l10n.problems", language = name);
+                    self.notify(
+                        None,
+                        &title,
+                        &problems.join("\n"),
+                        Level::Warning,
+                        Source::App,
+                    );
+                }
+                if changed {
+                    self.language_changed();
+                }
+            }
+            Err(err) => {
+                tracing::warn!("language: {err}");
+                let title = fterm_config::tr!("l10n.error");
+                self.notify(None, &title, &err, Level::Error, Source::App);
+            }
+        }
+    }
+
+    /// Texts that were made before: draw them again in the new language.
+    fn language_changed(&mut self) {
+        self.redraw_reviews();
+        self.update_window_title();
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
     pub(crate) fn theme_dirs(&self) -> Vec<std::path::PathBuf> {
         crate::themes::theme_dirs(&self.config_path, crate::paths::data_dir().as_deref())
     }
@@ -1507,6 +1563,7 @@ impl App {
                 self.theme_override = None;
                 self.harmonize_live = None;
                 self.plan_review_live = None;
+                self.load_language();
                 self.load_theme();
                 self.apply_config();
                 // Say which file it read: with FTERM_CONFIG it is not always the one you think.
@@ -4453,6 +4510,7 @@ impl ApplicationHandler<UserEvent> for App {
         match self.theme_reload_at {
             Some(at) if now >= at => {
                 self.theme_reload_at = None;
+                self.load_language();
                 if self.load_theme() {
                     self.apply_theme();
                 }

@@ -18,15 +18,20 @@ pub enum Override {
 
 /// The folders with theme files: `themes` next to the config file, and `themes` in the data folder.
 pub fn theme_dirs(config_file: &Path, data_dir: Option<&Path>) -> Vec<PathBuf> {
+    asset_dirs(config_file, data_dir, "themes")
+}
+
+/// The folders `name` (for example `themes` or `l10n`) next to the config file and in the data folder.
+pub fn asset_dirs(config_file: &Path, data_dir: Option<&Path>, name: &str) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = config_file
         .parent()
-        .map(|dir| dir.join("themes"))
+        .map(|dir| dir.join(name))
         .into_iter()
         .collect();
     if let Some(data) = data_dir {
-        let themes = data.join("themes");
-        if !dirs.contains(&themes) {
-            dirs.push(themes);
+        let folder = data.join(name);
+        if !dirs.contains(&folder) {
+            dirs.push(folder);
         }
     }
     dirs

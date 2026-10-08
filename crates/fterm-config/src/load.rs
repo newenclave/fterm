@@ -445,6 +445,8 @@ pub struct Config {
     pub palette_changes: bool,
     /// When a plan of Claude Code plan mode opens a Review tab.
     pub plan_review: PlanReview,
+    /// The language of the UI: a code (`ru`), `system`, or a path to a `.json`. `None` = English.
+    pub language: Option<String>,
     /// The profile for new tabs and splits. `None` = the first profile.
     pub default_profile: Option<String>,
     /// Profiles from the config. Empty = fterm finds them itself.
@@ -497,6 +499,7 @@ impl Default for Config {
             harmonize: HarmonizeConfig::default(),
             palette_changes: true,
             plan_review: PlanReview::default(),
+            language: None,
             default_profile: None,
             profiles: Vec::new(),
             keys: Keymap::with_defaults(),
@@ -1096,6 +1099,7 @@ impl Reader {
         if let Some(on) = bool_field(root, "palette_changes", "palette_changes")? {
             config.palette_changes = on;
         }
+        config.language = string_field(root, "language", "language")?;
         if let Some(mode) = string_field(root, "plan_review", "plan_review")? {
             config.plan_review = match mode.as_str() {
                 "always" => PlanReview::Always,
@@ -2117,6 +2121,19 @@ mod tests {
         .config;
         assert_eq!(config.font_size, 20.0);
         assert_eq!(config.profiles.len(), 2);
+    }
+
+    #[test]
+    fn the_language_of_the_ui() {
+        assert_eq!(load("return {}").config.language, None, "English");
+        assert_eq!(
+            load(r#"return { language = "ru" }"#)
+                .config
+                .language
+                .as_deref(),
+            Some("ru")
+        );
+        assert!(error("return { language = 1 }").contains("language"));
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 pub mod colors;
 pub mod keys;
+pub mod l10n;
 pub mod load;
 pub mod profiles;
 pub mod theme;

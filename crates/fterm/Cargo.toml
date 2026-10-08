@@ -25,6 +25,7 @@ open.workspace = true
 pollster.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sys-locale.workspace = true
 tracing.workspace = true
 unicode-width.workspace = true
 tracing-subscriber.workspace = true

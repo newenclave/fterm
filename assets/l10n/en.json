@@ -1,0 +1,8 @@
+{
+  "language": "en",
+  "name": "English",
+  "strings": {
+    "l10n.error": "Language error",
+    "l10n.problems": "Problems in the language {language}"
+  }
+}
