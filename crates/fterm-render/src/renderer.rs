@@ -420,13 +420,14 @@ impl FrameParts<'_> {
     }
 
     /// A terminal pane in `area` (window pixels). `harmonize` = the colors that programs choose fit the
-    /// theme (when the theme asks for it).
+    /// theme (when the theme asks for it); `program_palette` = palette changes of the program count.
     pub fn pane<T: EventListener>(
         &mut self,
         term: &Term<T>,
         area: Rect,
         focused: bool,
         harmonize: bool,
+        program_palette: bool,
     ) -> Result<(), AtlasFull> {
         let input = FrameInput {
             cell: self.cell,
@@ -436,6 +437,7 @@ impl FrameParts<'_> {
             focused,
             area,
             harmonize,
+            program_palette,
         };
         let quads = build_frame(term, &input, &mut self.glyph)?;
         self.quads.extend(quads);

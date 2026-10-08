@@ -14,6 +14,7 @@ use crate::color::linear;
 use crate::font::CellMetrics;
 use crate::theme::UiColors;
 pub use fterm_mux::Rect;
+use fterm_term::alacritty_terminal::term::color::Colors;
 
 /// A filled rectangle (background, cursor, underline).
 pub const KIND_SOLID: u32 = 0;
@@ -46,6 +47,8 @@ pub struct FrameInput<'a> {
     pub area: Rect,
     /// The colors that programs choose fit the theme (when the palette has a harmonizer).
     pub harmonize: bool,
+    /// The palette colors that the program changed (OSC 4, 10, 11) are used; `false` = the theme's.
+    pub program_palette: bool,
 }
 
 /// Width of the scroll indicator in pixels.
@@ -59,7 +62,12 @@ pub fn build_frame<T: EventListener>(
 ) -> Result<Vec<Instance>, AtlasFull> {
     let content = term.renderable_content();
     let cell = input.cell;
-    let overrides = content.colors;
+    let theme_only = Colors::default();
+    let overrides = if input.program_palette {
+        content.colors
+    } else {
+        &theme_only
+    };
     let default_bg = input
         .palette
         .get(NamedColor::Background as usize, overrides);
@@ -305,6 +313,7 @@ mod tests {
             focused,
             area: AREA,
             harmonize: true,
+            program_palette: true,
         };
         let mut keys = Vec::new();
         let quads = build_frame(&term, &input, &mut |key| {
@@ -375,6 +384,37 @@ mod tests {
     }
 
     #[test]
+    fn a_pane_can_keep_the_theme_palette() {
+        // The program sets red (index 1) to green, like Far sets the old console colors.
+        let term = term_with(b"\x1b]4;1;rgb:00/ff/00\x07\x1b[41mX");
+        let palette = Palette::default();
+        let bg_of = |program_palette: bool| {
+            let input = FrameInput {
+                cell: CELL,
+                padding: PADDING,
+                palette: &palette,
+                ui: &UiColors::default(),
+                focused: true,
+                area: AREA,
+                harmonize: true,
+                program_palette,
+            };
+            let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
+            solids(&quads)
+                .into_iter()
+                .find(|q| q.rect == cell_rect(0.0, 0.0))
+                .expect("no bg rect")
+                .color
+        };
+        assert_eq!(
+            bg_of(true),
+            linear(Rgb { r: 0, g: 255, b: 0 }),
+            "the program's color"
+        );
+        assert_eq!(bg_of(false), color(NamedColor::Red), "the theme's color");
+    }
+
+    #[test]
     fn truecolor_text() {
         let (quads, _) = frame(b"\x1b[38;2;255;0;0mX", true);
         assert_eq!(glyphs(&quads)[0].color, linear(Rgb { r: 255, g: 0, b: 0 }));
@@ -435,6 +475,7 @@ mod tests {
             focused: true,
             area: AREA,
             harmonize: true,
+            program_palette: true,
         };
         let quads = build_frame(&term, &input, &mut |key| {
             Ok(Some(AtlasGlyph {
@@ -534,6 +575,7 @@ mod tests {
             focused: true,
             area: AREA,
             harmonize: true,
+            program_palette: true,
         };
         let got = build_frame(&term, &input, &mut |_| Err(AtlasFull));
         assert_eq!(got, Err(AtlasFull));
@@ -549,6 +591,7 @@ mod tests {
             focused: true,
             area: AREA,
             harmonize: true,
+            program_palette: true,
         };
         build_frame(term, &input, &mut |_| Ok(Some(GLYPH))).unwrap()
     }
@@ -660,6 +703,7 @@ mod tests {
             focused: true,
             area,
             harmonize: true,
+            program_palette: true,
         };
         let moved = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         let at_origin = build(&term);
@@ -685,6 +729,7 @@ mod tests {
             focused: true,
             area,
             harmonize: true,
+            program_palette: true,
         };
         let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         let rects = rects_with_color(&quads, UiColors::default().scrollbar);
@@ -733,6 +778,7 @@ mod tests {
             focused: true,
             area: AREA,
             harmonize: true,
+            program_palette: true,
         };
         let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         assert_eq!(rects_with_color(&quads, ui.scrollbar).len(), 1);

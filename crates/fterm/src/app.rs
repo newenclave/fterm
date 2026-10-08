@@ -129,6 +129,8 @@ struct Pane {
     review: Option<review_calls::ReviewPane>,
     /// The colors of its programs may fit the theme (`harmonize = false` in its profile: no).
     harmonize: bool,
+    /// Its programs may change the palette (from its profile; `None` = the value of the config).
+    palette_changes: Option<bool>,
 }
 
 /// Everything that exists only while the window is open.
@@ -1713,6 +1715,7 @@ impl App {
                 scene: Some(std::sync::Mutex::new(scene)),
                 review: None,
                 harmonize: true,
+                palette_changes: None,
             },
         );
         tracing::info!(
@@ -1749,6 +1752,7 @@ impl App {
             .filter(|dir| dir.is_dir());
         let profile_name = self.profile(profile).map(|p| p.name.clone());
         let harmonize = self.profile(profile).is_none_or(|p| p.harmonize);
+        let palette_changes = self.profile(profile).and_then(|p| p.palette_changes);
         let options = match self.profile(profile) {
             Some(profile) => {
                 let (program, mut args) = launch_command(&profile, cfg!(windows), path_extension);
@@ -1896,6 +1900,7 @@ impl App {
                 scene: None,
                 review: None,
                 harmonize,
+                palette_changes,
             },
         );
         Ok(id)
@@ -3949,6 +3954,7 @@ impl App {
             self.tabs_width(r.window.inner_size().width as f32, r.renderer.cell())
         });
         let original_colors = self.original_colors;
+        let palette_changes = self.config.config.palette_changes;
         let running = self.running.as_mut().unwrap();
         let area = running.tab_area();
         let Running {
@@ -4041,8 +4047,10 @@ impl App {
                         let is_active = Some(*id) == active_pane;
                         let has_keys = focused && is_active && !dock_focused;
                         let harmonize = pane.harmonize && !original_colors;
-                        pane.session
-                            .with_term(|term| parts.pane(term, *rect, has_keys, harmonize))?;
+                        let program_palette = pane.palette_changes.unwrap_or(palette_changes);
+                        pane.session.with_term(|term| {
+                            parts.pane(term, *rect, has_keys, harmonize, program_palette)
+                        })?;
                     }
                 }
                 if let Some((text, column, line)) = &hint

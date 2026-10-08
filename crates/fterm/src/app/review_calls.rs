@@ -90,6 +90,7 @@ impl App {
                     drawn: None,
                 }),
                 harmonize: false,
+                palette_changes: Some(false),
             },
         );
         running

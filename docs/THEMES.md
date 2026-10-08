@@ -139,6 +139,23 @@ profiles = {
 },
 ```
 
+**Programs that change the palette.** Some programs set the 16 colors themselves (OSC 4). Far Manager does
+this: it sets the old console colors (a navy blue, and so on), so the theme does not reach it. With `harmonize`,
+palette colors that a program changed count as its own colors, and they fit the theme too: Far keeps its look
+(dark panels, light text), but in the colors of the theme.
+
+You can also stop programs from changing the palette:
+
+```lua
+palette_changes = false,                  -- in fterm.lua: the theme's 16 colors always
+profiles = {
+  { name = "Far", command = "far.exe", palette_changes = true },   -- or only for one profile
+},
+```
+
+Then Far uses the theme's palette as it is. With a pastel theme this can be hard to read (white text on a light
+blue panel), so use it together with `harmonize`: its minimum contrast makes the text readable.
+
 To find a good strength, try it live: **Ctrl + Shift + ]** makes it stronger and **Ctrl + Shift + [** weaker,
 in steps of 0.1 (the actions `harmonize_more` and `harmonize_less`, also in the palette). A toast says the value
 and the line for `fterm.lua` that keeps it. The value lasts until the config changes or fterm closes.

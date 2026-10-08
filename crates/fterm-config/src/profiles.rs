@@ -16,6 +16,8 @@ pub struct Profile {
     pub tab_color: Option<[u8; 3]>,
     /// The colors of its programs may fit the theme (`harmonize = false`: exact colors, for example btop).
     pub harmonize: bool,
+    /// Its programs may change the palette (`None` = the value of the config).
+    pub palette_changes: Option<bool>,
 }
 
 impl Profile {
@@ -29,6 +31,7 @@ impl Profile {
             wsl: None,
             tab_color: None,
             harmonize: true,
+            palette_changes: None,
         }
     }
 }

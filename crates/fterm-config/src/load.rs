@@ -409,6 +409,8 @@ pub struct Config {
     pub theme: crate::theme::ThemeChoice,
     /// Changes the `harmonize` of the theme (`None` = the theme's value).
     pub harmonize: HarmonizeConfig,
+    /// Programs may change the palette colors (OSC 4, 10, 11). `false` = the theme's colors stay.
+    pub palette_changes: bool,
     /// The profile for new tabs and splits. `None` = the first profile.
     pub default_profile: Option<String>,
     /// Profiles from the config. Empty = fterm finds them itself.
@@ -459,6 +461,7 @@ impl Default for Config {
             colors: ColorConfig::default(),
             theme: crate::theme::ThemeChoice::Default,
             harmonize: HarmonizeConfig::default(),
+            palette_changes: true,
             default_profile: None,
             profiles: Vec::new(),
             keys: Keymap::with_defaults(),
@@ -1055,6 +1058,9 @@ impl Reader {
             config.colors = self.colors(&colors)?;
         }
         config.theme = theme_choice(root)?;
+        if let Some(on) = bool_field(root, "palette_changes", "palette_changes")? {
+            config.palette_changes = on;
+        }
         if let Some(table) = table_field(root, "harmonize", "harmonize")? {
             let number = |key: &str| -> Result<Option<f32>, String> {
                 let path = format!("harmonize.{key}");
@@ -1642,6 +1648,7 @@ fn profile(table: &Table, path: &str) -> Result<Profile, String> {
         wsl,
         tab_color,
         harmonize: bool_field(table, "harmonize", &format!("{path}.harmonize"))?.unwrap_or(true),
+        palette_changes: bool_field(table, "palette_changes", &format!("{path}.palette_changes"))?,
     })
 }
 
@@ -2063,6 +2070,28 @@ mod tests {
         .config;
         assert_eq!(config.font_size, 20.0);
         assert_eq!(config.profiles.len(), 2);
+    }
+
+    #[test]
+    fn programs_may_or_may_not_change_the_palette() {
+        let loaded = load(
+            r#"return {
+              palette_changes = false,
+              profiles = { { name = "far", command = "far", palette_changes = true },
+                           { name = "sh", command = "sh" } },
+            }"#,
+        );
+        assert!(!loaded.config.palette_changes);
+        assert_eq!(loaded.config.profiles[0].palette_changes, Some(true));
+        assert_eq!(
+            loaded.config.profiles[1].palette_changes, None,
+            "the global value"
+        );
+        assert!(
+            load("return {}").config.palette_changes,
+            "allowed by default"
+        );
+        assert!(error(r#"return { palette_changes = "no" }"#).contains("palette_changes"));
     }
 
     #[test]
