@@ -56,9 +56,9 @@ impl App {
     /// "anthropic · claude-haiku-4-5-20251001" for the panel title.
     pub(super) fn ai_title(&self) -> String {
         match self.config.config.ai.current() {
-            Some(p) if p.model.is_empty() => format!("{} · no model", p.name),
+            Some(p) if p.model.is_empty() => tr!("ai.no_model", provider = p.name),
             Some(p) => format!("{} · {}", p.name, p.model),
-            None => "no provider".to_owned(),
+            None => tr!("ai.no_provider"),
         }
     }
 
@@ -403,10 +403,10 @@ impl App {
         self.open_ai_panel();
         self.add_context(items);
         let question = match exit {
-            Some(0) => "Explain this output.",
-            _ => "Why did this command fail, and how do I fix it?",
+            Some(0) => tr!("ai.explain_output"),
+            _ => tr!("ai.explain_error"),
         };
-        self.ai.input.set(question);
+        self.ai.input.set(&question);
         self.ai_send();
     }
 
@@ -696,7 +696,7 @@ impl App {
                 .ok()
                 .map(|l| (point.column.0, l))
         })?;
-        Some(("  ⏳ asking AI… (Esc = stop)".to_owned(), column, line))
+        Some((tr!("ai.asking"), column, line))
     }
 
     /// How many chat lines fit now.

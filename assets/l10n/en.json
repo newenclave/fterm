@@ -63,6 +63,17 @@
     "agent.error_body": "The task ended with an error.",
     "agent.waiting": "{name} waits for you",
     "agent.waiting_body": "It needs your answer.",
+    "ai.asking": "  ⏳ asking AI… (Esc = stop)",
+    "ai.chip_command": "last command",
+    "ai.chip_command_exit": "last command (exit {code})",
+    "ai.chip_output": "output ({lines})",
+    "ai.chip_selection": "selection ({lines})",
+    "ai.code": "code",
+    "ai.explain_error": "Why did this command fail, and how do I fix it?",
+    "ai.explain_output": "Explain this output.",
+    "ai.no_model": "{provider} · no model",
+    "ai.no_provider": "no provider",
+    "ai.thinking": "Thinking…",
     "box.access": "Allow {who} to read and type into other panes?",
     "box.access_keys": "Enter = allow, A = always allow {name}, Esc = no",
     "box.access_why": "It can see their text and run commands there.",
@@ -98,6 +109,10 @@
     "box.save_session": "Save this session as:",
     "box.save_session_keys": "Enter = save, Esc = cancel. A saved session stays in the list (Ctrl+Shift+S).",
     "box.tabs_and_panes": "{tabs}, {panes}.",
+    "count.lines": {
+      "one": "{n} line",
+      "other": "{n} lines"
+    },
     "count.panes": {
       "one": "{n} pane",
       "other": "{n} panes"
@@ -142,6 +157,17 @@
     "popup.this_folder": "this folder",
     "reader.meta": "{level} · from {source} · {ago}",
     "reader.no_text": "(no text)",
+    "review.comment": "Comment:",
+    "review.from": "from {agent}",
+    "review.input_keys": "Enter save · Shift+Enter new line · Esc cancel",
+    "review.keys": "S send · Space ok · C comment · E edit · A add · D remove · Shift+O rest ok · ↑↓",
+    "review.new_item": "New item after this one:",
+    "review.new_text": "New text:",
+    "review.summary": {
+      "one": "{n} item · {ok} ok · {changed} with changes or comments",
+      "other": "{n} items · {ok} ok · {changed} with changes or comments"
+    },
+    "review.was": "was: {text}",
     "source.agent": "agent",
     "source.api": "api",
     "source.app": "app",

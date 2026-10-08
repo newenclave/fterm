@@ -585,7 +585,7 @@ pub fn rows(review: &mut Review, cols: usize, rows: usize) -> Vec<Row> {
     let cols = cols.max(20);
     let row = |spans: Vec<Span>, selected: bool| Row { spans, selected };
     // The top: the title and who asked, and a short count.
-    let from = format!("from {}", review.from);
+    let from = fterm_config::tr!("review.from", agent = review.from);
     let title_room = cols.saturating_sub(cells(&from) + 2);
     let title = fit(&review.title, title_room);
     let gap = cols.saturating_sub(cells(&title) + cells(&from));
@@ -595,9 +595,11 @@ pub fn rows(review: &mut Review, cols: usize, rows: usize) -> Vec<Row> {
         .iter()
         .filter(|i| i.added || i.mark == Mark::Remove || i.comment.is_some() || i.edited.is_some())
         .count();
-    let summary = format!(
-        "{} items · {ok} ok · {changed} with changes or comments",
-        review.items.len()
+    let summary = fterm_config::trn!(
+        "review.summary",
+        review.items.len(),
+        ok = ok,
+        changed = changed
     );
     let header = vec![
         row(
@@ -668,7 +670,7 @@ pub fn rows(review: &mut Review, cols: usize, rows: usize) -> Vec<Row> {
         }
         if item.edited.is_some() {
             let was = fit(
-                &format!("was: {}", item.text.lines().next().unwrap_or("")),
+                &fterm_config::tr!("review.was", text = item.text.lines().next().unwrap_or("")),
                 width,
             );
             body.push((
@@ -701,12 +703,12 @@ pub fn rows(review: &mut Review, cols: usize, rows: usize) -> Vec<Row> {
         if selected {
             let open = match &review.mode {
                 Mode::Browse => None,
-                Mode::Comment(input) => Some(("Comment:", input)),
-                Mode::Edit(input) => Some(("New text:", input)),
-                Mode::Add(input) => Some(("New item after this one:", input)),
+                Mode::Comment(input) => Some((fterm_config::tr!("review.comment"), input)),
+                Mode::Edit(input) => Some((fterm_config::tr!("review.new_text"), input)),
+                Mode::Add(input) => Some((fterm_config::tr!("review.new_item"), input)),
             };
             if let Some((label, input)) = open {
-                for spans in input_rows(label, input, pad, width) {
+                for spans in input_rows(&label, input, pad, width) {
                     body.push((row(spans, false), i));
                 }
             }
@@ -727,10 +729,8 @@ pub fn rows(review: &mut Review, cols: usize, rows: usize) -> Vec<Row> {
     review.scroll = review.scroll.min(body.len().saturating_sub(height));
 
     let hints = match review.mode {
-        Mode::Browse => {
-            "S send · Space ok · C comment · E edit · A add · D remove · Shift+O rest ok · ↑↓"
-        }
-        _ => "Enter save · Shift+Enter new line · Esc cancel",
+        Mode::Browse => fterm_config::tr!("review.keys"),
+        _ => fterm_config::tr!("review.input_keys"),
     };
     let mut out = header;
     out.extend(
@@ -742,7 +742,7 @@ pub fn rows(review: &mut Review, cols: usize, rows: usize) -> Vec<Row> {
     while out.len() + 1 < rows.max(2) {
         out.push(row(Vec::new(), false));
     }
-    out.push(row(vec![span(fit(hints, cols), Look::Dim)], false));
+    out.push(row(vec![span(fit(&hints, cols), Look::Dim)], false));
     // Every row fits the width.
     for r in &mut out {
         let mut used = 0;

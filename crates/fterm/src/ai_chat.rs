@@ -221,7 +221,7 @@ pub fn layout(turns: &[TurnView], width: usize) -> Vec<ChatLine> {
                 }
                 Block::Code { lang, code } => {
                     let header = if lang.is_empty() {
-                        "code".to_owned()
+                        fterm_config::tr!("ai.code")
                     } else {
                         lang
                     };
@@ -237,7 +237,11 @@ pub fn layout(turns: &[TurnView], width: usize) -> Vec<ChatLine> {
         if turn.streaming {
             match lines[start..].last_mut() {
                 Some(last) => last.text.push('▍'),
-                None => push(&mut lines, "Thinking…".to_owned(), ChatStyle::Note),
+                None => push(
+                    &mut lines,
+                    fterm_config::tr!("ai.thinking"),
+                    ChatStyle::Note,
+                ),
             }
         }
         if let Some(error) = turn.error {
@@ -294,21 +298,14 @@ pub enum ContextItem {
 impl ContextItem {
     /// The text of the chip: "output (42 lines)".
     pub fn label(&self) -> String {
-        let lines = |text: &str| {
-            let n = text.lines().count().max(1);
-            if n == 1 {
-                "1 line".to_owned()
-            } else {
-                format!("{n} lines")
-            }
-        };
+        let lines = |text: &str| fterm_config::trn!("count.lines", text.lines().count().max(1));
         match self {
             Self::Command {
                 exit: Some(code), ..
-            } => format!("last command (exit {code})"),
-            Self::Command { exit: None, .. } => "last command".to_owned(),
-            Self::Output(text) => format!("output ({})", lines(text)),
-            Self::Selection(text) => format!("selection ({})", lines(text)),
+            } => fterm_config::tr!("ai.chip_command_exit", code = code),
+            Self::Command { exit: None, .. } => fterm_config::tr!("ai.chip_command"),
+            Self::Output(text) => fterm_config::tr!("ai.chip_output", lines = lines(text)),
+            Self::Selection(text) => fterm_config::tr!("ai.chip_selection", lines = lines(text)),
         }
     }
 }
