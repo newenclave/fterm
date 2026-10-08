@@ -108,6 +108,18 @@ pub fn harmonize_settings(
     }
 }
 
+/// The strength one step (0.1) up (`dir` > 0) or down, in 0..1.
+pub fn step_strength(current: f32, dir: i32) -> f32 {
+    let tenths = current * 10.0;
+    // A value between steps goes to the next whole step; a value on a step goes one further.
+    let next = if dir > 0 {
+        (tenths + 0.001).floor() + 1.0
+    } else {
+        (tenths - 0.001).ceil() - 1.0
+    };
+    next.clamp(0.0, 10.0).round() / 10.0
+}
+
 /// The UI colors of `theme` for the renderer.
 pub fn ui_colors(theme: &Theme) -> UiColors {
     let u = &theme.ui;
@@ -266,6 +278,18 @@ mod tests {
             (0.3, 4.5),
             "the config wins"
         );
+    }
+
+    #[test]
+    fn a_strength_goes_up_and_down_in_steps() {
+        assert_eq!(step_strength(0.0, 1), 0.1);
+        assert_eq!(step_strength(0.8, 1), 0.9);
+        assert_eq!(step_strength(1.0, 1), 1.0, "at most 1");
+        assert_eq!(step_strength(0.1, -1), 0.0);
+        assert_eq!(step_strength(0.0, -1), 0.0, "at least 0");
+        // A value between steps goes to the next whole step.
+        assert_eq!(step_strength(0.65, 1), 0.7);
+        assert_eq!(step_strength(0.65, -1), 0.6);
     }
 
     #[test]

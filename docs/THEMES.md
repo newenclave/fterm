@@ -139,6 +139,10 @@ profiles = {
 },
 ```
 
+To find a good strength, try it live: **Ctrl + Shift + ]** makes it stronger and **Ctrl + Shift + [** weaker,
+in steps of 0.1 (the actions `harmonize_more` and `harmonize_less`, also in the palette). A toast says the value
+and the line for `fterm.lua` that keeps it. The value lasts until the config changes or fterm closes.
+
 The action `toggle_original_colors` ("Original colors of programs on or off" in the palette) shows the
 colors of programs as they are, and back. Give it a key to compare fast:
 `keys = { { key = "ctrl+shift+f8", action = "toggle_original_colors" } }`.

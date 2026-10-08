@@ -28,6 +28,7 @@ The tab title is your name for the tab, or the title from the program, or the pr
 | Key or mouse | What it does |
 |---|---|
 | The window ×, Alt + F4 | Close fterm. When a program or an agent runs, fterm asks first (Enter = close, Esc = stay). See `confirm_close` in [CONFIG.md](CONFIG.md). |
+| Ctrl + Shift + ] / [ | The colors of programs closer to the theme, or closer to their own (`harmonize`, steps of 0.1; see [THEMES.md](THEMES.md#the-colors-of-programs-harmonize)). |
 | Alt + Enter | Full screen on or off: the window takes the whole monitor, with no frame and no title bar (like WezTerm). Programs do not get Alt + Enter then; to give it back to them, turn the key off: `{ key = "alt+enter", action = "none" }` (see [CONFIG.md](CONFIG.md)). |
 | Ctrl + Shift + S | The list of sessions: named ones (★) and the last closed windows. Enter = restore, Delete = forget. "Save session as…" is in the palette. See [CONFIG.md](CONFIG.md#sessions). |
 

@@ -187,6 +187,35 @@ impl Center {
         }
     }
 
+    /// New text for a notification that is still in the history, and its toast again with a new timer.
+    /// `false` = it is gone.
+    pub fn update(&mut self, id: u64, now: Instant, title: &str, body: &str) -> bool {
+        let Some(n) = self.history.iter_mut().find(|n| n.id == id) else {
+            return false;
+        };
+        n.title = title.to_owned();
+        n.body = body.to_owned();
+        n.time = now;
+        let hide_at = n.level.timeout().map(|t| now + t);
+        match self.toasts.iter_mut().find(|t| t.id == id) {
+            Some(toast) => {
+                toast.hide_at = hide_at;
+                toast.paused_left = None;
+            }
+            None if self.toasts_on && self.max_toasts > 0 => {
+                self.toasts.push(Toast {
+                    id,
+                    hide_at,
+                    paused_left: None,
+                });
+                let extra = self.toasts.len().saturating_sub(self.max_toasts);
+                self.toasts.drain(..extra);
+            }
+            None => {}
+        }
+        true
+    }
+
     /// Closes a toast. The notification stays in the history.
     pub fn dismiss(&mut self, id: u64) {
         self.toasts.retain(|t| t.id != id);
@@ -325,6 +354,27 @@ mod tests {
         assert_eq!(center.toasts().len(), 1);
         center.tick(t0 + Duration::from_millis(61_100));
         assert!(center.toasts().is_empty());
+    }
+
+    #[test]
+    fn a_notification_can_say_something_new() {
+        let mut center = Center::new(4, true);
+        let t0 = Instant::now();
+        let id = push(&mut center, t0, "Harmonize: 0.5", Level::Info);
+        center.tick(t0 + Duration::from_secs(10));
+        assert!(center.toasts().is_empty(), "the toast went away");
+        let later = t0 + Duration::from_secs(11);
+        assert!(center.update(id, later, "Harmonize: 0.6", "new body"));
+        assert_eq!(center.history().count(), 1, "no new notification");
+        let n = center.get(id).unwrap();
+        assert_eq!(
+            (n.title.as_str(), n.body.as_str()),
+            ("Harmonize: 0.6", "new body")
+        );
+        assert_eq!(center.toasts().len(), 1, "it shows again");
+        center.tick(later + Duration::from_secs(2));
+        assert_eq!(center.toasts().len(), 1, "with a new timer");
+        assert!(!center.update(999, later, "x", "y"), "no such notification");
     }
 
     #[test]

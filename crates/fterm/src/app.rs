@@ -374,6 +374,10 @@ pub struct App {
     system_dark: bool,
     /// `toggle_original_colors`: the colors that programs chose, as they are.
     original_colors: bool,
+    /// `harmonize_more` / `harmonize_less`: a strength to try, until the config changes.
+    harmonize_live: Option<f32>,
+    /// The notification that shows the value being tried (it changes, not a new one per step).
+    harmonize_note: Option<u64>,
     /// A message box (for example, an error in the config). Any key closes it.
     message: Option<Vec<String>>,
     /// Editors save in several steps: we load the config a moment after the last change.
@@ -488,6 +492,8 @@ impl App {
             theme_override: None,
             system_dark: true,
             original_colors: false,
+            harmonize_live: None,
+            harmonize_note: None,
             message,
             reload_at: None,
             theme_reload_at: None,
@@ -1372,11 +1378,48 @@ impl App {
             &self.theme,
             &self.config.config.colors,
         ));
-        palette.set_harmonize(crate::themes::harmonize_settings(
-            &self.theme,
-            &self.config.config.harmonize,
-        ));
+        palette.set_harmonize(self.harmonize());
         palette
+    }
+
+    /// How the colors of programs fit the theme now: the theme, the config, and a value being tried.
+    fn harmonize(&self) -> fterm_term::harmonize::Settings {
+        let mut settings =
+            crate::themes::harmonize_settings(&self.theme, &self.config.config.harmonize);
+        if let Some(strength) = self.harmonize_live {
+            settings.strength = strength;
+        }
+        settings
+    }
+
+    /// `harmonize_more` / `harmonize_less`: one step, at once, with a toast that says the value.
+    fn step_harmonize(&mut self, dir: i32) {
+        let strength = crate::themes::step_strength(self.harmonize().strength, dir);
+        self.harmonize_live = Some(strength);
+        self.original_colors = false;
+        self.apply_theme();
+        let body = format!(
+            "harmonize = {{ strength = {strength:.1} }} in fterm.lua keeps it. Ctrl+Shift+] more, Ctrl+Shift+[ less."
+        );
+        let title = format!("Harmonize: {strength:.1}");
+        // One toast that says the new value, not a new event for every step.
+        let now = Instant::now();
+        let shown = self
+            .harmonize_note
+            .is_some_and(|id| self.center.update(id, now, &title, &body));
+        if !shown {
+            self.notify(None, &title, &body, Level::Info, Source::App);
+            // The newest one, if the Lua filter did not drop or change it.
+            self.harmonize_note = self
+                .center
+                .history()
+                .next()
+                .filter(|n| n.title == title)
+                .map(|n| n.id);
+        }
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
     }
 
     /// The folders with theme files.
@@ -1454,6 +1497,7 @@ impl App {
                 self.profiles = profiles_for(&self.config);
                 self.apply_notification_config();
                 self.theme_override = None;
+                self.harmonize_live = None;
                 self.load_theme();
                 self.apply_config();
                 // Say which file it read: with FTERM_CONFIG it is not always the one you think.
@@ -2385,6 +2429,8 @@ impl App {
                 }
             }
             A::Zoom => running.mux.toggle_zoom(),
+            A::HarmonizeMore => return self.step_harmonize(1),
+            A::HarmonizeLess => return self.step_harmonize(-1),
             A::ToggleOriginalColors => {
                 self.original_colors = !self.original_colors;
                 let (title, body) = if self.original_colors {

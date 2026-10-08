@@ -210,11 +210,15 @@ pub enum BuiltinAction {
     InstallClaudeHooks,
     /// The colors that programs chose, as they are, or fitted to the theme (`harmonize`).
     ToggleOriginalColors,
+    /// The colors of programs one step closer to the theme (`harmonize` strength + 0.1).
+    HarmonizeMore,
+    /// One step back to their own colors (strength - 0.1).
+    HarmonizeLess,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 52] = [
+    pub const ALL: [BuiltinAction; 54] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -267,6 +271,8 @@ impl BuiltinAction {
         Self::ChooseTheme,
         Self::InstallClaudeHooks,
         Self::ToggleOriginalColors,
+        Self::HarmonizeMore,
+        Self::HarmonizeLess,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -324,6 +330,8 @@ impl BuiltinAction {
             Self::ChooseTheme => "choose_theme",
             Self::InstallClaudeHooks => "install_claude_hooks",
             Self::ToggleOriginalColors => "toggle_original_colors",
+            Self::HarmonizeMore => "harmonize_more",
+            Self::HarmonizeLess => "harmonize_less",
         };
         name.to_owned()
     }
@@ -369,6 +377,12 @@ impl BuiltinAction {
             Self::ChooseTheme => "Theme…".to_owned(),
             Self::InstallClaudeHooks => "Install Claude Code hooks (agent states)".to_owned(),
             Self::ToggleOriginalColors => "Original colors of programs on or off".to_owned(),
+            Self::HarmonizeMore => {
+                "Harmonize: more (program colors closer to the theme)".to_owned()
+            }
+            Self::HarmonizeLess => {
+                "Harmonize: less (program colors closer to their own)".to_owned()
+            }
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -463,6 +477,8 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("alt+f8", "history_commands"),
     ("alt+f12", "history_dirs"),
     ("alt+enter", "toggle_fullscreen"),
+    ("ctrl+shift+]", "harmonize_more"),
+    ("ctrl+shift+[", "harmonize_less"),
 ];
 
 impl Keymap {
@@ -625,6 +641,30 @@ mod tests {
             keys.get(&chord("ctrl+shift+a")),
             Some(&Action::Builtin(BuiltinAction::PanelAgents))
         );
+    }
+
+    #[test]
+    fn harmonize_more_and_less() {
+        let keys = Keymap::with_defaults();
+        assert_eq!(
+            keys.get(&chord("ctrl+shift+]")),
+            Some(&Action::Builtin(BuiltinAction::HarmonizeMore))
+        );
+        assert_eq!(
+            keys.get(&chord("ctrl+shift+[")),
+            Some(&Action::Builtin(BuiltinAction::HarmonizeLess))
+        );
+        assert_eq!(BuiltinAction::HarmonizeMore.name(), "harmonize_more");
+        assert_eq!(
+            BuiltinAction::from_name("harmonize_less"),
+            Some(BuiltinAction::HarmonizeLess)
+        );
+        assert!(
+            BuiltinAction::HarmonizeMore
+                .label()
+                .starts_with("Harmonize: more")
+        );
+        assert!(BuiltinAction::ALL.contains(&BuiltinAction::HarmonizeLess));
     }
 
     #[test]

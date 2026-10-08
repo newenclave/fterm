@@ -161,6 +161,7 @@ also work on other layouts (for example, Russian).
 | `toggle_fullscreen` (Alt+Enter) | Full screen with no window frame. |
 | `choose_theme` | The list of themes; Enter uses one until fterm closes (see [THEMES.md](THEMES.md)). |
 | `toggle_original_colors` | The colors that programs chose as they are, or fitted to the theme (`harmonize`). |
+| `harmonize_more`, `harmonize_less` (Ctrl+Shift+], Ctrl+Shift+[) | Try a stronger or weaker `harmonize` (steps of 0.1) until the config changes. |
 
 ### Lua functions
 A function gets an object `fterm` with these functions:
