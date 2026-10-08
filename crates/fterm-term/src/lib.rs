@@ -5,6 +5,7 @@ pub mod colors;
 #[cfg(windows)]
 pub mod conpty;
 pub mod copy_mode;
+pub mod harmonize;
 pub mod input;
 pub mod io_loop;
 pub mod links;
