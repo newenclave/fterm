@@ -129,6 +129,30 @@ Ideas (we pick the order in the Phase 3 plan):
   So images in the terminal need the new `conpty.dll` + `OpenConsole.exe` (NuGet `Microsoft.Windows.Console.ConPTY`, MIT)
   next to `fterm.exe`. The user does not want extra files for now: images wait. On Linux and macOS there is no ConPTY,
   so images can come there first.
+- A second test ✅ (2026-10-08). The first test may have used the `conpty.dll` of WezTerm: fterm loads
+  `conpty.dll` by name, so Windows finds it in PATH (here `C:\soft\wezterm`). So we tested both, with the same
+  results (Windows 11 26200):
+
+  | | `conpty.dll` of WezTerm | The ConPTY of Windows |
+  |---|---|---|
+  | iTerm2 (OSC 1337) | gets through whole, in its place | the same |
+  | Sixel (DCS q) | removed | removed |
+  | Kitty (APC _G) | removed | removed |
+  | DA1 (`CSI c`) | ConPTY answers itself (no Sixel in the answer) | the same |
+  | XTSMGRAPHICS (`CSI ? 2;1;0 S`) | gets through, fterm does not answer yet | the same |
+  | The Kitty query | removed | removed |
+  | The prompt after the image | on its row (fterm does not draw the image yet) | the same |
+  | The resize tests (`PSEUDOCONSOLE_RESIZE_QUIRK`) | pass | pass (CI has an older Windows, so they fail there) |
+
+  What this means:
+  - A newer `conpty.dll` does not help with images. On Windows only iTerm2 (OSC 1337) works.
+    Sixel and Kitty can work only on Linux and macOS.
+  - The image must stay on its cells, and fterm must not move the cursor: ConPTY does not know about the image,
+    so the program must make room for it (new lines).
+  - The API way (`ftermctl image`, an MCP tool) does not go through ConPTY, so it works everywhere.
+  - Loading `conpty.dll` from PATH is a risk (DLL hijack) and differs between machines. Better: only next to
+    `fterm.exe`, else the ConPTY of Windows; maybe a config option `conpty = "auto" | "inbox" | "<path>"`.
+    Not decided yet.
 - Our own pty read loop, so we can catch image sequences before the parser.
   It also reads the pty until the end of the stream after the process ends. ✅ (done in Phase 6.0: `io_loop.rs`)
 - iTerm2 (OSC 1337) and Sixel first, then the Kitty graphics protocol.
