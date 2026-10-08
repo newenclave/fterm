@@ -8,6 +8,7 @@ use crate::atlas::{AtlasFull, AtlasGlyph, GlyphKey};
 use crate::color::linear;
 use crate::font::CellMetrics;
 use crate::frame::{Instance, KIND_COLOR_GLYPH, KIND_GLYPH, KIND_SOLID, Rect};
+use crate::theme::UiColors;
 
 /// Space above and below the text, in pixels (physical).
 pub const BAR_PADDING: f32 = 4.0;
@@ -18,38 +19,6 @@ pub const MIN_TAB_CELLS: f32 = 8.0;
 pub const MAX_TAB_CELLS: f32 = 30.0;
 /// The `+` button width, in cells.
 pub const NEW_TAB_CELLS: f32 = 3.0;
-
-// Catppuccin Mocha.
-pub const BAR_BG: Rgb = Rgb {
-    r: 0x18,
-    g: 0x18,
-    b: 0x25,
-};
-pub const ACTIVE_BG: Rgb = Rgb {
-    r: 0x1e,
-    g: 0x1e,
-    b: 0x2e,
-};
-pub const HOVER_BG: Rgb = Rgb {
-    r: 0x31,
-    g: 0x32,
-    b: 0x44,
-};
-pub const ACCENT: Rgb = Rgb {
-    r: 0xcb,
-    g: 0xa6,
-    b: 0xf7,
-};
-pub const ACTIVE_TEXT: Rgb = Rgb {
-    r: 0xcd,
-    g: 0xd6,
-    b: 0xf4,
-};
-pub const TEXT: Rgb = Rgb {
-    r: 0x93,
-    g: 0x99,
-    b: 0xb2,
-};
 
 pub fn bar_height(cell: CellMetrics) -> f32 {
     cell.height + 2.0 * BAR_PADDING
@@ -178,13 +147,14 @@ pub struct TabBarInput<'a> {
 /// The quads of the tab bar.
 pub fn build_tab_bar(
     input: &TabBarInput,
+    ui: &UiColors,
     glyph: &mut dyn FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
 ) -> Result<Vec<Instance>, AtlasFull> {
     let cell = input.cell;
     let layout = input.layout;
     let mut quads = vec![solid(
         Rect::new(0.0, 0.0, input.width, layout.height),
-        BAR_BG,
+        ui.surface,
     )];
     let mut text = Vec::new();
     let text_y = BAR_PADDING;
@@ -195,12 +165,12 @@ pub fn build_tab_bar(
         let hovered = matches!(input.hover, Hit::Tab(h) | Hit::Close(h) if h == i);
         let tab_color = input.colors.get(i).copied().flatten();
         if active {
-            quads.push(solid(rect, ACTIVE_BG));
+            quads.push(solid(rect, ui.surface_active));
             if tab_color.is_none() {
-                quads.push(solid(Rect::new(rect.x, 0.0, rect.width, 2.0), ACCENT));
+                quads.push(solid(Rect::new(rect.x, 0.0, rect.width, 2.0), ui.accent));
             }
         } else if hovered {
-            quads.push(solid(rect, HOVER_BG));
+            quads.push(solid(rect, ui.overlay));
         }
         if let Some(color) = tab_color {
             quads.push(solid(
@@ -211,16 +181,16 @@ pub fn build_tab_bar(
 
         // Title: 1 cell of space on the left, the × button on the right.
         let title_cells = ((rect.width / cell.width) as usize).saturating_sub(3);
-        let color = if active { ACTIVE_TEXT } else { TEXT };
+        let color = if active { ui.text } else { ui.text_dim };
         let x0 = rect.x + cell.width;
         match input.editing {
             Some((edited, typed)) if edited == i => {
                 let shown = fit_title(typed, title_cells.saturating_sub(1));
-                let used = push_text(&mut text, &shown, x0, text_y, cell, ACTIVE_TEXT, glyph)?;
+                let used = push_text(&mut text, &shown, x0, text_y, cell, ui.text, glyph)?;
                 // A text cursor after the typed text.
                 quads.push(solid(
                     Rect::new(x0 + used as f32 * cell.width, text_y, 2.0, cell.height),
-                    ACTIVE_TEXT,
+                    ui.text,
                 ));
             }
             _ => match input.badges.get(i).copied().flatten() {
@@ -255,9 +225,9 @@ pub fn build_tab_bar(
         }
 
         let close_color = if input.hover == Hit::Close(i) {
-            ACTIVE_TEXT
+            ui.text
         } else {
-            TEXT
+            ui.text_dim
         };
         let close_x = tab.close.x + (tab.close.width - cell.width) / 2.0;
         push_text(&mut text, "×", close_x, text_y, cell, close_color, glyph)?;
@@ -281,17 +251,17 @@ pub fn build_tab_bar(
             rect.x + 2.0 * cell.width,
             text_y,
             cell,
-            TEXT,
+            ui.text_dim,
             glyph,
         )?;
     }
 
     let plus = layout.new_tab;
     if input.hover == Hit::NewTab {
-        quads.push(solid(plus, HOVER_BG));
+        quads.push(solid(plus, ui.overlay));
     }
     let plus_x = plus.x + (plus.width - cell.width) / 2.0;
-    push_text(&mut text, "+", plus_x, text_y, cell, TEXT, glyph)?;
+    push_text(&mut text, "+", plus_x, text_y, cell, ui.text_dim, glyph)?;
 
     quads.extend(text);
     Ok(quads)
@@ -363,6 +333,10 @@ pub(crate) fn solid(rect: Rect, color: Rgb) -> Instance {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ui() -> UiColors {
+        UiColors::default()
+    }
 
     const CELL: CellMetrics = CellMetrics {
         width: 10.0,
@@ -465,7 +439,7 @@ mod tests {
             cell: CELL,
             width: 1000.0,
         };
-        build_tab_bar(&input, &mut |_| Ok(Some(GLYPH))).unwrap()
+        build_tab_bar(&input, &ui(), &mut |_| Ok(Some(GLYPH))).unwrap()
     }
 
     fn solid_with(quads: &[Instance], color: Rgb) -> Vec<[f32; 4]> {
@@ -480,7 +454,7 @@ mod tests {
     fn bar_background_covers_the_width() {
         let quads = build(&["a"], 0, Hit::None, None);
         assert_eq!(
-            solid_with(&quads, BAR_BG)[0],
+            solid_with(&quads, ui().surface)[0],
             [0.0, 0.0, 1000.0, bar_height(CELL)]
         );
     }
@@ -488,10 +462,10 @@ mod tests {
     #[test]
     fn active_tab_has_its_own_background_and_an_accent_line() {
         let quads = build(&["a", "b"], 1, Hit::None, None);
-        let active = solid_with(&quads, ACTIVE_BG);
+        let active = solid_with(&quads, ui().surface_active);
         assert_eq!(active.len(), 1);
         assert_eq!(active[0][0], MAX_TAB_CELLS * CELL.width);
-        let accent = solid_with(&quads, ACCENT);
+        let accent = solid_with(&quads, ui().accent);
         assert_eq!(accent.len(), 1);
         assert_eq!(accent[0][1], 0.0, "on top");
         assert!(accent[0][3] <= 3.0, "thin");
@@ -500,7 +474,7 @@ mod tests {
     #[test]
     fn hovered_tab_is_lighter() {
         let quads = build(&["a", "b"], 0, Hit::Tab(1), None);
-        assert_eq!(solid_with(&quads, HOVER_BG).len(), 1);
+        assert_eq!(solid_with(&quads, ui().overlay).len(), 1);
     }
 
     #[test]
@@ -510,7 +484,7 @@ mod tests {
         let glyphs: Vec<&Instance> = quads.iter().filter(|q| q.kind == KIND_GLYPH).collect();
         assert_eq!(glyphs.len(), 7);
         // Text of the active tab is brighter.
-        assert_eq!(glyphs[0].color, linear(ACTIVE_TEXT));
+        assert_eq!(glyphs[0].color, linear(ui().text));
     }
 
     #[test]
@@ -519,7 +493,7 @@ mod tests {
         let glyphs = quads.iter().filter(|q| q.kind == KIND_GLYPH).count();
         // "new name" has 7 non-space chars, plus × and +.
         assert_eq!(glyphs, 7 + 2);
-        assert_eq!(solid_with(&quads, ACTIVE_TEXT).len(), 1, "a text cursor");
+        assert_eq!(solid_with(&quads, ui().text).len(), 1, "a text cursor");
     }
 
     #[test]
@@ -540,7 +514,7 @@ mod tests {
             cell: CELL,
             width: 1000.0,
         };
-        let quads = build_tab_bar(&input, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let quads = build_tab_bar(&input, &ui(), &mut |_| Ok(Some(GLYPH))).unwrap();
         let dots = solid_with(&quads, red);
         assert_eq!(dots.len(), 1);
         let tab1 = layout.tabs[1].rect;
@@ -584,7 +558,7 @@ mod tests {
             cell: CELL,
             width: 1000.0,
         };
-        let quads = build_tab_bar(&input, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let quads = build_tab_bar(&input, &ui(), &mut |_| Ok(Some(GLYPH))).unwrap();
         // An inactive tab: a line of its color across its top.
         let tab2 = layout.tabs[2].rect;
         assert_eq!(
@@ -597,9 +571,9 @@ mod tests {
             solid_with(&quads, red),
             vec![[tab0.x, 0.0, tab0.width, TAB_COLOR_LINE]]
         );
-        assert!(solid_with(&quads, ACCENT).is_empty());
+        assert!(solid_with(&quads, ui().accent).is_empty());
         // The text stays as it was.
-        assert!(solid_with(&quads, ACTIVE_BG).len() == 1);
+        assert!(solid_with(&quads, ui().surface_active).len() == 1);
     }
 
     #[test]
@@ -630,7 +604,7 @@ mod tests {
             cell: CELL,
             width: 1000.0,
         };
-        let quads = build_tab_bar(&input, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let quads = build_tab_bar(&input, &ui(), &mut |_| Ok(Some(GLYPH))).unwrap();
         let dots = solid_with(&quads, pink);
         assert_eq!(dots.len(), 1);
         assert!(dots[0][0] >= rect.x);
@@ -643,5 +617,31 @@ mod tests {
             glyph_xs.iter().any(|x| *x >= rect.x),
             "the number is drawn in the corner"
         );
+    }
+
+    #[test]
+    fn a_custom_theme_colors_the_bar() {
+        let red = Rgb { r: 255, g: 0, b: 0 };
+        let custom = UiColors {
+            surface: red,
+            ..UiColors::default()
+        };
+        let layout = layout_tabs(1, 1000.0, CELL);
+        let titles = vec!["ab".to_owned()];
+        let input = TabBarInput {
+            layout: &layout,
+            titles: &titles,
+            active: 0,
+            hover: Hit::None,
+            editing: None,
+            badges: &[],
+            colors: &[],
+            corner: None,
+            cell: CELL,
+            width: 1000.0,
+        };
+        let quads = build_tab_bar(&input, &custom, &mut |_| Ok(Some(GLYPH))).unwrap();
+        assert_eq!(solid_with(&quads, red).len(), 1, "the bar background");
+        assert!(solid_with(&quads, ui().surface).is_empty());
     }
 }

@@ -6,12 +6,13 @@ use fterm_term::alacritty_terminal::event::EventListener;
 use fterm_term::alacritty_terminal::grid::Dimensions;
 use fterm_term::alacritty_terminal::term::cell::Flags;
 use fterm_term::alacritty_terminal::term::{Term, TermMode};
-use fterm_term::alacritty_terminal::vte::ansi::{CursorShape, NamedColor, Rgb};
+use fterm_term::alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use fterm_term::colors::{Palette, cell_colors};
 
 use crate::atlas::{AtlasFull, AtlasGlyph, GlyphKey};
 use crate::color::linear;
 use crate::font::CellMetrics;
+use crate::theme::UiColors;
 pub use fterm_mux::Rect;
 
 /// A filled rectangle (background, cursor, underline).
@@ -39,29 +40,12 @@ pub struct FrameInput<'a> {
     pub cell: CellMetrics,
     pub padding: f32,
     pub palette: &'a Palette,
+    pub ui: &'a UiColors,
     pub focused: bool,
     /// Where the pane is in the window, in pixels. The padding is inside it.
     pub area: Rect,
 }
 
-/// Background of selected cells (Catppuccin Mocha "surface2").
-pub const SELECTION_BG: Rgb = Rgb {
-    r: 0x58,
-    g: 0x5b,
-    b: 0x70,
-};
-/// The cursor of copy mode (Catppuccin Mocha "yellow").
-pub const COPY_CURSOR: Rgb = Rgb {
-    r: 0xf9,
-    g: 0xe2,
-    b: 0xaf,
-};
-/// The scroll indicator on the right edge (Catppuccin Mocha "overlay1").
-pub const SCROLL_INDICATOR: Rgb = Rgb {
-    r: 0x7f,
-    g: 0x84,
-    b: 0x9c,
-};
 /// Width of the scroll indicator in pixels.
 pub const SCROLL_INDICATOR_WIDTH: f32 = 4.0;
 
@@ -209,9 +193,9 @@ pub fn build_frame<T: EventListener>(
     }
     if let Some((row, col)) = copy_cursor {
         let (x, y) = origin(col, row);
-        cursor_back.push(solid([x, y, cell.width, h], linear(COPY_CURSOR)));
+        cursor_back.push(solid([x, y, cell.width, h], linear(input.ui.copy_cursor)));
     }
-    if let Some(indicator) = scroll_indicator(term, content.display_offset, input.area) {
+    if let Some(indicator) = scroll_indicator(term, content.display_offset, input.area, input.ui) {
         cursor_front.push(indicator);
     }
 
@@ -229,6 +213,7 @@ fn scroll_indicator<T: EventListener>(
     term: &Term<T>,
     display_offset: usize,
     area: Rect,
+    ui: &UiColors,
 ) -> Option<Instance> {
     let (view_width, view_height) = (area.width, area.height);
     if display_offset == 0 {
@@ -247,7 +232,7 @@ fn scroll_indicator<T: EventListener>(
             SCROLL_INDICATOR_WIDTH,
             height,
         ],
-        linear(SCROLL_INDICATOR),
+        linear(ui.scrollbar),
     ))
 }
 
@@ -270,6 +255,7 @@ mod tests {
     use fterm_term::alacritty_terminal::term::Config;
     use fterm_term::alacritty_terminal::term::color::Colors;
     use fterm_term::alacritty_terminal::vte::ansi::Processor;
+    use fterm_term::alacritty_terminal::vte::ansi::Rgb;
     use fterm_term::size::GridSize;
 
     use super::*;
@@ -312,6 +298,7 @@ mod tests {
             cell: CELL,
             padding: PADDING,
             palette: &palette,
+            ui: &UiColors::default(),
             focused,
             area: AREA,
         };
@@ -440,6 +427,7 @@ mod tests {
             cell: CELL,
             padding: PADDING,
             palette: &palette,
+            ui: &UiColors::default(),
             focused: true,
             area: AREA,
         };
@@ -537,6 +525,7 @@ mod tests {
             cell: CELL,
             padding: PADDING,
             palette: &palette,
+            ui: &UiColors::default(),
             focused: true,
             area: AREA,
         };
@@ -550,6 +539,7 @@ mod tests {
             cell: CELL,
             padding: PADDING,
             palette: &palette,
+            ui: &UiColors::default(),
             focused: true,
             area: AREA,
         };
@@ -578,7 +568,7 @@ mod tests {
     fn selected_cells_get_the_selection_background() {
         let mut term = term_with(b"abcd");
         select(&mut term, 0, 1, 2);
-        let rects = rects_with_color(&build(&term), SELECTION_BG);
+        let rects = rects_with_color(&build(&term), Palette::default().selection);
         assert_eq!(rects, [cell_rect(1.0, 0.0), cell_rect(2.0, 0.0)]);
     }
 
@@ -586,7 +576,7 @@ mod tests {
     fn empty_cells_can_be_selected_too() {
         let mut term = term_with(b"ab");
         select(&mut term, 1, 4, 4);
-        let rects = rects_with_color(&build(&term), SELECTION_BG);
+        let rects = rects_with_color(&build(&term), Palette::default().selection);
         assert_eq!(rects, [cell_rect(4.0, 1.0)]);
     }
 
@@ -609,7 +599,7 @@ mod tests {
         let mut term = term_with(text.join("\r\n").as_bytes());
         term.scroll_display(Scroll::Delta(2));
         select(&mut term, -2, 0, 0);
-        let rects = rects_with_color(&build(&term), SELECTION_BG);
+        let rects = rects_with_color(&build(&term), Palette::default().selection);
         assert_eq!(rects, [cell_rect(0.0, 0.0)]);
     }
 
@@ -617,7 +607,7 @@ mod tests {
     fn copy_mode_cursor_is_a_yellow_block() {
         let mut term = term_with(b"abc");
         term.toggle_vi_mode();
-        let rects = rects_with_color(&build(&term), COPY_CURSOR);
+        let rects = rects_with_color(&build(&term), UiColors::default().copy_cursor);
         // The copy mode cursor starts at the shell cursor (after "abc").
         assert_eq!(rects, [cell_rect(3.0, 0.0)]);
     }
@@ -626,10 +616,10 @@ mod tests {
     fn scroll_indicator_shows_only_when_scrolled_up() {
         let text: Vec<String> = (0..30).map(|i| i.to_string()).collect();
         let mut term = term_with(text.join("\r\n").as_bytes());
-        assert!(rects_with_color(&build(&term), SCROLL_INDICATOR).is_empty());
+        assert!(rects_with_color(&build(&term), UiColors::default().scrollbar).is_empty());
 
         term.scroll_display(Scroll::Delta(5));
-        let rects = rects_with_color(&build(&term), SCROLL_INDICATOR);
+        let rects = rects_with_color(&build(&term), UiColors::default().scrollbar);
         assert_eq!(rects.len(), 1);
         let [x, y, w, h] = rects[0];
         assert_eq!(x + w, AREA.width, "at the right edge");
@@ -646,7 +636,7 @@ mod tests {
         let text: Vec<String> = (0..30).map(|i| i.to_string()).collect();
         let mut term = term_with(text.join("\r\n").as_bytes());
         term.scroll_display(Scroll::Top);
-        let rects = rects_with_color(&build(&term), SCROLL_INDICATOR);
+        let rects = rects_with_color(&build(&term), UiColors::default().scrollbar);
         assert_eq!(rects[0][1], 0.0);
     }
 
@@ -659,6 +649,7 @@ mod tests {
             cell: CELL,
             padding: PADDING,
             palette: &palette,
+            ui: &UiColors::default(),
             focused: true,
             area,
         };
@@ -682,11 +673,12 @@ mod tests {
             cell: CELL,
             padding: PADDING,
             palette: &palette,
+            ui: &UiColors::default(),
             focused: true,
             area,
         };
         let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
-        let rects = rects_with_color(&quads, SCROLL_INDICATOR);
+        let rects = rects_with_color(&quads, UiColors::default().scrollbar);
         let [x, y, w, h] = rects[0];
         assert_eq!(x + w, 308.0);
         assert!(y >= 30.0 && y + h <= 98.0);
@@ -706,5 +698,34 @@ mod tests {
             },
         );
         assert_eq!(fill.first(), Some(&[0.0, 0.0, 108.0, 68.0]));
+    }
+
+    #[test]
+    fn a_custom_theme_colors_the_scroll_indicator() {
+        let text: Vec<String> = (0..30).map(|i| i.to_string()).collect();
+        let mut term = term_with(
+            text.join(
+                "
+",
+            )
+            .as_bytes(),
+        );
+        term.scroll_display(Scroll::Delta(5));
+        let palette = Palette::default();
+        let ui = UiColors {
+            scrollbar: Rgb { r: 1, g: 2, b: 3 },
+            ..UiColors::default()
+        };
+        let input = FrameInput {
+            cell: CELL,
+            padding: PADDING,
+            palette: &palette,
+            ui: &ui,
+            focused: true,
+            area: AREA,
+        };
+        let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
+        assert_eq!(rects_with_color(&quads, ui.scrollbar).len(), 1);
+        assert!(rects_with_color(&quads, UiColors::default().scrollbar).is_empty());
     }
 }

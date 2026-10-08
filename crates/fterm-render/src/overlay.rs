@@ -1,53 +1,13 @@
 //! A message box in the middle of the window (for example: "Close the tab? claude is running").
 
-use fterm_term::alacritty_terminal::vte::ansi::Rgb;
-
 use crate::atlas::{AtlasFull, AtlasGlyph, GlyphKey};
 use crate::font::CellMetrics;
 use crate::frame::{Instance, KIND_SOLID, Rect};
 use crate::tabbar::{char_cells, fit_title, push_text, solid};
+use crate::theme::UiColors;
 
 /// How dark the window gets behind the box (0 = not at all, 1 = black).
 pub const DIM: f32 = 0.5;
-pub const BOX_BG: Rgb = Rgb {
-    r: 0x31,
-    g: 0x32,
-    b: 0x44,
-};
-pub const BOX_BORDER: Rgb = Rgb {
-    r: 0xcb,
-    g: 0xa6,
-    b: 0xf7,
-};
-pub const BOX_TEXT: Rgb = Rgb {
-    r: 0xcd,
-    g: 0xd6,
-    b: 0xf4,
-};
-/// The selected line of the palette.
-pub const ROW_SELECTED: Rgb = Rgb {
-    r: 0x45,
-    g: 0x47,
-    b: 0x5a,
-};
-/// Key hints and other quiet text.
-pub const HINT_TEXT: Rgb = Rgb {
-    r: 0x93,
-    g: 0x99,
-    b: 0xb2,
-};
-/// A hint that is bad news (for example a failed command).
-pub const BAD_TEXT: Rgb = Rgb {
-    r: 0xf3,
-    g: 0x8b,
-    b: 0xa8,
-};
-/// A hint from the history after the cursor (grey, quiet).
-pub const GHOST_TEXT: Rgb = Rgb {
-    r: 0x6c,
-    g: 0x70,
-    b: 0x86,
-};
 /// The widest palette, in cells.
 pub const PALETTE_CELLS: usize = 80;
 
@@ -68,6 +28,7 @@ pub struct PaletteView<'a> {
 pub fn build_palette(
     palette: &PaletteView,
     view: Rect,
+    ui: &UiColors,
     cell: CellMetrics,
     glyph: &mut dyn FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
 ) -> Result<Vec<Instance>, AtlasFull> {
@@ -87,14 +48,14 @@ pub fn build_palette(
     // The input line, a line of space, the rows, the footer, and half a line at the bottom.
     let footer_lines = if palette.footer.is_empty() { 0.0 } else { 1.0 };
     let height = (2.5 + palette.rows.len() as f32 + footer_lines) * cell.height;
-    quads.push(solid(Rect::new(x, y, width, height), BOX_BG));
+    quads.push(solid(Rect::new(x, y, width, height), ui.overlay));
     for border in [
         Rect::new(x, y, width, 1.0),
         Rect::new(x, y + height - 1.0, width, 1.0),
         Rect::new(x, y, 1.0, height),
         Rect::new(x + width - 1.0, y, 1.0, height),
     ] {
-        quads.push(solid(border, BOX_BORDER));
+        quads.push(solid(border, ui.accent));
     }
 
     // The input line: "> query" and a text cursor.
@@ -106,7 +67,7 @@ pub fn build_palette(
         x + cell.width,
         input_y,
         cell,
-        BOX_TEXT,
+        ui.text,
         glyph,
     )?;
     quads.push(solid(
@@ -116,7 +77,7 @@ pub fn build_palette(
             2.0,
             cell.height,
         ),
-        BOX_TEXT,
+        ui.text,
     ));
     if !palette.title.is_empty() {
         let title_cells: usize = palette.title.chars().map(char_cells).sum();
@@ -127,13 +88,13 @@ pub fn build_palette(
             title_x,
             input_y,
             cell,
-            HINT_TEXT,
+            ui.text_dim,
             glyph,
         )?;
     }
     quads.push(solid(
         Rect::new(x + 1.0, y + cell.height * 1.75, width - 2.0, 1.0),
-        BOX_BORDER,
+        ui.accent,
     ));
 
     for (i, (label, key, selected)) in palette.rows.iter().enumerate() {
@@ -141,7 +102,7 @@ pub fn build_palette(
         if *selected {
             quads.push(solid(
                 Rect::new(x + 1.0, row_y, width - 2.0, cell.height),
-                ROW_SELECTED,
+                ui.selected,
             ));
         }
         let key_cells: usize = key.chars().map(char_cells).sum();
@@ -153,15 +114,15 @@ pub fn build_palette(
             x + cell.width,
             row_y,
             cell,
-            BOX_TEXT,
+            ui.text,
             glyph,
         )?;
         if key_cells > 0 {
             let key_x = x + width - (1 + key_cells) as f32 * cell.width;
             let color = if palette.bad.get(i).copied().unwrap_or(false) {
-                BAD_TEXT
+                ui.error
             } else {
-                HINT_TEXT
+                ui.text_dim
             };
             push_text(&mut quads, key, key_x, row_y, cell, color, glyph)?;
         }
@@ -175,7 +136,7 @@ pub fn build_palette(
             x + cell.width,
             footer_y,
             cell,
-            HINT_TEXT,
+            ui.text_dim,
             glyph,
         )?;
     }
@@ -188,6 +149,7 @@ pub fn build_ghost(
     x: f32,
     y: f32,
     max_cells: usize,
+    ui: &UiColors,
     cell: CellMetrics,
     glyph: &mut dyn FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
 ) -> Result<Vec<Instance>, AtlasFull> {
@@ -200,7 +162,7 @@ pub fn build_ghost(
         })
         .collect();
     let mut quads = Vec::new();
-    push_text(&mut quads, &shown, x, y, cell, GHOST_TEXT, glyph)?;
+    push_text(&mut quads, &shown, x, y, cell, ui.text_ghost, glyph)?;
     Ok(quads)
 }
 
@@ -208,6 +170,7 @@ pub fn build_ghost(
 pub fn build_message_box(
     lines: &[String],
     view: Rect,
+    ui: &UiColors,
     cell: CellMetrics,
     glyph: &mut dyn FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
 ) -> Result<Vec<Instance>, AtlasFull> {
@@ -227,14 +190,14 @@ pub fn build_message_box(
     let height = (lines.len() + 2) as f32 * cell.height;
     let x = (view.x + (view.width - width) / 2.0).round();
     let y = (view.y + (view.height - height) / 2.0).round();
-    quads.push(solid(Rect::new(x, y, width, height), BOX_BG));
+    quads.push(solid(Rect::new(x, y, width, height), ui.overlay));
     for border in [
         Rect::new(x, y, width, 1.0),
         Rect::new(x, y + height - 1.0, width, 1.0),
         Rect::new(x, y, 1.0, height),
         Rect::new(x + width - 1.0, y, 1.0, height),
     ] {
-        quads.push(solid(border, BOX_BORDER));
+        quads.push(solid(border, ui.accent));
     }
     for (i, line) in lines.iter().enumerate() {
         let line_y = y + (i + 1) as f32 * cell.height;
@@ -244,7 +207,7 @@ pub fn build_message_box(
             x + 2.0 * cell.width,
             line_y,
             cell,
-            BOX_TEXT,
+            ui.text,
             glyph,
         )?;
     }
@@ -254,6 +217,10 @@ pub fn build_message_box(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ui() -> UiColors {
+        UiColors::default()
+    }
     use crate::color::linear;
     use crate::frame::{KIND_GLYPH, KIND_SOLID};
 
@@ -280,7 +247,7 @@ mod tests {
 
     fn build(lines: &[&str]) -> Vec<Instance> {
         let lines: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        build_message_box(&lines, VIEW, CELL, &mut |_| Ok(Some(GLYPH))).unwrap()
+        build_message_box(&lines, VIEW, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap()
     }
 
     #[test]
@@ -297,7 +264,7 @@ mod tests {
         let quads = build(&["Close the tab?", "Enter = yes"]);
         let bg = quads
             .iter()
-            .find(|q| q.kind == KIND_SOLID && q.color == linear(BOX_BG))
+            .find(|q| q.kind == KIND_SOLID && q.color == linear(ui().overlay))
             .expect("no box");
         let [x, y, w, h] = bg.rect;
         assert!(
@@ -321,7 +288,7 @@ mod tests {
         let quads = build(&["ab", "c d"]);
         let borders = quads
             .iter()
-            .filter(|q| q.kind == KIND_SOLID && q.color == linear(BOX_BORDER))
+            .filter(|q| q.kind == KIND_SOLID && q.color == linear(ui().accent))
             .count();
         assert_eq!(borders, 4);
         let glyphs = quads.iter().filter(|q| q.kind == KIND_GLYPH).count();
@@ -340,31 +307,34 @@ mod tests {
             footer: "",
             bad: &[],
         };
-        build_palette(&view, VIEW, CELL, &mut |_| Ok(Some(GLYPH))).unwrap()
+        build_palette(&view, VIEW, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap()
     }
 
     fn box_height(quads: &[Instance]) -> f32 {
         quads
             .iter()
-            .find(|q| q.kind == KIND_SOLID && q.color == linear(BOX_BG))
+            .find(|q| q.kind == KIND_SOLID && q.color == linear(ui().overlay))
             .expect("no box")
             .rect[3]
     }
 
     #[test]
     fn ghost_text_is_grey_and_stops_at_the_line_end() {
-        let quads = build_ghost(" status", 100.0, 40.0, 4, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let quads = build_ghost(" status", 100.0, 40.0, 4, &ui(), CELL, &mut |_| {
+            Ok(Some(GLYPH))
+        })
+        .unwrap();
         // " sta" fits in 4 cells; the space is not drawn.
         assert_eq!(quads.len(), 3);
         assert!(
             quads
                 .iter()
-                .all(|q| q.kind == KIND_GLYPH && q.color == linear(GHOST_TEXT))
+                .all(|q| q.kind == KIND_GLYPH && q.color == linear(ui().text_ghost))
         );
         assert!(quads[0].rect[0] >= 100.0 + CELL.width, "after the space");
         assert!(quads.iter().all(|q| q.rect[0] < 100.0 + 4.0 * CELL.width));
         assert!(
-            build_ghost("abc", 0.0, 0.0, 0, CELL, &mut |_| Ok(Some(GLYPH)))
+            build_ghost("abc", 0.0, 0.0, 0, &ui(), CELL, &mut |_| Ok(Some(GLYPH)))
                 .unwrap()
                 .is_empty()
         );
@@ -390,8 +360,9 @@ mod tests {
             footer: "Enter put",
             bad: &[true, false],
         };
-        let build =
-            |v: &PaletteView| build_palette(v, VIEW, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let build = |v: &PaletteView| {
+            build_palette(v, VIEW, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap()
+        };
         let (a, b) = (build(&plain), build(&full));
         assert_eq!(
             box_height(&b),
@@ -401,7 +372,7 @@ mod tests {
         let glyphs = |q: &[Instance]| q.iter().filter(|q| q.kind == KIND_GLYPH).count();
         // "Commands" (8) + "Enter put" (8, the space is not drawn).
         assert_eq!(glyphs(&b), glyphs(&a) + 8 + 8);
-        let red = linear(BAD_TEXT);
+        let red = linear(ui().error);
         let red_glyphs = b
             .iter()
             .filter(|q| q.kind == KIND_GLYPH && q.color == red)
@@ -415,7 +386,7 @@ mod tests {
         let quads = palette("", &[("New tab", "", true)]);
         let bg = quads
             .iter()
-            .find(|q| q.kind == KIND_SOLID && q.color == linear(BOX_BG))
+            .find(|q| q.kind == KIND_SOLID && q.color == linear(ui().overlay))
             .expect("no box");
         let [x, y, w, _] = bg.rect;
         assert!(
@@ -436,7 +407,7 @@ mod tests {
         );
         let selected: Vec<&Instance> = quads
             .iter()
-            .filter(|q| q.kind == KIND_SOLID && q.color == linear(ROW_SELECTED))
+            .filter(|q| q.kind == KIND_SOLID && q.color == linear(ui().selected))
             .collect();
         assert_eq!(selected.len(), 1);
         // Text: "> ne" (3 glyphs, the space is not drawn) + "New tab" (6) + the key (12) + "Next tab" (7).
@@ -449,13 +420,13 @@ mod tests {
         let quads = palette("", &[("A", "K", false)]);
         let bg = quads
             .iter()
-            .find(|q| q.kind == KIND_SOLID && q.color == linear(BOX_BG))
+            .find(|q| q.kind == KIND_SOLID && q.color == linear(ui().overlay))
             .unwrap()
             .rect;
         let glyphs: Vec<&Instance> = quads.iter().filter(|q| q.kind == KIND_GLYPH).collect();
         let hint = glyphs
             .iter()
-            .find(|g| g.color == linear(HINT_TEXT))
+            .find(|g| g.color == linear(ui().text_dim))
             .expect("no hint");
         assert!(
             hint.rect[0] > bg[0] + bg[2] / 2.0,

@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use fterm_mux::PaneId;
 use fterm_render::dock::{DockRow, DockSide};
+use fterm_render::theme::UiColors;
 use fterm_render::toasts::ToastLevel;
 use fterm_term::alacritty_terminal::vte::ansi::Rgb;
 
@@ -198,8 +199,8 @@ pub fn toast_level(level: Level) -> ToastLevel {
 }
 
 /// The color bar of a notification level (the same as the toasts).
-pub fn level_color(level: Level) -> Rgb {
-    toast_level(level).color()
+pub fn level_color(level: Level, ui: &UiColors) -> Rgb {
+    toast_level(level).color(ui)
 }
 
 /// The rows of the Events panel (newest first), and the pane of each row.
@@ -207,6 +208,7 @@ pub fn event_rows<'a>(
     history: impl Iterator<Item = &'a Notification>,
     filter: EventFilter,
     now: Instant,
+    ui: &UiColors,
 ) -> Vec<(DockRow, Option<PaneId>)> {
     history
         .filter(|n| match filter {
@@ -222,7 +224,7 @@ pub fn event_rows<'a>(
                 n.body.clone()
             };
             let row = DockRow {
-                marker: level_color(n.level),
+                marker: level_color(n.level, ui),
                 title: n.title.clone(),
                 detail,
                 right: short_ago(now.saturating_duration_since(n.time)),
@@ -243,7 +245,11 @@ pub struct AgentEntry<'a> {
     pub messages: usize,
 }
 
-pub fn agent_rows(entries: &[AgentEntry], now: Instant) -> Vec<(DockRow, Option<PaneId>)> {
+pub fn agent_rows(
+    entries: &[AgentEntry],
+    now: Instant,
+    ui: &UiColors,
+) -> Vec<(DockRow, Option<PaneId>)> {
     entries
         .iter()
         .map(|e| {
@@ -264,7 +270,7 @@ pub fn agent_rows(entries: &[AgentEntry], now: Instant) -> Vec<(DockRow, Option<
                 e.name.to_owned()
             };
             let row = DockRow {
-                marker: badge_color(e.state.kind),
+                marker: badge_color(e.state.kind, ui),
                 title,
                 detail,
                 right: short_ago(now.saturating_duration_since(e.state.since)),
@@ -304,12 +310,17 @@ mod tests {
         );
         center.push(t0, None, "Oops", "", Level::Error, Source::App, false);
         let now = t0 + Duration::from_secs(120);
-        let rows = event_rows(center.history(), EventFilter::All, now);
+        let rows = event_rows(
+            center.history(),
+            EventFilter::All,
+            now,
+            &UiColors::default(),
+        );
         assert_eq!(rows.len(), 2);
         let (oops, oops_pane) = &rows[0];
         assert_eq!(oops.title, "Oops");
         assert_eq!(oops.detail, "app", "no body: the source");
-        assert_eq!(oops.marker, level_color(Level::Error));
+        assert_eq!(oops.marker, level_color(Level::Error, &UiColors::default()));
         assert!(oops.new);
         assert_eq!(*oops_pane, None);
         let (build, build_pane) = &rows[1];
@@ -317,15 +328,25 @@ mod tests {
         assert_eq!(build.right, "2 min");
         assert_eq!(*build_pane, Some(pane));
 
-        let rows = event_rows(center.history(), EventFilter::Important, now);
+        let rows = event_rows(
+            center.history(),
+            EventFilter::Important,
+            now,
+            &UiColors::default(),
+        );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0.title, "Oops");
 
         center.mark_all_read();
         assert!(
-            event_rows(center.history(), EventFilter::All, now)
-                .iter()
-                .all(|(r, _)| !r.new)
+            event_rows(
+                center.history(),
+                EventFilter::All,
+                now,
+                &UiColors::default()
+            )
+            .iter()
+            .all(|(r, _)| !r.new)
         );
     }
 
@@ -358,13 +379,16 @@ mod tests {
                 messages: 2,
             },
         ];
-        let rows = agent_rows(&entries, t0 + Duration::from_secs(30));
+        let rows = agent_rows(&entries, t0 + Duration::from_secs(30), &UiColors::default());
         assert_eq!(rows.len(), 2);
         let (row, pane) = &rows[0];
         assert_eq!(row.title, "claude");
         assert_eq!(row.detail, "Waits for you");
         assert_eq!(row.right, "30 s");
-        assert_eq!(row.marker, badge_color(AgentKind::Waiting));
+        assert_eq!(
+            row.marker,
+            badge_color(AgentKind::Waiting, &UiColors::default())
+        );
         assert!(row.new);
         assert_eq!(*pane, Some(PaneId(1)));
         assert_eq!(rows[1].0.detail, "Tests are green");

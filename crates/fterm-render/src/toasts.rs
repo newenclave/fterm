@@ -5,8 +5,8 @@ use fterm_term::alacritty_terminal::vte::ansi::Rgb;
 use crate::atlas::{AtlasFull, AtlasGlyph, GlyphKey};
 use crate::font::CellMetrics;
 use crate::frame::{Instance, Rect};
-use crate::overlay::{BOX_BG, BOX_TEXT, HINT_TEXT};
 use crate::tabbar::{fit_title, push_text, solid};
+use crate::theme::UiColors;
 
 /// Space between the window edge and the toasts, and between two toasts, in pixels.
 pub const MARGIN: f32 = 10.0;
@@ -37,15 +37,14 @@ pub enum ToastLevel {
 }
 
 impl ToastLevel {
-    pub fn color(self) -> Rgb {
-        let (r, g, b) = match self {
-            ToastLevel::Info => (0x89, 0xb4, 0xfa),
-            ToastLevel::Success => (0xa6, 0xe3, 0xa1),
-            ToastLevel::Warning => (0xf9, 0xe2, 0xaf),
-            ToastLevel::Error => (0xf3, 0x8b, 0xa8),
-            ToastLevel::Attention => (0xcb, 0xa6, 0xf7),
-        };
-        Rgb { r, g, b }
+    pub fn color(self, ui: &UiColors) -> Rgb {
+        match self {
+            ToastLevel::Info => ui.info,
+            ToastLevel::Success => ui.success,
+            ToastLevel::Warning => ui.warning,
+            ToastLevel::Error => ui.error,
+            ToastLevel::Attention => ui.attention,
+        }
     }
 }
 
@@ -120,24 +119,25 @@ pub fn avoid_cursor(corner: Corner, stack: Rect, cursor: Rect) -> Corner {
 pub fn build_toasts(
     toasts: &[ToastView],
     rects: &[Rect],
+    ui: &UiColors,
     cell: CellMetrics,
     glyph: &mut dyn FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
 ) -> Result<Vec<Instance>, AtlasFull> {
     let mut quads = Vec::new();
     for (toast, rect) in toasts.iter().zip(rects) {
-        let mut bg = solid(*rect, BOX_BG);
+        let mut bg = solid(*rect, ui.overlay);
         bg.color[3] = BG_ALPHA;
         quads.push(bg);
         quads.push(solid(
             Rect::new(rect.x, rect.y, 3.0, rect.height),
-            toast.level.color(),
+            toast.level.color(ui),
         ));
         let text_x = rect.x + cell.width;
         let cells = ((rect.width / cell.width) as usize).saturating_sub(3);
         let top = rect.y + cell.height * 0.25;
         if !toast.title.is_empty() {
             let title = fit_title(toast.title, cells.saturating_sub(1));
-            push_text(&mut quads, &title, text_x, top, cell, BOX_TEXT, glyph)?;
+            push_text(&mut quads, &title, text_x, top, cell, ui.text, glyph)?;
         }
         let (first, second) = wrap_two_lines(toast.body, cells);
         let body_top = if toast.title.is_empty() {
@@ -145,7 +145,15 @@ pub fn build_toasts(
         } else {
             top + cell.height
         };
-        push_text(&mut quads, &first, text_x, body_top, cell, HINT_TEXT, glyph)?;
+        push_text(
+            &mut quads,
+            &first,
+            text_x,
+            body_top,
+            cell,
+            ui.text_dim,
+            glyph,
+        )?;
         if toast.title.is_empty() || !second.is_empty() {
             push_text(
                 &mut quads,
@@ -153,7 +161,7 @@ pub fn build_toasts(
                 text_x,
                 body_top + cell.height,
                 cell,
-                HINT_TEXT,
+                ui.text_dim,
                 glyph,
             )?;
         }
@@ -165,7 +173,7 @@ pub fn build_toasts(
                 close.x + cell.width * 0.5,
                 top,
                 cell,
-                BOX_TEXT,
+                ui.text,
                 glyph,
             )?;
         }
@@ -197,6 +205,10 @@ fn wrap_two_lines(text: &str, cells: usize) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ui() -> UiColors {
+        UiColors::default()
+    }
     use crate::color::linear;
     use crate::frame::{KIND_GLYPH, KIND_SOLID};
 
@@ -306,7 +318,7 @@ mod tests {
             level: ToastLevel::Success,
             hover: false,
         }];
-        let quads = build_toasts(&views, &rects, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let quads = build_toasts(&views, &rects, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
         let bg = quads
             .iter()
             .find(|q| {
@@ -315,7 +327,7 @@ mod tests {
             })
             .expect("no background");
         assert!(bg.color[3] < 1.0, "a bit see-through");
-        let bar = linear(ToastLevel::Success.color());
+        let bar = linear(ToastLevel::Success.color(&ui()));
         assert!(quads.iter().any(|q| q.kind == KIND_SOLID && q.color == bar));
         // "Build" + "ok", no × without the mouse.
         assert_eq!(quads.iter().filter(|q| q.kind == KIND_GLYPH).count(), 7);
@@ -330,7 +342,7 @@ mod tests {
             level: ToastLevel::Info,
             hover: true,
         }];
-        let quads = build_toasts(&views, &rects, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let quads = build_toasts(&views, &rects, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
         assert_eq!(
             quads.iter().filter(|q| q.kind == KIND_GLYPH).count(),
             2,
@@ -348,12 +360,23 @@ mod tests {
             level: ToastLevel::Info,
             hover: false,
         }];
-        let quads = build_toasts(&views, &rects, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let quads = build_toasts(&views, &rects, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
         let rows: std::collections::BTreeSet<i64> = quads
             .iter()
             .filter(|q| q.kind == KIND_GLYPH)
             .map(|q| q.rect[1] as i64)
             .collect();
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn a_level_takes_its_color_from_the_theme() {
+        let custom = UiColors {
+            error: Rgb { r: 1, g: 2, b: 3 },
+            ..UiColors::default()
+        };
+        assert_eq!(ToastLevel::Error.color(&custom), custom.error);
+        assert_eq!(ToastLevel::Info.color(&custom), custom.info);
+        assert_eq!(ToastLevel::Attention.color(&custom), custom.attention);
     }
 }

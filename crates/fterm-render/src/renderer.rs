@@ -13,6 +13,7 @@ use crate::font::{CellMetrics, Fonts, GlyphImage, ImageKind};
 use crate::frame::{FrameInput, Instance, Rect, build_frame};
 use crate::overlay::build_message_box;
 use crate::tabbar::{TabBarInput, build_tab_bar};
+use crate::theme::UiColors;
 
 const ATLAS_START_SIZE: u32 = 1024;
 /// Color emoji are rare, so this atlas starts small.
@@ -62,6 +63,7 @@ impl AtlasTexture {
 pub struct Renderer {
     fonts: Fonts,
     palette: Palette,
+    ui: UiColors,
     padding: f32,
     braille: BrailleStyle,
     /// Font glyph alpha after `text_alpha`, for every alpha value.
@@ -201,6 +203,7 @@ impl Renderer {
         Ok(Self {
             fonts,
             palette: Palette::default(),
+            ui: UiColors::default(),
             padding,
             braille: BrailleStyle::default(),
             gamma: std::array::from_fn(|a| (text_alpha(a as f32 / 255.0) * 255.0).round() as u8),
@@ -224,6 +227,11 @@ impl Renderer {
     /// New colors (from the config). They show on the next frame.
     pub fn set_palette(&mut self, palette: Palette) {
         self.palette = palette;
+    }
+
+    /// New UI colors (from the theme). They show on the next frame.
+    pub fn set_ui(&mut self, ui: UiColors) {
+        self.ui = ui;
     }
 
     /// A new Braille style. The atlases are made again, so all Braille chars are drawn again.
@@ -335,6 +343,7 @@ impl Renderer {
             let (cell, padding) = (self.fonts.cell(), self.padding);
             let (mask, color, fonts) = (&mut self.mask, &mut self.color, &mut self.fonts);
             let (braille, gamma, palette) = (self.braille, &self.gamma, &self.palette);
+            let ui = &self.ui;
             // True when the color atlas was the full one.
             let mut full_color = false;
             let mut glyph = |key: &GlyphKey| {
@@ -356,6 +365,7 @@ impl Renderer {
                 cell,
                 padding,
                 palette,
+                ui,
             };
             let result = build(&mut parts);
             let quads = parts.quads;
@@ -401,6 +411,7 @@ pub struct FrameParts<'a> {
     cell: CellMetrics,
     padding: f32,
     palette: &'a Palette,
+    ui: &'a UiColors,
 }
 
 impl FrameParts<'_> {
@@ -419,6 +430,7 @@ impl FrameParts<'_> {
             cell: self.cell,
             padding: self.padding,
             palette: self.palette,
+            ui: self.ui,
             focused,
             area,
         };
@@ -428,7 +440,7 @@ impl FrameParts<'_> {
     }
 
     pub fn tab_bar(&mut self, input: &TabBarInput) -> Result<(), AtlasFull> {
-        let quads = build_tab_bar(input, &mut *self.glyph)?;
+        let quads = build_tab_bar(input, self.ui, &mut *self.glyph)?;
         self.quads.extend(quads);
         Ok(())
     }
@@ -436,7 +448,7 @@ impl FrameParts<'_> {
     /// Lines between panes, and the frame of the active pane (when there are many panes).
     pub fn pane_chrome(&mut self, dividers: &[Rect], active: Option<Rect>) {
         self.quads
-            .extend(crate::panes::build_pane_chrome(dividers, active));
+            .extend(crate::panes::build_pane_chrome(dividers, active, self.ui));
     }
 
     /// The command palette at the top of `view`.
@@ -445,7 +457,8 @@ impl FrameParts<'_> {
         palette: &crate::overlay::PaletteView,
         view: Rect,
     ) -> Result<(), AtlasFull> {
-        let quads = crate::overlay::build_palette(palette, view, self.cell, &mut *self.glyph)?;
+        let quads =
+            crate::overlay::build_palette(palette, view, self.ui, self.cell, &mut *self.glyph)?;
         self.quads.extend(quads);
         Ok(())
     }
@@ -463,7 +476,8 @@ impl FrameParts<'_> {
         let x = area.x + self.padding + column as f32 * self.cell.width;
         let y = area.y + self.padding + line as f32 * self.cell.height;
         let max = columns.saturating_sub(column);
-        let quads = crate::overlay::build_ghost(text, x, y, max, self.cell, &mut *self.glyph)?;
+        let quads =
+            crate::overlay::build_ghost(text, x, y, max, self.ui, self.cell, &mut *self.glyph)?;
         self.quads.extend(quads);
         Ok(())
     }
@@ -474,7 +488,7 @@ impl FrameParts<'_> {
         view: &crate::dock::DockView,
         layout: &crate::dock::DockLayout,
     ) -> Result<(), AtlasFull> {
-        let quads = crate::dock::build_dock(view, layout, self.cell, &mut *self.glyph)?;
+        let quads = crate::dock::build_dock(view, layout, self.ui, self.cell, &mut *self.glyph)?;
         self.quads.extend(quads);
         Ok(())
     }
@@ -485,14 +499,15 @@ impl FrameParts<'_> {
         toasts: &[crate::toasts::ToastView],
         rects: &[Rect],
     ) -> Result<(), AtlasFull> {
-        let quads = crate::toasts::build_toasts(toasts, rects, self.cell, &mut *self.glyph)?;
+        let quads =
+            crate::toasts::build_toasts(toasts, rects, self.ui, self.cell, &mut *self.glyph)?;
         self.quads.extend(quads);
         Ok(())
     }
 
     /// A message box in the middle of `view`, on top of everything.
     pub fn message_box(&mut self, lines: &[String], view: Rect) -> Result<(), AtlasFull> {
-        let quads = build_message_box(lines, view, self.cell, &mut *self.glyph)?;
+        let quads = build_message_box(lines, view, self.ui, self.cell, &mut *self.glyph)?;
         self.quads.extend(quads);
         Ok(())
     }

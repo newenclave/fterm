@@ -6,31 +6,9 @@ use fterm_term::alacritty_terminal::vte::ansi::Rgb;
 use crate::atlas::{AtlasFull, AtlasGlyph, GlyphKey};
 use crate::font::CellMetrics;
 use crate::frame::{Instance, Rect};
-use crate::overlay::{BAD_TEXT, BOX_BORDER, BOX_TEXT, HINT_TEXT};
-use crate::tabbar::{
-    ACCENT, ACTIVE_BG, ACTIVE_TEXT, BAR_BG, BAR_PADDING, HOVER_BG, TEXT, char_cells, fit_title,
-    push_text, solid,
-};
+use crate::tabbar::{BAR_PADDING, char_cells, fit_title, push_text, solid};
+use crate::theme::UiColors;
 
-/// The background of the selected row.
-pub const SELECTED_BG: Rgb = Rgb {
-    r: 0x45,
-    g: 0x47,
-    b: 0x5a,
-};
-
-/// The dock background (a bit darker than the terminal).
-pub const DOCK_BG: Rgb = Rgb {
-    r: 0x18,
-    g: 0x18,
-    b: 0x25,
-};
-/// The line between the dock and the terminal, and the scroll bar.
-pub const EDGE: Rgb = Rgb {
-    r: 0x31,
-    g: 0x32,
-    b: 0x44,
-};
 /// A row is two lines of text and some space.
 pub const ROW_LINES: f32 = 2.5;
 
@@ -116,24 +94,6 @@ pub struct ChatLine {
     pub style: ChatStyle,
 }
 
-/// The background of code lines in the chat.
-pub const CODE_BG: Rgb = Rgb {
-    r: 0x11,
-    g: 0x11,
-    b: 0x1b,
-};
-/// The background of the input box.
-pub const INPUT_BG: Rgb = Rgb {
-    r: 0x26,
-    g: 0x27,
-    b: 0x3a,
-};
-/// The background of a context chip.
-pub const CHIP_BG: Rgb = Rgb {
-    r: 0x3a,
-    g: 0x3c,
-    b: 0x55,
-};
 /// The input box grows up to this many lines.
 pub const MAX_INPUT_ROWS: usize = 6;
 
@@ -272,25 +232,26 @@ pub fn dock_hit(layout: &DockLayout, scroll: usize, rows: usize, x: f32, y: f32)
 pub fn build_dock(
     view: &DockView,
     layout: &DockLayout,
+    ui: &UiColors,
     cell: CellMetrics,
     glyph: &mut dyn FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
 ) -> Result<Vec<Instance>, AtlasFull> {
     let rect = layout.rect;
     let list = layout.list;
-    let mut quads = vec![solid(rect, DOCK_BG)];
+    let mut quads = vec![solid(rect, ui.surface)];
     // A line between the dock and the terminal.
     let edge = match layout.side {
         DockSide::Right => Rect::new(rect.x, rect.y, 1.0, rect.height),
         DockSide::Left => Rect::new(rect.x + rect.width - 1.0, rect.y, 1.0, rect.height),
         DockSide::Bottom => Rect::new(rect.x, rect.y, rect.width, 1.0),
     };
-    quads.push(solid(edge, EDGE));
+    quads.push(solid(edge, ui.overlay));
 
     // The panel tabs.
     let header = cell.height + 2.0 * BAR_PADDING;
     quads.push(solid(
         Rect::new(rect.x + 1.0, rect.y, rect.width - 1.0, header),
-        BAR_BG,
+        ui.surface,
     ));
     let mut text = Vec::new();
     for (i, (tab, label)) in layout.tabs.iter().zip(view.tabs).enumerate() {
@@ -299,11 +260,11 @@ pub fn build_dock(
         }
         let active = i == view.active;
         if active {
-            quads.push(solid(*tab, ACTIVE_BG));
-            let accent = if view.focused { ACCENT } else { HINT_TEXT };
+            quads.push(solid(*tab, ui.surface_active));
+            let accent = if view.focused { ui.accent } else { ui.text_dim };
             quads.push(solid(Rect::new(tab.x, tab.y, tab.width, 2.0), accent));
         }
-        let color = if active { ACTIVE_TEXT } else { TEXT };
+        let color = if active { ui.text } else { ui.text_dim };
         push_text(
             &mut text,
             label,
@@ -316,12 +277,12 @@ pub fn build_dock(
     }
     quads.push(solid(
         Rect::new(rect.x + 1.0, rect.y + header, rect.width - 1.0, 1.0),
-        EDGE,
+        ui.overlay,
     ));
 
     let cells = (list.width / cell.width) as usize;
     if let Some(chat) = &view.chat {
-        build_chat(chat, layout, cell, &mut quads, &mut text, glyph)?;
+        build_chat(chat, layout, ui, cell, &mut quads, &mut text, glyph)?;
         if view.focused && !view.hints.is_empty() {
             let y = list.y + list.height + cell.height * 0.125;
             let shown = fit_title(view.hints, cells.saturating_sub(2));
@@ -331,7 +292,7 @@ pub fn build_dock(
                 list.x + cell.width,
                 y,
                 cell,
-                HINT_TEXT,
+                ui.text_dim,
                 glyph,
             )?;
         }
@@ -346,7 +307,7 @@ pub fn build_dock(
             list.x + cell.width,
             list.y + cell.height * 0.5,
             cell,
-            HINT_TEXT,
+            ui.text_dim,
             glyph,
         )?;
     }
@@ -361,7 +322,11 @@ pub fn build_dock(
     {
         let y = list.y + n as f32 * layout.row_height;
         if view.selected == Some(index) {
-            let bg = if view.focused { SELECTED_BG } else { HOVER_BG };
+            let bg = if view.focused {
+                ui.selected
+            } else {
+                ui.overlay
+            };
             quads.push(solid(
                 Rect::new(list.x, y, list.width, layout.row_height),
                 bg,
@@ -374,7 +339,7 @@ pub fn build_dock(
         ));
         let right_cells: usize = row.right.chars().map(char_cells).sum();
         let title_cells = cells.saturating_sub(3 + right_cells);
-        let title_color = if row.new { ACTIVE_TEXT } else { BOX_TEXT };
+        let title_color = ui.text;
         let title = fit_title(&row.title, title_cells);
         push_text(
             &mut text,
@@ -387,7 +352,7 @@ pub fn build_dock(
         )?;
         if right_cells > 0 {
             let x = list.x + list.width - (1 + right_cells) as f32 * cell.width;
-            push_text(&mut text, &row.right, x, y + pad, cell, HINT_TEXT, glyph)?;
+            push_text(&mut text, &row.right, x, y + pad, cell, ui.text_dim, glyph)?;
         }
         let detail = fit_title(&row.detail, cells.saturating_sub(2));
         push_text(
@@ -396,7 +361,7 @@ pub fn build_dock(
             list.x + cell.width,
             y + pad + cell.height,
             cell,
-            HINT_TEXT,
+            ui.text_dim,
             glyph,
         )?;
     }
@@ -409,7 +374,7 @@ pub fn build_dock(
             + (list.height - height) * view.scroll as f32 / (total - visible as f32).max(1.0);
         quads.push(solid(
             Rect::new(list.x + list.width - 3.0, top, 3.0, height),
-            EDGE,
+            ui.overlay,
         ));
     }
 
@@ -422,7 +387,7 @@ pub fn build_dock(
             list.x + cell.width,
             y,
             cell,
-            HINT_TEXT,
+            ui.text_dim,
             glyph,
         )?;
     }
@@ -434,6 +399,7 @@ pub fn build_dock(
 fn build_chat(
     chat: &ChatView,
     layout: &DockLayout,
+    ui: &UiColors,
     cell: CellMetrics,
     quads: &mut Vec<Instance>,
     text: &mut Vec<Instance>,
@@ -455,7 +421,7 @@ fn build_chat(
                 x,
                 layout.rect.y + BAR_PADDING,
                 cell,
-                HINT_TEXT,
+                ui.text_dim,
                 glyph,
             )?;
         }
@@ -467,16 +433,16 @@ fn build_chat(
     for (n, line) in chat.lines[start..end].iter().enumerate() {
         let y = list.y + cell.height * 0.25 + n as f32 * cell.height;
         let color = match line.style {
-            ChatStyle::User => BOX_BORDER,
-            ChatStyle::Answer => BOX_TEXT,
-            ChatStyle::Code => ACTIVE_TEXT,
-            ChatStyle::CodeHeader | ChatStyle::Note => HINT_TEXT,
-            ChatStyle::Error => BAD_TEXT,
+            ChatStyle::User => ui.accent,
+            ChatStyle::Answer => ui.text,
+            ChatStyle::Code => ui.text,
+            ChatStyle::CodeHeader | ChatStyle::Note => ui.text_dim,
+            ChatStyle::Error => ui.error,
         };
         if matches!(line.style, ChatStyle::Code | ChatStyle::CodeHeader) {
             quads.push(solid(
                 Rect::new(list.x + 2.0, y, list.width - 4.0, cell.height),
-                CODE_BG,
+                ui.code_bg,
             ));
         }
         let shown = fit_title(&line.text, cells.saturating_sub(2));
@@ -491,7 +457,7 @@ fn build_chat(
         let top = list.y + cell.height * 0.25 + (area - height) * top_share;
         quads.push(solid(
             Rect::new(list.x + list.width - 3.0, top, 3.0, height),
-            EDGE,
+            ui.overlay,
         ));
     }
     // The input box at the bottom.
@@ -502,7 +468,7 @@ fn build_chat(
         list.width - 4.0,
         height,
     );
-    quads.push(solid(input, INPUT_BG));
+    quads.push(solid(input, ui.input_bg));
     // The chips over it, side by side.
     let mut x = list.x + 2.0;
     let chip_y = input.y - cell.height - 2.0;
@@ -516,26 +482,26 @@ fn build_chat(
             let more = format!("+{}", chat.chips.len() - i);
             let w = (more.chars().count() + 2) as f32 * cell.width;
             if x + w <= end {
-                quads.push(solid(Rect::new(x, chip_y, w, cell.height), CHIP_BG));
-                push_text(text, &more, x + cell.width, chip_y, cell, BOX_TEXT, glyph)?;
+                quads.push(solid(Rect::new(x, chip_y, w, cell.height), ui.chip_bg));
+                push_text(text, &more, x + cell.width, chip_y, cell, ui.text, glyph)?;
             }
             break;
         }
-        quads.push(solid(Rect::new(x, chip_y, w, cell.height), CHIP_BG));
-        push_text(text, chip, x + cell.width, chip_y, cell, BOX_TEXT, glyph)?;
+        quads.push(solid(Rect::new(x, chip_y, w, cell.height), ui.chip_bg));
+        push_text(text, chip, x + cell.width, chip_y, cell, ui.text, glyph)?;
         x += w + cell.width * 0.5;
     }
     let first = chat.input.len().saturating_sub(MAX_INPUT_ROWS);
     for (n, line) in chat.input.iter().skip(first).enumerate() {
         let y = input.y + cell.height * 0.25 + n as f32 * cell.height;
-        push_text(text, line, list.x + cell.width, y, cell, BOX_TEXT, glyph)?;
+        push_text(text, line, list.x + cell.width, y, cell, ui.text, glyph)?;
     }
     if let Some((row, col)) = chat.cursor
         && row >= first
     {
         let y = input.y + cell.height * 0.25 + (row - first) as f32 * cell.height;
         let x = list.x + cell.width + col as f32 * cell.width;
-        quads.push(solid(Rect::new(x, y, 2.0, cell.height), ACTIVE_TEXT));
+        quads.push(solid(Rect::new(x, y, 2.0, cell.height), ui.text));
     }
     Ok(())
 }
@@ -543,6 +509,10 @@ fn build_chat(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ui() -> UiColors {
+        UiColors::default()
+    }
     use crate::color::linear as linear_color;
     use crate::frame::KIND_SOLID;
 
@@ -689,19 +659,23 @@ mod tests {
             hints: "Enter go",
             chat: None,
         };
-        let build =
-            |view: &DockView| build_dock(view, &layout, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let build = |view: &DockView| {
+            build_dock(view, &layout, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap()
+        };
         let quads = build(&view);
         let found = colors(&quads);
         assert!(found.contains(&linear_color(red)));
         assert!(found.contains(&linear_color(green)));
-        assert!(!found.contains(&linear_color(SELECTED_BG)), "no selection");
+        assert!(
+            !found.contains(&linear_color(ui().selected)),
+            "no selection"
+        );
         let glyphs_unfocused = quads.len();
 
         view.selected = Some(1);
         view.focused = true;
         let quads = build(&view);
-        assert!(colors(&quads).contains(&linear_color(SELECTED_BG)));
+        assert!(colors(&quads).contains(&linear_color(ui().selected)));
         assert!(
             quads.len() > glyphs_unfocused,
             "the key hints show when focused"
@@ -727,7 +701,7 @@ mod tests {
             hints: "",
             chat: None,
         };
-        let quads = build_dock(&view, &layout, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let quads = build_dock(&view, &layout, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
         let found = colors(&quads);
         assert!(!found.contains(&linear_color(red)));
         assert!(found.contains(&linear_color(green)));
@@ -750,7 +724,7 @@ mod tests {
             hints: "",
             chat: None,
         };
-        let quads = build_dock(&view, &layout, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let quads = build_dock(&view, &layout, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
         for q in &quads {
             assert!(
                 q.rect[1] + q.rect[3] <= rect.y + rect.height + 0.5,
@@ -783,7 +757,7 @@ mod tests {
             hints: "Enter send",
             chat: Some(chat),
         };
-        let quads = build_dock(&view, &layout, CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let quads = build_dock(&view, &layout, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
         (layout, quads)
     }
 
@@ -806,14 +780,17 @@ mod tests {
         });
         let found = colors(&quads);
         assert!(
-            found.contains(&linear_color(CODE_BG)),
+            found.contains(&linear_color(ui().code_bg)),
             "code lines have a background"
         );
-        assert!(found.contains(&linear_color(INPUT_BG)), "the input box");
+        assert!(
+            found.contains(&linear_color(ui().input_bg)),
+            "the input box"
+        );
         let cursor = quads
             .iter()
             .find(|q| {
-                q.kind == KIND_SOLID && q.color == linear_color(ACTIVE_TEXT) && q.rect[2] <= 2.0
+                q.kind == KIND_SOLID && q.color == linear_color(ui().text) && q.rect[2] <= 2.0
             })
             .expect("a text cursor");
         assert!(
@@ -822,7 +799,7 @@ mod tests {
         );
         let red = quads
             .iter()
-            .filter(|q| q.kind == crate::frame::KIND_GLYPH && q.color == linear_color(BAD_TEXT))
+            .filter(|q| q.kind == crate::frame::KIND_GLYPH && q.color == linear_color(ui().error))
             .count();
         assert_eq!(red, 5, "`no key` is red (5 glyphs, no space)");
         for q in &quads {
@@ -859,7 +836,7 @@ mod tests {
         let red = |quads: &[Instance]| {
             quads
                 .iter()
-                .any(|q| q.kind == crate::frame::KIND_GLYPH && q.color == linear_color(BAD_TEXT))
+                .any(|q| q.kind == crate::frame::KIND_GLYPH && q.color == linear_color(ui().error))
         };
         let (layout, quads) = chat_quads(view(0));
         assert!(!red(&quads), "the bottom: the first line is far above");
@@ -883,13 +860,13 @@ mod tests {
         });
         let chip_bgs: Vec<&Instance> = quads
             .iter()
-            .filter(|q| q.kind == KIND_SOLID && q.color == linear_color(CHIP_BG))
+            .filter(|q| q.kind == KIND_SOLID && q.color == linear_color(ui().chip_bg))
             .collect();
         assert_eq!(chip_bgs.len(), 2, "one box for each chip");
         assert!(chip_bgs[0].rect[0] < chip_bgs[1].rect[0], "side by side");
         let input_top = quads
             .iter()
-            .find(|q| q.kind == KIND_SOLID && q.color == linear_color(INPUT_BG))
+            .find(|q| q.kind == KIND_SOLID && q.color == linear_color(ui().input_bg))
             .unwrap()
             .rect[1];
         assert!(
@@ -917,7 +894,7 @@ mod tests {
         });
         let boxes = quads
             .iter()
-            .filter(|q| q.kind == KIND_SOLID && q.color == linear_color(CHIP_BG))
+            .filter(|q| q.kind == KIND_SOLID && q.color == linear_color(ui().chip_bg))
             .count();
         assert_eq!(boxes, 2, "the first chip and a `+2` chip");
     }

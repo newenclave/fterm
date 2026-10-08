@@ -3,6 +3,7 @@
 
 use std::time::Instant;
 
+use fterm_render::theme::UiColors;
 use fterm_term::alacritty_terminal::vte::ansi::Rgb;
 
 use crate::notify::Level;
@@ -62,14 +63,13 @@ pub fn tab_badge<'a>(states: impl IntoIterator<Item = &'a AgentState>) -> Option
 }
 
 /// The color of the tab dot: working blue, waiting yellow, done green, error red.
-pub fn badge_color(kind: AgentKind) -> Rgb {
-    let (r, g, b) = match kind {
-        AgentKind::Working => (0x4c, 0x9a, 0xff),
-        AgentKind::Waiting => (0xf5, 0xc2, 0x18),
-        AgentKind::Done => (0x3f, 0xc5, 0x6b),
-        AgentKind::Error => (0xf0, 0x4a, 0x4a),
-    };
-    Rgb { r, g, b }
+pub fn badge_color(kind: AgentKind, ui: &UiColors) -> Rgb {
+    match kind {
+        AgentKind::Working => ui.agent_working,
+        AgentKind::Waiting => ui.agent_waiting,
+        AgentKind::Done => ui.agent_done,
+        AgentKind::Error => ui.agent_error,
+    }
 }
 
 /// The notification for a new state: (title, body, level). `None` = no notification.
@@ -126,13 +126,14 @@ mod tests {
             AgentKind::Waiting,
             AgentKind::Error,
         ];
+        let ui = UiColors::default();
         for (i, a) in kinds.iter().enumerate() {
             for b in &kinds[i + 1..] {
-                assert_ne!(badge_color(*a), badge_color(*b));
+                assert_ne!(badge_color(*a, &ui), badge_color(*b, &ui));
             }
         }
         assert!(
-            badge_color(AgentKind::Error).r > badge_color(AgentKind::Error).g,
+            badge_color(AgentKind::Error, &ui).r > badge_color(AgentKind::Error, &ui).g,
             "error is red"
         );
     }

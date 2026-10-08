@@ -19,6 +19,7 @@ use fterm_render::dock::{
     DockHit, DockLayout, DockRow, DockSide, DockView, dock_hit, layout_dock, split_area,
 };
 use fterm_render::tabbar::{Hit, TabBarInput, bar_height, corner_rect, hit, layout_tabs};
+use fterm_render::theme::UiColors;
 use fterm_render::toasts::{
     Corner, ToastLevel, ToastView, avoid_cursor, close_rect, layout_toasts,
 };
@@ -832,7 +833,11 @@ impl App {
         match running.dock.active {
             // The AI panel draws its chat, not rows.
             PanelKind::Ai => Vec::new(),
-            PanelKind::Events => event_rows(self.center.history(), running.dock.filter, now),
+            PanelKind::Events => {
+                // TODO(theme): use the UI colors of the theme.
+                let ui = UiColors::default();
+                event_rows(self.center.history(), running.dock.filter, now, &ui)
+            }
             PanelKind::Agents => {
                 let titles = running.tab_titles();
                 let mut entries = Vec::new();
@@ -849,7 +854,8 @@ impl App {
                         }
                     }
                 }
-                agent_rows(&entries, now)
+                // TODO(theme): use the UI colors of the theme.
+                agent_rows(&entries, now, &UiColors::default())
             }
         }
     }
@@ -3335,6 +3341,8 @@ impl App {
                 .dock
                 .select(selected, dock_rows.len(), layout.visible_rows());
         }
+        // TODO(theme): use the UI colors of the theme.
+        let ui = UiColors::default();
         let (titles, badges, tab_colors) = match &mut self.running {
             Some(running) => {
                 if focused {
@@ -3349,7 +3357,7 @@ impl App {
                 let badges: Vec<_> = running
                     .tab_badges()
                     .into_iter()
-                    .map(|kind| kind.map(badge_color))
+                    .map(|kind| kind.map(|kind| badge_color(kind, &ui)))
                     .collect();
                 let tab_colors: Vec<_> =
                     running
@@ -3504,7 +3512,7 @@ impl App {
                     colors: &tab_colors,
                     corner: corner
                         .as_deref()
-                        .map(|text| (text, level_color(Level::Attention))),
+                        .map(|text| (text, level_color(Level::Attention, &ui))),
                     cell,
                     width,
                 })?;
