@@ -108,6 +108,8 @@ struct Pane {
     shell: ShellState,
     /// What the agent in this pane (for example Claude Code) does now.
     agent: Option<AgentState>,
+    /// The agent of this pane sent its state with hooks: then fterm does not guess it.
+    agent_hooks: bool,
     /// The last command that ended (from shell integration).
     last_command: Option<LastCommand>,
     /// API clients may read and type into it (with the user's yes). `toggle_remote_control` changes it.
@@ -610,6 +612,46 @@ impl App {
 
     /// A command ended. If it ran long and you did not see it, fterm tells you.
     /// An agent in a pane says what it does now (`OSC 777;fterm-agent;<state>;<message>`).
+    /// An agent with no hooks: its tool runs in the pane (the command from shell integration), and its
+    /// window title shows what it does (a spinner = working, `✳` = done). With no shell integration,
+    /// only the title says it. Hooks, when the agent has them, are more exact and win.
+    fn detect_agent(&mut self, event_loop: &ActiveEventLoop, pane: PaneId) {
+        use crate::agent::{agent_program, title_state, title_topic};
+        let Some(p) = self.running.as_ref().and_then(|r| r.panes.get(&pane)) else {
+            return;
+        };
+        if p.agent_hooks {
+            return;
+        }
+        let command = p.shell.running_command();
+        let tool = command.and_then(agent_program);
+        let title = p.app_title.clone().unwrap_or_default();
+        let shown = title_state(&title);
+        let auto = p.agent.as_ref().is_some_and(|a| a.auto);
+        // At the prompt of a shell with integration no tool runs, whatever the old title says.
+        if tool.is_none() && (command.is_some() || p.shell.at_prompt() || shown.is_none()) {
+            // Not an agent (any more).
+            if auto {
+                self.agent_state(event_loop, pane, "idle", "");
+            }
+            return;
+        }
+        let kind = shown.unwrap_or(AgentKind::Working);
+        let topic = match title_topic(&title) {
+            "" => tool.unwrap_or_default().to_owned(),
+            topic => topic.to_owned(),
+        };
+        self.agent_state(event_loop, pane, kind.name(), &topic);
+        if let Some(a) = self
+            .running
+            .as_mut()
+            .and_then(|r| r.panes.get_mut(&pane))
+            .and_then(|p| p.agent.as_mut())
+        {
+            a.auto = true;
+        }
+    }
+
     fn agent_state(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -648,6 +690,7 @@ impl App {
                 _ => Instant::now(),
             },
             seen,
+            auto: false,
         });
         running.window.request_redraw();
         if previous == kind {
@@ -1590,6 +1633,7 @@ impl App {
                 app_title: Some("scene".to_owned()),
                 shell: ShellState::default(),
                 agent: None,
+                agent_hooks: false,
                 last_command: None,
                 remote: true,
                 opened_by: None,
@@ -1769,6 +1813,7 @@ impl App {
                 app_title: None,
                 shell: ShellState::default(),
                 agent: None,
+                agent_hooks: false,
                 last_command: None,
                 remote: true,
                 opened_by: None,
@@ -4018,6 +4063,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 running.window.request_redraw();
                 self.update_window_title();
+                self.detect_agent(event_loop, pane);
             }
             TermEvent::Osc(osc) => {
                 tracing::debug!(pane = pane.0, ?osc, "osc event");
@@ -4055,10 +4101,24 @@ impl ApplicationHandler<UserEvent> for App {
                 {
                     tracing::warn!("cannot save the folder: {err}");
                 }
+                // A command starts or ends (then the shell waits at its prompt): the agent tool may
+                // start or end.
+                if matches!(
+                    osc,
+                    OscEvent::Prompt(
+                        fterm_term::osc::PromptMark::CommandExecuted
+                            | fterm_term::osc::PromptMark::CommandFinished(_)
+                    ) | OscEvent::InputStart { .. }
+                ) {
+                    self.detect_agent(event_loop, pane);
+                }
                 if let OscEvent::Notify { title, body } = &osc {
                     let title = title.clone().unwrap_or(program);
                     self.notify(Some(pane), &title, body, Level::Info, Source::Terminal);
                 } else if let OscEvent::Agent { state, message } = &osc {
+                    if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {
+                        p.agent_hooks = true;
+                    }
                     self.agent_state(event_loop, pane, state, message);
                 } else if let OscEvent::TabColor(text) = &osc {
                     // A bad color from a program is not worth a toast: it is only logged.

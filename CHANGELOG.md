@@ -14,6 +14,9 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 - **Screenshots of panes.** The API method `screenshot`, `ftermctl screenshot [--pane N] [FILE.png]`,
   and the MCP tool `screenshot_pane`. An agent gets the PNG as a picture, so it can see what it drew in a
   scene, or how a program looks. It works when the window is under other windows too.
+- **Agents with no hooks.** When `claude`, `opencode`, `codex`, `aider`, or `gemini` runs in a pane, it is
+  in the Agents panel and has a dot on its tab. Its state comes from the window title (Claude Code shows a
+  spinner while it works). Hooks, when they are set up, are more exact and win.
 - **Read a whole event.** In the Events panel, Space (or Right) opens the full text of an event, for
   example a long message from an agent. Enter goes to its pane, Ctrl + C copies it, Esc goes back.
 - **Themes.** One theme gives all colors: the terminal and the whole UI (the tab bar, the dock, toasts,

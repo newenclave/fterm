@@ -13,6 +13,15 @@ When the state changes and you do not see that pane (it is in another tab, or ft
 fterm shows a notification: "… waits for you", "… is done", or "… failed".
 The dot for `done` and `error` goes away when you look at the pane.
 
+## With no hooks
+fterm also finds an agent itself. When `claude`, `opencode`, `codex`, `aider`, or `gemini` runs in a pane
+(fterm knows the command with shell integration), the pane is in the Agents panel. Its state comes from the
+window title that the tool sets: Claude Code shows a spinner while it works (`working`) and `✳` when it waits
+for your next prompt (`done`). The rest of the title (what it works on) is its message.
+
+This is less exact than hooks: fterm cannot see a permission question (`waiting`) or an error. When the
+hooks are set up, fterm uses only them for that pane.
+
 ## Set up the hooks
 
 Claude Code tells fterm its state with **hooks**. Each hook prints one line of JSON with

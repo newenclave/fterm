@@ -540,12 +540,14 @@ mod tests {
             message: String::new(),
             since: t0,
             seen: false,
+            auto: false,
         };
         let done = AgentState {
             kind: AgentKind::Done,
             message: "Tests are green".into(),
             since: t0,
             seen: true,
+            auto: false,
         };
         let entries = [
             AgentEntry {

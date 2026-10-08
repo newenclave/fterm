@@ -50,6 +50,8 @@ pub struct AgentState {
     pub since: Instant,
     /// The user saw it (the pane was on the screen and fterm was in front).
     pub seen: bool,
+    /// fterm found it itself (the command and the window title), not from hooks.
+    pub auto: bool,
 }
 
 /// The badge of a tab: the most important state of its panes.
@@ -105,9 +107,82 @@ pub fn notification_for(
     }
 }
 
+/// Agent tools that fterm knows by their command.
+const AGENT_PROGRAMS: &[&str] = &["claude", "opencode", "codex", "aider", "gemini"];
+
+/// The agent tool of a command line: `claude --continue` → `claude`.
+pub fn agent_program(command: &str) -> Option<&'static str> {
+    let first = command.split_whitespace().next()?;
+    let file = first
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(first)
+        .to_ascii_lowercase();
+    let name = [".exe", ".cmd", ".bat", ".ps1"]
+        .iter()
+        .find_map(|ext| file.strip_suffix(ext))
+        .unwrap_or(&file);
+    AGENT_PROGRAMS.iter().copied().find(|p| *p == name)
+}
+
+/// The state that an agent shows in its window title: a spinner = working, `✳` = it waits for
+/// the next prompt (Claude Code does this).
+pub fn title_state(title: &str) -> Option<AgentKind> {
+    let first = title.trim_start().chars().next()?;
+    match first {
+        '◐' | '◓' | '◑' | '◒' | '\u{2801}'..='\u{28ff}' => Some(AgentKind::Working),
+        '✳' => Some(AgentKind::Done),
+        _ => None,
+    }
+}
+
+/// The title without the state sign: what the agent works on.
+pub fn title_topic(title: &str) -> &str {
+    let title = title.trim();
+    match title_state(title) {
+        Some(_) => {
+            let mut chars = title.chars();
+            chars.next();
+            chars.as_str().trim_start()
+        }
+        None => title,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_tools_by_their_command() {
+        assert_eq!(agent_program("claude"), Some("claude"));
+        assert_eq!(agent_program("  claude --continue"), Some("claude"));
+        assert_eq!(agent_program(r"C:\tools\Claude.exe -r"), Some("claude"));
+        assert_eq!(agent_program("claude.cmd"), Some("claude"));
+        assert_eq!(
+            agent_program("/usr/local/bin/opencode run"),
+            Some("opencode")
+        );
+        assert_eq!(agent_program("codex"), Some("codex"));
+        assert_eq!(agent_program("aider --model x"), Some("aider"));
+        assert_eq!(agent_program("gemini"), Some("gemini"));
+        assert_eq!(agent_program("claudette"), None);
+        assert_eq!(agent_program("git status"), None);
+        assert_eq!(agent_program(""), None);
+    }
+
+    #[test]
+    fn the_state_in_the_title() {
+        for spinner in ["◐ add-ui-color-themes", "◓ x", "◑ x", "◒ x", "⠋ Thinking"] {
+            assert_eq!(title_state(spinner), Some(AgentKind::Working), "{spinner}");
+        }
+        assert_eq!(title_state("✳ Claude Code"), Some(AgentKind::Done));
+        assert_eq!(title_state("powershell"), None);
+        assert_eq!(title_state(""), None);
+        assert_eq!(title_topic("◐ add-ui-color-themes"), "add-ui-color-themes");
+        assert_eq!(title_topic("✳ Claude Code"), "Claude Code");
+        assert_eq!(title_topic("plain"), "plain");
+    }
 
     fn state(kind: AgentKind, seen: bool) -> AgentState {
         AgentState {
@@ -115,6 +190,7 @@ mod tests {
             message: String::new(),
             since: Instant::now(),
             seen,
+            auto: false,
         }
     }
 
