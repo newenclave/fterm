@@ -5,3 +5,4 @@ pub mod colors;
 pub mod keys;
 pub mod load;
 pub mod profiles;
+pub mod theme;

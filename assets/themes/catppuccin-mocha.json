@@ -1,0 +1,35 @@
+{
+  "name": "Catppuccin Mocha",
+  "terminal": {
+    "background": "#1e1e2e",
+    "foreground": "#cdd6f4",
+    "cursor": "#f5e0dc",
+    "selection": "#585b70",
+    "ansi": ["#45475a", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#f5c2e7", "#94e2d5", "#bac2de"],
+    "bright": ["#585b70", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#f5c2e7", "#94e2d5", "#a6adc8"]
+  },
+  "ui": {
+    "surface": "#181825",
+    "surface_active": "#1e1e2e",
+    "overlay": "#313244",
+    "selected": "#45475a",
+    "accent": "#cba6f7",
+    "text": "#cdd6f4",
+    "text_dim": "#9399b2",
+    "text_ghost": "#6c7086",
+    "scrollbar": "#7f849c",
+    "copy_cursor": "#f9e2af",
+    "code_bg": "#11111b",
+    "input_bg": "#26273a",
+    "chip_bg": "#3a3c55",
+    "info": "#89b4fa",
+    "success": "#a6e3a1",
+    "warning": "#f9e2af",
+    "error": "#f38ba8",
+    "attention": "#cba6f7",
+    "agent_working": "#4c9aff",
+    "agent_waiting": "#f5c218",
+    "agent_done": "#3fc56b",
+    "agent_error": "#f04a4a"
+  }
+}
