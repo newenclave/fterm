@@ -352,52 +352,14 @@ impl BuiltinAction {
 
     /// Words for people, for the palette: "New tab", "Split right".
     pub fn label(self) -> String {
+        self.label_in(&crate::l10n::current())
+    }
+
+    /// The label in `strings`: the text `action.<name>` (`action.select_tab` with `{n}`).
+    pub fn label_in(self, strings: &crate::l10n::Strings) -> String {
         match self {
-            Self::SelectTab(i) => format!("Go to tab {}", i + 1),
-            Self::ClosePane => "Close pane".to_owned(),
-            Self::PrevTab => "Previous tab".to_owned(),
-            Self::Zoom => "Zoom pane".to_owned(),
-            Self::CommandPalette => "Command palette".to_owned(),
-            Self::OpenConfig => "Open config file".to_owned(),
-            Self::CopyClaudeHooks => "Copy Claude Code hooks (settings.json)".to_owned(),
-            Self::ToggleDock => "Show or hide the dock".to_owned(),
-            Self::PanelEvents => "Events panel".to_owned(),
-            Self::PanelAgents => "Agents panel".to_owned(),
-            Self::FocusDock => "Focus the dock or the terminal".to_owned(),
-            Self::HistoryCommands => "Command history".to_owned(),
-            Self::HistoryDirs => "Folder history".to_owned(),
-            Self::ToggleRemoteControl => "Remote control on or off for this pane".to_owned(),
-            Self::PanelAi => "AI panel".to_owned(),
-            Self::SetAiKey => "Set the AI key".to_owned(),
-            Self::ExplainError => "Explain the last error (AI)".to_owned(),
-            Self::AskAiSelection => "Ask AI about the selection".to_owned(),
-            Self::TextToCommand => "Text to command (AI)".to_owned(),
-            Self::RestoreSession => "Restore the last session".to_owned(),
-            Self::Sessions => "Sessions".to_owned(),
-            Self::SaveSessionAs => "Save session as…".to_owned(),
-            Self::NewScene => "New Braille scene (split right)".to_owned(),
-            Self::InstallClaudeSkill => "Install the fterm skill for Claude Code".to_owned(),
-            Self::ToggleFullscreen => "Full screen on or off".to_owned(),
-            Self::ChooseTheme => "Theme…".to_owned(),
-            Self::InstallClaudeHooks => "Install Claude Code hooks (agent states)".to_owned(),
-            Self::ToggleOriginalColors => "Original colors of programs on or off".to_owned(),
-            Self::HarmonizeMore => {
-                "Harmonize: more (program colors closer to the theme)".to_owned()
-            }
-            Self::HarmonizeLess => {
-                "Harmonize: less (program colors closer to their own)".to_owned()
-            }
-            Self::PlanReviewMode => {
-                "Review the plans of Claude Code: ask, always, never".to_owned()
-            }
-            other => {
-                let name = other.name().replace('_', " ");
-                let mut chars = name.chars();
-                match chars.next() {
-                    Some(first) => first.to_uppercase().chain(chars).collect(),
-                    None => name,
-                }
-            }
+            Self::SelectTab(i) => strings.format("action.select_tab", &[("n", &(i + 1))]),
+            other => strings.format(&format!("action.{}", other.name()), &[]),
         }
     }
 }
@@ -672,6 +634,49 @@ mod tests {
                 .starts_with("Harmonize: more")
         );
         assert!(BuiltinAction::ALL.contains(&BuiltinAction::HarmonizeLess));
+    }
+
+    #[test]
+    fn every_action_has_a_text_in_english_and_the_label_comes_from_it() {
+        let english: Vec<String> = crate::l10n::english_keys()
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        let key = |a: BuiltinAction| match a {
+            BuiltinAction::SelectTab(_) => "action.select_tab".to_owned(),
+            other => format!("action.{}", other.name()),
+        };
+        for action in BuiltinAction::ALL {
+            assert!(
+                english.contains(&key(action)),
+                "{} has no text",
+                key(action)
+            );
+        }
+        for k in english.iter().filter(|k| k.starts_with("action.")) {
+            assert!(
+                BuiltinAction::ALL.iter().any(|a| key(*a) == *k),
+                "{k} is not an action"
+            );
+        }
+        // The label is the text of the language in use.
+        let mut strings = crate::l10n::english();
+        let (ru, _) = crate::l10n::Strings::parse(
+            r#"{ "language": "ru", "strings": { "action.new_tab": "Новая вкладка", "action.select_tab": "Вкладка {n}" } }"#,
+        )
+        .unwrap();
+        assert_eq!(BuiltinAction::NewTab.label_in(&ru), "Новая вкладка");
+        assert_eq!(BuiltinAction::SelectTab(2).label_in(&ru), "Вкладка 3");
+        assert_eq!(
+            BuiltinAction::Zoom.label_in(&ru),
+            "Zoom pane",
+            "no text: English"
+        );
+        strings.language = "en".into();
+        assert_eq!(
+            BuiltinAction::SelectTab(0).label_in(&strings),
+            "Go to tab 1"
+        );
     }
 
     #[test]

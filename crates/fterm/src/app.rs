@@ -11,6 +11,7 @@ use fterm_config::load::{
     OsNotify, SAMPLE_CONFIG, ToastPosition, config_path, load_file,
 };
 use fterm_config::profiles::{Profile, detect_profiles, launch_command, path_extension, which};
+use fterm_config::tr;
 use fterm_history::{CommandFilter, CommandRecord, History, Limits, now_ms, should_save};
 use fterm_mux::{Closed, Direction, Edge, Mux, PaneId, Rect, TabId};
 use fterm_render::Renderer;
@@ -2622,17 +2623,24 @@ impl App {
         let key = |action: &Action| keys.key_for(action).unwrap_or_default();
         let mut items = Vec::new();
         for profile in &self.profiles {
+            let name = &profile.name;
             for (label, place) in [
-                ("New tab", SpawnWhere::Tab),
-                ("Split right", SpawnWhere::SplitRight),
-                ("Split down", SpawnWhere::SplitDown),
+                (tr!("palette.profile_tab", profile = name), SpawnWhere::Tab),
+                (
+                    tr!("palette.profile_right", profile = name),
+                    SpawnWhere::SplitRight,
+                ),
+                (
+                    tr!("palette.profile_down", profile = name),
+                    SpawnWhere::SplitDown,
+                ),
             ] {
                 let action = Action::Spawn {
                     profile: Some(profile.name.clone()),
                     place,
                 };
                 items.push(PaletteItem {
-                    label: format!("{label}: {}", profile.name),
+                    label,
                     key: key(&action),
                     action,
                 });

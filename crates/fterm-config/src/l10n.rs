@@ -623,7 +623,8 @@ mod tests {
                 Some(_) => {}
             }
         }
-        for key in english.keys() {
+        // `action.*` are made from the action names (a test in keys.rs checks them).
+        for key in english.keys().filter(|k| !k.starts_with("action.")) {
             assert!(
                 used.iter().any(|(k, _, _)| k == key),
                 "`{key}` in assets/l10n/en.json is not used"
