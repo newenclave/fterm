@@ -140,7 +140,8 @@ It has service panels: **Events** (all notifications) and **Agents** (every pane
 | Ctrl + Shift + O | Move the keyboard between the terminal and the dock. |
 | Up / Down, PageUp / PageDown, Home / End | Choose a row (when the dock has the keyboard). |
 | Enter, click on a row | Go to the tab and pane of the row. The keyboard goes back to the terminal. |
-| Tab, Left / Right, click on a panel name | The other panel. |
+| Tab, Left / Right, click on a panel name | The other panel. (In Events, Right reads the event.) |
+| Space, Right | Events: read the whole event (its title, where it came from, and all its text). There Up / Down, PageUp / PageDown, Space, and the mouse wheel scroll it, Enter goes to its pane, Ctrl + C copies its text, and Esc, Left, or Backspace go back to the list. |
 | F | Events: show only important events (warnings, errors, attention), or all again. |
 | M | Events: mark all as read. |
 | Esc, click in the terminal | The keyboard goes back to the terminal. The dock stays. |

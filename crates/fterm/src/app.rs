@@ -907,8 +907,98 @@ impl App {
         }
     }
 
+    /// The event of row `index` in the Events panel.
+    fn event_of_row(&self, index: usize) -> Option<u64> {
+        let filter = self.running.as_ref()?.dock.filter;
+        crate::panels::filtered_events(self.center.history(), filter)
+            .get(index)
+            .map(|n| n.id)
+    }
+
+    /// The lines of the open full text, and how many fit. `None` = no full text is open
+    /// (or its event is gone from the history).
+    fn reader_lines(&self) -> Option<(Vec<fterm_render::dock::ChatLine>, usize)> {
+        let running = self.running.as_ref()?;
+        if running.dock.active != PanelKind::Events {
+            return None;
+        }
+        let id = running.dock.reading()?;
+        let n = self.center.history().find(|n| n.id == id)?;
+        let layout = self.dock_layout()?;
+        let cell = running.renderer.cell();
+        let width = ((layout.list.width / cell.width) as usize).saturating_sub(2);
+        let place = n.pane.and_then(|pane| {
+            let tab = running
+                .mux
+                .tabs()
+                .iter()
+                .position(|t| t.layout.contains(pane))?;
+            Some(format!("tab {}, pane {}", tab + 1, pane.0))
+        });
+        let lines = crate::panels::event_lines(n, place.as_deref(), Instant::now(), width);
+        Some((lines, fterm_render::dock::reader_rows(&layout, cell)))
+    }
+
+    /// A key while the full text of an event is open.
+    fn reader_key(&mut self, event: &KeyEvent) {
+        let Some((lines, visible)) = self.reader_lines() else {
+            if let Some(running) = &mut self.running {
+                running.dock.close_reader();
+            }
+            return;
+        };
+        let ctrl = self.mods.control_key();
+        let Some(running) = &mut self.running else {
+            return;
+        };
+        let dock = &mut running.dock;
+        let (total, page) = (lines.len(), visible.max(1) as isize);
+        match &event.logical_key {
+            Key::Named(NamedKey::ArrowUp) => dock.scroll_reader(-1, total, visible),
+            Key::Named(NamedKey::ArrowDown) => dock.scroll_reader(1, total, visible),
+            Key::Named(NamedKey::PageUp) => dock.scroll_reader(-page, total, visible),
+            Key::Named(NamedKey::PageDown | NamedKey::Space) => {
+                dock.scroll_reader(page, total, visible)
+            }
+            Key::Named(NamedKey::Home) => dock.scroll_reader(isize::MIN / 2, total, visible),
+            Key::Named(NamedKey::End) => dock.scroll_reader(isize::MAX / 2, total, visible),
+            Key::Named(NamedKey::Escape | NamedKey::ArrowLeft | NamedKey::Backspace) => {
+                dock.close_reader()
+            }
+            Key::Named(NamedKey::Tab) => dock.next_panel(),
+            Key::Named(NamedKey::Enter) => {
+                let index = dock.selected();
+                dock.close_reader();
+                return self.open_dock_row(index);
+            }
+            Key::Character(c) if ctrl && c.eq_ignore_ascii_case("c") => {
+                let id = dock.reading();
+                let text = self.center.history().find(|n| Some(n.id) == id).map(|n| {
+                    if n.body.trim().is_empty() {
+                        n.title.clone()
+                    } else {
+                        format!("{}\n\n{}", n.title, n.body)
+                    }
+                });
+                if let Some(text) = text {
+                    self.copy_text(text);
+                }
+                return;
+            }
+            _ => {}
+        }
+        running.window.request_redraw();
+    }
+
     /// A key while the dock has the keyboard. The keys never go to the terminal.
     fn dock_key(&mut self, event: &KeyEvent) {
+        if self
+            .running
+            .as_ref()
+            .is_some_and(|r| r.dock.active == PanelKind::Events && r.dock.reading().is_some())
+        {
+            return self.reader_key(event);
+        }
         if self
             .running
             .as_ref()
@@ -930,6 +1020,18 @@ impl App {
             Key::Named(NamedKey::PageDown) => dock.move_by(page, rows, visible),
             Key::Named(NamedKey::Home) => dock.select(0, rows, visible),
             Key::Named(NamedKey::End) => dock.select(rows.saturating_sub(1), rows, visible),
+            Key::Named(NamedKey::Space | NamedKey::ArrowRight)
+                if dock.active == PanelKind::Events && rows > 0 =>
+            {
+                let index = dock.selected();
+                if let Some(id) = self.event_of_row(index)
+                    && let Some(running) = &mut self.running
+                {
+                    running.dock.open_reader(id);
+                    running.window.request_redraw();
+                }
+                return;
+            }
             Key::Named(NamedKey::Tab | NamedKey::ArrowLeft | NamedKey::ArrowRight) => {
                 dock.next_panel()
             }
@@ -982,11 +1084,14 @@ impl App {
         let visible = layout.visible_rows().max(1);
         match hit {
             DockHit::Tab(i) => {
+                running.dock.close_reader();
                 if let Some(kind) = PanelKind::ALL.get(i) {
                     running.dock.active = *kind;
                 }
                 running.dock.focused = true;
             }
+            // The full text of an event covers the rows: a click there only takes the keyboard.
+            DockHit::Row(_) if running.dock.reading().is_some() => running.dock.focused = true,
             DockHit::Row(i) => {
                 running.dock.select(i, rows, visible);
                 self.open_dock_row(i);
@@ -3293,12 +3398,17 @@ impl App {
                 .contains(self.mouse.position.0 as f32, self.mouse.position.1 as f32)
         {
             let rows = self.dock_rows().len();
+            let reader = self.reader_lines();
             if let Some(running) = &mut self.running {
                 let lines = self
                     .mouse
                     .wheel
                     .lines(delta, running.renderer.cell().height);
-                if running.dock.active == PanelKind::Ai {
+                if let Some((text, visible)) = reader {
+                    running
+                        .dock
+                        .scroll_reader(-(lines as isize), text.len(), visible);
+                } else if running.dock.active == PanelKind::Ai {
                     self.ai.scroll = self.ai.scroll.saturating_add_signed(lines as isize);
                 } else {
                     running
@@ -3443,6 +3553,8 @@ impl App {
         let dock_rows: Vec<DockRow> = self.dock_rows().into_iter().map(|(row, _)| row).collect();
         let dock_tabs = self.dock_tabs();
         let corner = self.tab_bar_corner();
+        // The full text of an event, when it is open.
+        let reader = self.reader_lines();
         // The AI chat: its lines, its input, and the scroll kept inside the chat.
         let ai_view = match (&dock_layout, self.running.as_ref()) {
             (Some(layout), Some(r)) if r.dock.active == PanelKind::Ai => {
@@ -3574,12 +3686,16 @@ impl App {
         let dock_focused = dock.focused;
         let (dock_active, dock_selected, dock_scroll, dock_filter) =
             (dock.active, dock.selected(), dock.scroll(), dock.filter);
+        let reader_scroll = dock.reader_scroll();
         let dock_hints = match (dock_active, dock_filter) {
+            (PanelKind::Events, _) if reader.is_some() => {
+                "Enter go · Ctrl+C copy · Esc back"
+            }
             (PanelKind::Events, EventFilter::All) => {
-                "Enter go · F important only · M read · Tab · Esc"
+                "Enter go · Space read · F important only · M read · Tab · Esc"
             }
             (PanelKind::Events, EventFilter::Important) => {
-                "Enter go · F show all · M read · Tab · Esc"
+                "Enter go · Space read · F show all · M read · Tab · Esc"
             }
             (PanelKind::Agents, _) => "Enter go · Tab next panel · Esc back",
             (PanelKind::Ai, _) => "Enter send · Shift+Enter new line · Esc stop / back · PageUp",
@@ -3681,6 +3797,12 @@ impl App {
                                     }
                                 },
                             ),
+                            reader: reader.as_ref().map(|(lines, _)| {
+                                fterm_render::dock::ReaderView {
+                                    lines,
+                                    scroll: reader_scroll,
+                                }
+                            }),
                         },
                         layout,
                     )?;

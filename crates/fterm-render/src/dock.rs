@@ -141,6 +141,67 @@ pub struct DockView<'a> {
     pub hints: &'a str,
     /// The AI chat: drawn instead of the rows.
     pub chat: Option<ChatView<'a>>,
+    /// The full text of one row: drawn instead of the rows.
+    pub reader: Option<ReaderView<'a>>,
+}
+
+/// The full text of one row (an event), from the top, with a scroll.
+pub struct ReaderView<'a> {
+    pub lines: &'a [ChatLine],
+    /// The first line on the screen.
+    pub scroll: usize,
+}
+
+/// How many lines of the full text fit.
+pub fn reader_rows(layout: &DockLayout, cell: CellMetrics) -> usize {
+    ((layout.list.height - cell.height * 0.25) / cell.height)
+        .floor()
+        .max(0.0) as usize
+}
+
+/// The color of a line of the chat or of the full text.
+fn line_color(style: ChatStyle, ui: &UiColors) -> Rgb {
+    match style {
+        ChatStyle::User => ui.accent,
+        ChatStyle::Answer | ChatStyle::Code => ui.text,
+        ChatStyle::CodeHeader | ChatStyle::Note => ui.text_dim,
+        ChatStyle::Error => ui.error,
+    }
+}
+
+/// The full text: the lines from `scroll`, and a scroll bar when they do not fit.
+fn build_reader(
+    reader: &ReaderView,
+    layout: &DockLayout,
+    ui: &UiColors,
+    cell: CellMetrics,
+    quads: &mut Vec<Instance>,
+    text: &mut Vec<Instance>,
+    glyph: &mut dyn FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
+) -> Result<(), AtlasFull> {
+    let list = layout.list;
+    let cells = (list.width / cell.width) as usize;
+    let rows = reader_rows(layout, cell);
+    let start = reader.scroll.min(reader.lines.len());
+    let end = (start + rows).min(reader.lines.len());
+    for (n, line) in reader.lines[start..end].iter().enumerate() {
+        let y = list.y + cell.height * 0.25 + n as f32 * cell.height;
+        let shown = fit_title(&line.text, cells.saturating_sub(2));
+        let color = line_color(line.style, ui);
+        push_text(text, &shown, list.x + cell.width, y, cell, color, glyph)?;
+    }
+    if reader.lines.len() > rows && rows > 0 {
+        let area = rows as f32 * cell.height;
+        let total = reader.lines.len() as f32;
+        let height = (area * rows as f32 / total).max(cell.height);
+        let top_share = start as f32 / (total - rows as f32).max(1.0);
+        let top = list.y + cell.height * 0.25 + (area - height) * top_share.min(1.0);
+        quads.push(solid(
+            Rect::new(list.x + list.width - 3.0, top, 3.0, height),
+            ui.overlay,
+        ));
+    }
+    Ok(())
 }
 
 /// The places of the dock parts.
@@ -299,6 +360,24 @@ pub fn build_dock(
         quads.extend(text);
         return Ok(quads);
     }
+    if let Some(reader) = &view.reader {
+        build_reader(reader, layout, ui, cell, &mut quads, &mut text, glyph)?;
+        if view.focused && !view.hints.is_empty() {
+            let y = list.y + list.height + cell.height * 0.125;
+            let shown = fit_title(view.hints, cells.saturating_sub(2));
+            push_text(
+                &mut text,
+                &shown,
+                list.x + cell.width,
+                y,
+                cell,
+                ui.text_dim,
+                glyph,
+            )?;
+        }
+        quads.extend(text);
+        return Ok(quads);
+    }
     if view.rows.is_empty() {
         let shown = fit_title(view.empty, cells.saturating_sub(2));
         push_text(
@@ -432,13 +511,7 @@ fn build_chat(
     let start = end.saturating_sub(rows);
     for (n, line) in chat.lines[start..end].iter().enumerate() {
         let y = list.y + cell.height * 0.25 + n as f32 * cell.height;
-        let color = match line.style {
-            ChatStyle::User => ui.accent,
-            ChatStyle::Answer => ui.text,
-            ChatStyle::Code => ui.text,
-            ChatStyle::CodeHeader | ChatStyle::Note => ui.text_dim,
-            ChatStyle::Error => ui.error,
-        };
+        let color = line_color(line.style, ui);
         if matches!(line.style, ChatStyle::Code | ChatStyle::CodeHeader) {
             quads.push(solid(
                 Rect::new(list.x + 2.0, y, list.width - 4.0, cell.height),
@@ -514,7 +587,7 @@ mod tests {
         UiColors::default()
     }
     use crate::color::linear as linear_color;
-    use crate::frame::KIND_SOLID;
+    use crate::frame::{KIND_GLYPH, KIND_SOLID};
 
     const CELL: CellMetrics = CellMetrics {
         width: 10.0,
@@ -658,6 +731,7 @@ mod tests {
             empty: "Nothing yet",
             hints: "Enter go",
             chat: None,
+            reader: None,
         };
         let build = |view: &DockView| {
             build_dock(view, &layout, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap()
@@ -700,6 +774,7 @@ mod tests {
             empty: "",
             hints: "",
             chat: None,
+            reader: None,
         };
         let quads = build_dock(&view, &layout, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
         let found = colors(&quads);
@@ -723,6 +798,7 @@ mod tests {
             empty: "",
             hints: "",
             chat: None,
+            reader: None,
         };
         let quads = build_dock(&view, &layout, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
         for q in &quads {
@@ -732,6 +808,87 @@ mod tests {
                 q.rect
             );
             assert!(q.rect[0] >= rect.x - 0.5);
+        }
+    }
+
+    fn reader_quads(lines: &[ChatLine], scroll: usize) -> (DockLayout, Vec<Instance>) {
+        let (_, rect) = split_area(AREA, DockSide::Right, 0.4, CELL);
+        let tabs = tabs();
+        let layout = layout_dock(rect, DockSide::Right, &tabs, CELL);
+        let red = Rgb { r: 255, g: 0, b: 0 };
+        let rows = [row(red)];
+        let view = DockView {
+            tabs: &tabs,
+            active: 0,
+            rows: &rows,
+            selected: Some(0),
+            scroll: 0,
+            focused: true,
+            empty: "",
+            hints: "Esc back",
+            chat: None,
+            reader: Some(ReaderView { lines, scroll }),
+        };
+        let quads = build_dock(&view, &layout, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        assert!(
+            !colors(&quads).contains(&linear_color(red)),
+            "the rows are not drawn under the text"
+        );
+        (layout, quads)
+    }
+
+    /// The glyphs of this color in the list part (not the panel tabs, not the key hints).
+    fn glyphs_of(layout: &DockLayout, quads: &[Instance], color: Rgb) -> usize {
+        let list = layout.list;
+        quads
+            .iter()
+            .filter(|q| q.kind == KIND_GLYPH && q.color == linear_color(color))
+            .filter(|q| q.rect[1] >= list.y && q.rect[1] < list.y + list.height)
+            .count()
+    }
+
+    #[test]
+    fn the_full_text_of_a_row_from_the_top() {
+        let lines = [
+            chat_line("Title", ChatStyle::User),
+            chat_line("info", ChatStyle::Note),
+            chat_line("body", ChatStyle::Answer),
+        ];
+        let (layout, quads) = reader_quads(&lines, 0);
+        assert!(reader_rows(&layout, CELL) > 3);
+        assert_eq!(glyphs_of(&layout, &quads, ui().accent), "Title".len());
+        assert_eq!(glyphs_of(&layout, &quads, ui().text), "body".len());
+        // The first line on the screen is the title, at the top of the list.
+        let first = quads
+            .iter()
+            .filter(|q| q.kind == KIND_GLYPH)
+            .map(|q| q.rect[1])
+            .fold(f32::MAX, f32::min);
+        assert!(first < layout.list.y + CELL.height, "{first}");
+        // Scrolled down by one line: the title is gone.
+        let (layout, quads) = reader_quads(&lines, 1);
+        assert_eq!(glyphs_of(&layout, &quads, ui().accent), 0);
+        assert_eq!(glyphs_of(&layout, &quads, ui().text), "body".len());
+    }
+
+    #[test]
+    fn a_long_text_has_a_scroll_bar_and_stays_inside() {
+        let lines: Vec<ChatLine> = (0..200)
+            .map(|_| chat_line("x", ChatStyle::Answer))
+            .collect();
+        let (layout, quads) = reader_quads(&lines, 50);
+        let rows = reader_rows(&layout, CELL);
+        assert_eq!(
+            glyphs_of(&layout, &quads, ui().text),
+            rows,
+            "only the lines that fit"
+        );
+        let bar = quads.iter().any(|q| {
+            q.kind == KIND_SOLID && q.color == linear_color(ui().overlay) && q.rect[2] == 3.0
+        });
+        assert!(bar, "a scroll bar");
+        for q in &quads {
+            assert!(q.rect[1] + q.rect[3] <= layout.rect.y + layout.rect.height + 0.5);
         }
     }
 
@@ -756,6 +913,7 @@ mod tests {
             empty: "",
             hints: "Enter send",
             chat: Some(chat),
+            reader: None,
         };
         let quads = build_dock(&view, &layout, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
         (layout, quads)

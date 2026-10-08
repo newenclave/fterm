@@ -80,6 +80,9 @@ pub struct Dock {
     /// The selected row and the first row on the screen, for each panel.
     selected: [usize; 3],
     scroll: [usize; 3],
+    /// The event whose full text is open in the Events panel, and its first line on the screen.
+    reading: Option<u64>,
+    read_scroll: usize,
 }
 
 impl Dock {
@@ -93,6 +96,8 @@ impl Dock {
             filter: EventFilter::All,
             selected: [0; 3],
             scroll: [0; 3],
+            reading: None,
+            read_scroll: 0,
         }
     }
 
@@ -131,6 +136,7 @@ impl Dock {
     }
 
     pub fn next_panel(&mut self) {
+        self.close_reader();
         let next = (self.active.index() + 1) % PanelKind::ALL.len();
         self.active = PanelKind::ALL[next];
     }
@@ -168,12 +174,102 @@ impl Dock {
         self.scroll[i] = scroll;
     }
 
+    /// Opens the full text of an event (its id), from the top.
+    pub fn open_reader(&mut self, id: u64) {
+        self.reading = Some(id);
+        self.read_scroll = 0;
+    }
+
+    /// Back from the full text to the list.
+    pub fn close_reader(&mut self) {
+        self.reading = None;
+        self.read_scroll = 0;
+    }
+
+    /// The event whose full text is open.
+    pub fn reading(&self) -> Option<u64> {
+        self.reading
+    }
+
+    /// The first line of the full text on the screen.
+    pub fn reader_scroll(&self) -> usize {
+        self.read_scroll
+    }
+
+    /// Scrolls the full text: `lines` in it, `visible` on the screen.
+    pub fn scroll_reader(&mut self, delta: isize, lines: usize, visible: usize) {
+        let max = lines.saturating_sub(visible);
+        self.read_scroll = self.read_scroll.saturating_add_signed(delta).min(max);
+    }
+
     /// The mouse wheel: scroll, but do not move the selection.
     pub fn scroll_by(&mut self, delta: isize, rows: usize, visible: usize) {
         let i = self.active.index();
         let max = rows.saturating_sub(visible);
         self.scroll[i] = self.scroll[i].saturating_add_signed(delta).min(max);
     }
+}
+
+/// The events in the list with this filter, newest first, as the Events panel shows them.
+pub fn filtered_events<'a>(
+    history: impl Iterator<Item = &'a Notification>,
+    filter: EventFilter,
+) -> Vec<&'a Notification> {
+    history
+        .filter(|n| match filter {
+            EventFilter::All => true,
+            EventFilter::Important => {
+                matches!(n.level, Level::Warning | Level::Error | Level::Attention)
+            }
+        })
+        .collect()
+}
+
+/// The full text of an event, wrapped to `width` cells: the title, where it came from, and the body.
+pub fn event_lines(
+    n: &Notification,
+    place: Option<&str>,
+    now: Instant,
+    width: usize,
+) -> Vec<fterm_render::dock::ChatLine> {
+    use fterm_render::dock::{ChatLine, ChatStyle};
+    let width = width.max(8);
+    let line = |text: String, style| ChatLine { text, style };
+    let mut out: Vec<ChatLine> = crate::ai_chat::wrap(&n.title, width)
+        .into_iter()
+        .map(|t| line(t, ChatStyle::User))
+        .collect();
+    let ago = short_ago(now.saturating_duration_since(n.time));
+    let ago = if ago == "now" {
+        ago
+    } else {
+        format!("{ago} ago")
+    };
+    let mut meta = format!("{} · from {} · {ago}", n.level.name(), n.source.name());
+    if let Some(place) = place {
+        meta.push_str(&format!(" · {place}"));
+    }
+    out.extend(
+        crate::ai_chat::wrap(&meta, width)
+            .into_iter()
+            .map(|t| line(t, ChatStyle::Note)),
+    );
+    out.push(line(String::new(), ChatStyle::Note));
+    if n.body.trim().is_empty() {
+        out.push(line("(no text)".to_owned(), ChatStyle::Note));
+    }
+    for text in n.body.trim_end().lines() {
+        if text.trim().is_empty() {
+            out.push(line(String::new(), ChatStyle::Answer));
+        } else {
+            out.extend(
+                crate::ai_chat::wrap(text, width)
+                    .into_iter()
+                    .map(|t| line(t, ChatStyle::Answer)),
+            );
+        }
+    }
+    out
 }
 
 /// "now", "40 s", "5 min", "2 h": how long ago, short.
@@ -210,13 +306,8 @@ pub fn event_rows<'a>(
     now: Instant,
     ui: &UiColors,
 ) -> Vec<(DockRow, Option<PaneId>)> {
-    history
-        .filter(|n| match filter {
-            EventFilter::All => true,
-            EventFilter::Important => {
-                matches!(n.level, Level::Warning | Level::Error | Level::Attention)
-            }
-        })
+    filtered_events(history, filter)
+        .into_iter()
         .map(|n| {
             let detail = if n.body.trim().is_empty() {
                 n.source.name().to_owned()
@@ -348,6 +439,97 @@ mod tests {
             .iter()
             .all(|(r, _)| !r.new)
         );
+    }
+
+    #[test]
+    fn the_full_text_of_an_event() {
+        use fterm_render::dock::ChatStyle;
+        let t0 = Instant::now();
+        let mut center = Center::new(4, false);
+        let body = "first line\nsecond line is a long line that does not fit in twenty cells";
+        center.push(
+            t0,
+            Some(PaneId(5)),
+            "Message for Claude",
+            body,
+            Level::Attention,
+            Source::Api,
+            false,
+        );
+        let n = center.history().next().unwrap();
+        let lines = event_lines(n, Some("tab 2, pane 5"), t0 + Duration::from_secs(420), 20);
+        assert_eq!(lines[0].text, "Message for Claude");
+        assert_eq!(lines[0].style, ChatStyle::User, "the title stands out");
+        assert_eq!(lines[1].style, ChatStyle::Note);
+        // Where it came from: the level, the source, the time, and the pane (wrapped too).
+        let meta: String = lines
+            .iter()
+            .filter(|l| l.style == ChatStyle::Note)
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        for part in ["attention", "api", "7 min ago", "tab 2,", "pane 5"] {
+            assert!(meta.contains(part), "{part}: {meta}");
+        }
+        let body_lines: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.style == ChatStyle::Answer)
+            .map(|l| l.text.as_str())
+            .collect();
+        assert_eq!(body_lines[0], "first line");
+        assert!(
+            body_lines.len() >= 4,
+            "the long line is wrapped: {body_lines:?}"
+        );
+        assert!(body_lines.iter().all(|l| l.chars().count() <= 20));
+        // No body: a note says so.
+        center.push(t0, None, "Bell", "", Level::Info, Source::Terminal, false);
+        let bell = center.history().next().unwrap();
+        let lines = event_lines(bell, None, t0, 40);
+        assert!(lines.iter().any(|l| l.text.contains("no text")));
+    }
+
+    #[test]
+    fn the_event_of_a_row() {
+        let t0 = Instant::now();
+        let mut center = Center::new(4, false);
+        center.push(t0, None, "a", "", Level::Info, Source::App, false);
+        center.push(t0, None, "b", "", Level::Error, Source::App, false);
+        center.push(t0, None, "c", "", Level::Info, Source::App, false);
+        let all = filtered_events(center.history(), EventFilter::All);
+        let titles: Vec<&str> = all.iter().map(|n| n.title.as_str()).collect();
+        assert_eq!(titles, ["c", "b", "a"], "the same order as the rows");
+        let important = filtered_events(center.history(), EventFilter::Important);
+        assert_eq!(important.len(), 1);
+        assert_eq!(important[0].title, "b");
+    }
+
+    #[test]
+    fn the_reader_opens_scrolls_and_closes() {
+        let mut dock = Dock::new(DockSide::Right, 0.3, Some(PanelKind::Events));
+        assert_eq!(dock.reading(), None);
+        dock.open_reader(42);
+        assert_eq!(dock.reading(), Some(42));
+        assert_eq!(dock.reader_scroll(), 0);
+        // 30 lines, 10 on the screen: the last screen starts at line 20.
+        dock.scroll_reader(5, 30, 10);
+        assert_eq!(dock.reader_scroll(), 5);
+        dock.scroll_reader(100, 30, 10);
+        assert_eq!(dock.reader_scroll(), 20);
+        dock.scroll_reader(-100, 30, 10);
+        assert_eq!(dock.reader_scroll(), 0);
+        dock.scroll_reader(3, 5, 10);
+        assert_eq!(dock.reader_scroll(), 0, "it all fits");
+        // Another event starts at the top.
+        dock.scroll_reader(4, 30, 10);
+        dock.open_reader(43);
+        assert_eq!(dock.reader_scroll(), 0);
+        dock.close_reader();
+        assert_eq!(dock.reading(), None);
+        // Another panel closes it too.
+        dock.open_reader(43);
+        dock.next_panel();
+        assert_eq!(dock.reading(), None);
     }
 
     #[test]
