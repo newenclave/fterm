@@ -89,6 +89,7 @@ impl App {
                     review,
                     drawn: None,
                 }),
+                harmonize: false,
             },
         );
         running

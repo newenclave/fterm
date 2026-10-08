@@ -10,7 +10,7 @@ use fterm_term::alacritty_terminal::vte::ansi::Rgb as TermRgb;
 use fterm_term::colors::ColorOverrides;
 
 /// A theme chosen while fterm runs (the palette or the API). It wins over the config until the config changes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Override {
     Named(String),
     Inline(Box<Theme>),
@@ -94,6 +94,17 @@ pub fn palette_colors(theme: &Theme, colors: &ColorConfig) -> ColorOverrides {
         selection: pick(colors.selection, t.selection),
         ansi,
         bright,
+    }
+}
+
+/// How the colors of programs fit the theme: the theme's values, changed by the config.
+pub fn harmonize_settings(
+    theme: &Theme,
+    config: &fterm_config::load::HarmonizeConfig,
+) -> fterm_term::harmonize::Settings {
+    fterm_term::harmonize::Settings {
+        strength: config.strength.unwrap_or(theme.harmonize.strength),
+        min_contrast: config.min_contrast.unwrap_or(theme.harmonize.min_contrast),
     }
 }
 
@@ -230,6 +241,31 @@ mod tests {
         assert_eq!(rows[0].hint, "");
         assert_eq!(rows[1].hint, "in use", "case does not matter");
         assert_eq!(rows[1].key, "Nord");
+    }
+
+    #[test]
+    fn the_harmonize_of_the_theme_and_the_config() {
+        use fterm_config::load::HarmonizeConfig;
+        let mut theme = Theme::default();
+        let off = harmonize_settings(&theme, &HarmonizeConfig::default());
+        assert_eq!(
+            (off.strength, off.min_contrast),
+            (0.0, 3.0),
+            "off by default"
+        );
+        theme.harmonize.strength = 0.8;
+        let on = harmonize_settings(&theme, &HarmonizeConfig::default());
+        assert_eq!(on.strength, 0.8, "the theme says");
+        let config = HarmonizeConfig {
+            strength: Some(0.3),
+            min_contrast: Some(4.5),
+        };
+        let mine = harmonize_settings(&theme, &config);
+        assert_eq!(
+            (mine.strength, mine.min_contrast),
+            (0.3, 4.5),
+            "the config wins"
+        );
     }
 
     #[test]

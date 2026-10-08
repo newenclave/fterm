@@ -71,15 +71,34 @@ ui_roles!(
     agent_error,
 );
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// How the colors that programs choose fit the theme (see fterm-term `harmonize`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Harmonize {
+    /// 0 = as the program chose them, 1 = fully in the style of the theme.
+    pub strength: f32,
+    /// The lowest contrast of text against its background (WCAG, 1..21), when `strength` > 0.
+    pub min_contrast: f32,
+}
+
+impl Default for Harmonize {
+    fn default() -> Self {
+        Self {
+            strength: 0.0,
+            min_contrast: 3.0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
     pub name: String,
     pub terminal: TerminalColors,
     pub ui: UiColors,
+    pub harmonize: Harmonize,
 }
 
 /// What the config says about the theme.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum ThemeChoice {
     /// No `theme`: the default theme.
     #[default]
@@ -123,6 +142,7 @@ impl Theme {
         let mut name = String::new();
         let mut terminal = default_terminal();
         let mut ui_value = None;
+        let mut harmonize = Harmonize::default();
         for (key, value) in object {
             match key.as_str() {
                 "name" => {
@@ -130,9 +150,10 @@ impl Theme {
                 }
                 "terminal" => terminal = terminal_colors(value, terminal)?,
                 "ui" => ui_value = Some(value),
+                "harmonize" => harmonize = harmonize_from_json(value)?,
                 other => {
                     return Err(format!(
-                        "`{other}` is not a theme key: use name, terminal, ui"
+                        "`{other}` is not a theme key: use name, terminal, ui, harmonize"
                     ));
                 }
             }
@@ -155,7 +176,12 @@ impl Theme {
                 *slot = color_at(value, &path)?;
             }
         }
-        Ok(Theme { name, terminal, ui })
+        Ok(Theme {
+            name,
+            terminal,
+            ui,
+            harmonize,
+        })
     }
 
     /// A built-in theme by its name or its file name (case does not matter).
@@ -301,11 +327,58 @@ fn from_windows_terminal(object: &serde_json::Map<String, Value>) -> Result<Them
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
+    let harmonize = match object.get("harmonize") {
+        Some(value) => harmonize_from_json(value)?,
+        None => Harmonize::default(),
+    };
     Ok(Theme {
         name,
         terminal: t,
         ui: derive_ui(&t),
+        harmonize,
     })
+}
+
+/// `harmonize`: `strength` (0..1) and `min_contrast` (1..21).
+fn harmonize_from_json(value: &Value) -> Result<Harmonize, String> {
+    let object = value
+        .as_object()
+        .ok_or("harmonize: expected an object like { \"strength\": 0.6 }")?;
+    let mut out = Harmonize::default();
+    for (key, value) in object {
+        let path = format!("harmonize.{key}");
+        let number = value
+            .as_f64()
+            .ok_or_else(|| format!("{path}: expected a number"))? as f32;
+        match key.as_str() {
+            "strength" => {
+                out.strength = check_strength(number).map_err(|e| format!("{path}: {e}"))?
+            }
+            "min_contrast" => {
+                out.min_contrast = check_contrast(number).map_err(|e| format!("{path}: {e}"))?
+            }
+            _ => return Err(format!("`{path}` is not known: use strength, min_contrast")),
+        }
+    }
+    Ok(out)
+}
+
+/// A strength: 0..1.
+pub fn check_strength(value: f32) -> Result<f32, String> {
+    if (0.0..=1.0).contains(&value) {
+        Ok(value)
+    } else {
+        Err(format!("must be between 0 and 1, got {value}"))
+    }
+}
+
+/// A contrast ratio: 1..21.
+pub fn check_contrast(value: f32) -> Result<f32, String> {
+    if (1.0..=21.0).contains(&value) {
+        Ok(value)
+    } else {
+        Err(format!("must be between 1 and 21, got {value}"))
+    }
 }
 
 /// The UI roles made from the terminal colors.
@@ -518,6 +591,30 @@ mod tests {
             "attention follows the accent"
         );
         assert_eq!(t.name, "", "no name in the JSON");
+    }
+
+    #[test]
+    fn a_theme_can_fit_the_colors_of_programs() {
+        assert_eq!(
+            Theme::default().harmonize,
+            Harmonize::default(),
+            "off by default"
+        );
+        assert_eq!(Harmonize::default().strength, 0.0);
+        assert_eq!(Harmonize::default().min_contrast, 3.0);
+        let t = Theme::from_json(&json!({ "harmonize": { "strength": 0.6 } })).unwrap();
+        assert_eq!(t.harmonize.strength, 0.6);
+        assert_eq!(t.harmonize.min_contrast, 3.0, "the default stays");
+        let t = Theme::from_json(&json!({ "harmonize": { "strength": 1, "min_contrast": 4.5 } }))
+            .unwrap();
+        assert_eq!((t.harmonize.strength, t.harmonize.min_contrast), (1.0, 4.5));
+        let err = |v: Value| Theme::from_json(&v).unwrap_err();
+        assert!(err(json!({ "harmonize": { "strength": 2 } })).contains("harmonize.strength"));
+        assert!(
+            err(json!({ "harmonize": { "min_contrast": 50 } })).contains("harmonize.min_contrast")
+        );
+        assert!(err(json!({ "harmonize": { "power": 1 } })).contains("harmonize.power"));
+        assert!(err(json!({ "harmonize": 1 })).contains("harmonize"));
     }
 
     #[test]

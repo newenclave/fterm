@@ -17,6 +17,10 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 - **Agents with no hooks.** When `claude`, `opencode`, `codex`, `aider`, or `gemini` runs in a pane, it is
   in the Agents panel and has a dot on its tab. Its state comes from the window title (Claude Code shows a
   spinner while it works). Hooks, when they are set up, are more exact and win.
+- **The colors of programs can fit the theme.** `harmonize` in a theme (or in the config) moves the colors that
+  programs choose themselves (truecolor and the 256-color table) toward the theme: the theme's red for a red, gray
+  in a gray theme, dark text on a light theme. Text always keeps a minimum contrast. A profile can keep exact
+  colors (`harmonize = false`), and `toggle_original_colors` shows them as they are. See docs/THEMES.md.
 - **Review a plan item by item.** An agent can show its plan in a Review tab: you mark each item Ok, comment on
   it, change its text, add or remove items, and send the review back. Claude Code plan mode uses it through a hook
   (all Ok accepts the plan, any change goes back to Claude), other agents through the MCP tool `review_plan`, and

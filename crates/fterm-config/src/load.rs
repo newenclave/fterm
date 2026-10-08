@@ -407,6 +407,8 @@ pub struct Config {
     pub colors: ColorConfig,
     /// The theme: the colors of the terminal and the UI. `colors` changes it.
     pub theme: crate::theme::ThemeChoice,
+    /// Changes the `harmonize` of the theme (`None` = the theme's value).
+    pub harmonize: HarmonizeConfig,
     /// The profile for new tabs and splits. `None` = the first profile.
     pub default_profile: Option<String>,
     /// Profiles from the config. Empty = fterm finds them itself.
@@ -456,6 +458,7 @@ impl Default for Config {
             braille_style: BrailleStyle::Pixels,
             colors: ColorConfig::default(),
             theme: crate::theme::ThemeChoice::Default,
+            harmonize: HarmonizeConfig::default(),
             default_profile: None,
             profiles: Vec::new(),
             keys: Keymap::with_defaults(),
@@ -908,6 +911,13 @@ fn spawn_place(split: Option<&str>) -> Result<SpawnWhere, String> {
     }
 }
 
+/// `harmonize = { strength = 0.6, min_contrast = 4.5 }` in the config: changes the values of the theme.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HarmonizeConfig {
+    pub strength: Option<f32>,
+    pub min_contrast: Option<f32>,
+}
+
 /// `theme`: a name, JSON text, `{ light = ..., dark = ... }`, or a theme as a Lua table.
 fn theme_choice(root: &Table) -> Result<crate::theme::ThemeChoice, String> {
     use crate::theme::{Theme, ThemeChoice};
@@ -1045,6 +1055,22 @@ impl Reader {
             config.colors = self.colors(&colors)?;
         }
         config.theme = theme_choice(root)?;
+        if let Some(table) = table_field(root, "harmonize", "harmonize")? {
+            let number = |key: &str| -> Result<Option<f32>, String> {
+                let path = format!("harmonize.{key}");
+                Ok(number_field(&table, key, &path)?.map(|n| n as f32))
+            };
+            config.harmonize = HarmonizeConfig {
+                strength: number("strength")?
+                    .map(crate::theme::check_strength)
+                    .transpose()
+                    .map_err(|e| format!("harmonize.strength: {e}"))?,
+                min_contrast: number("min_contrast")?
+                    .map(crate::theme::check_contrast)
+                    .transpose()
+                    .map_err(|e| format!("harmonize.min_contrast: {e}"))?,
+            };
+        }
         config.default_profile = string_field(root, "default_profile", "default_profile")?;
         if let Some(on) = bool_field(root, "shell_integration", "shell_integration")? {
             config.shell_integration = on;
@@ -1615,6 +1641,7 @@ fn profile(table: &Table, path: &str) -> Result<Profile, String> {
         env,
         wsl,
         tab_color,
+        harmonize: bool_field(table, "harmonize", &format!("{path}.harmonize"))?.unwrap_or(true),
     })
 }
 
@@ -2036,6 +2063,26 @@ mod tests {
         .config;
         assert_eq!(config.font_size, 20.0);
         assert_eq!(config.profiles.len(), 2);
+    }
+
+    #[test]
+    fn the_config_and_profiles_can_change_the_harmonize() {
+        let loaded = load(
+            r#"return {
+              harmonize = { strength = 0.7 },
+              profiles = { { name = "btop", command = "btop", harmonize = false },
+                           { name = "sh", command = "sh" } },
+            }"#,
+        );
+        let h = loaded.config.harmonize;
+        assert_eq!((h.strength, h.min_contrast), (Some(0.7), None));
+        assert!(
+            !loaded.config.profiles[0].harmonize,
+            "a program that needs its exact colors"
+        );
+        assert!(loaded.config.profiles[1].harmonize);
+        assert_eq!(load("return {}").config.harmonize.strength, None);
+        assert!(error(r#"return { harmonize = { strength = 3 } }"#).contains("harmonize.strength"));
     }
 
     #[test]

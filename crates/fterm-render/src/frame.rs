@@ -7,7 +7,7 @@ use fterm_term::alacritty_terminal::grid::Dimensions;
 use fterm_term::alacritty_terminal::term::cell::Flags;
 use fterm_term::alacritty_terminal::term::{Term, TermMode};
 use fterm_term::alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
-use fterm_term::colors::{Palette, cell_colors};
+use fterm_term::colors::{Palette, cell_colors_with};
 
 use crate::atlas::{AtlasFull, AtlasGlyph, GlyphKey};
 use crate::color::linear;
@@ -44,6 +44,8 @@ pub struct FrameInput<'a> {
     pub focused: bool,
     /// Where the pane is in the window, in pixels. The padding is inside it.
     pub area: Rect,
+    /// The colors that programs choose fit the theme (when the palette has a harmonizer).
+    pub harmonize: bool,
 }
 
 /// Width of the scroll indicator in pixels.
@@ -107,12 +109,13 @@ pub fn build_frame<T: EventListener>(
         } else {
             cell.width
         };
-        let (fg, bg) = cell_colors(
+        let (fg, bg) = cell_colors_with(
             indexed.cell.fg,
             indexed.cell.bg,
             flags,
             input.palette,
             overrides,
+            input.harmonize,
         );
         let under_copy_cursor = copy_cursor == Some((row, col));
         let under_block_cursor = under_copy_cursor
@@ -301,6 +304,7 @@ mod tests {
             ui: &UiColors::default(),
             focused,
             area: AREA,
+            harmonize: true,
         };
         let mut keys = Vec::new();
         let quads = build_frame(&term, &input, &mut |key| {
@@ -430,6 +434,7 @@ mod tests {
             ui: &UiColors::default(),
             focused: true,
             area: AREA,
+            harmonize: true,
         };
         let quads = build_frame(&term, &input, &mut |key| {
             Ok(Some(AtlasGlyph {
@@ -528,6 +533,7 @@ mod tests {
             ui: &UiColors::default(),
             focused: true,
             area: AREA,
+            harmonize: true,
         };
         let got = build_frame(&term, &input, &mut |_| Err(AtlasFull));
         assert_eq!(got, Err(AtlasFull));
@@ -542,6 +548,7 @@ mod tests {
             ui: &UiColors::default(),
             focused: true,
             area: AREA,
+            harmonize: true,
         };
         build_frame(term, &input, &mut |_| Ok(Some(GLYPH))).unwrap()
     }
@@ -652,6 +659,7 @@ mod tests {
             ui: &UiColors::default(),
             focused: true,
             area,
+            harmonize: true,
         };
         let moved = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         let at_origin = build(&term);
@@ -676,6 +684,7 @@ mod tests {
             ui: &UiColors::default(),
             focused: true,
             area,
+            harmonize: true,
         };
         let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         let rects = rects_with_color(&quads, UiColors::default().scrollbar);
@@ -723,6 +732,7 @@ mod tests {
             ui: &ui,
             focused: true,
             area: AREA,
+            harmonize: true,
         };
         let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         assert_eq!(rects_with_color(&quads, ui.scrollbar).len(), 1);

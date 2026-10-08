@@ -14,6 +14,8 @@ pub struct Profile {
     pub wsl: Option<String>,
     /// The color of the tabs that this profile opens.
     pub tab_color: Option<[u8; 3]>,
+    /// The colors of its programs may fit the theme (`harmonize = false`: exact colors, for example btop).
+    pub harmonize: bool,
 }
 
 impl Profile {
@@ -26,6 +28,7 @@ impl Profile {
             env: Vec::new(),
             wsl: None,
             tab_color: None,
+            harmonize: true,
         }
     }
 }

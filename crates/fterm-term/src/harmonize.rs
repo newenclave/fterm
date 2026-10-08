@@ -42,6 +42,8 @@ pub struct Harmonizer {
     /// The colored colors of the theme (no grays): (hue, chroma).
     hues: Vec<(f32, f32)>,
     cache: Mutex<HashMap<u32, Rgb>>,
+    /// `readable` by (text, background).
+    readable_cache: Mutex<HashMap<u64, Rgb>>,
 }
 
 impl Clone for Harmonizer {
@@ -52,6 +54,7 @@ impl Clone for Harmonizer {
             dark: self.dark,
             hues: self.hues.clone(),
             cache: Mutex::new(HashMap::new()),
+            readable_cache: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -86,12 +89,13 @@ impl Harmonizer {
             background,
             hues,
             cache: Mutex::new(HashMap::new()),
+            readable_cache: Mutex::new(HashMap::new()),
         })
     }
 
     /// A color that a program chose, in the style of the theme.
     pub fn color(&self, c: Rgb) -> Rgb {
-        let key = u32::from(c.r) << 16 | u32::from(c.g) << 8 | u32::from(c.b);
+        let key = key(c);
         if let Some(found) = self.cache.lock().ok().and_then(|m| m.get(&key).copied()) {
             return found;
         }
@@ -138,6 +142,26 @@ impl Harmonizer {
 
     /// `fg` moved in lightness until it has `min_contrast` against `bg`.
     pub fn readable(&self, fg: Rgb, bg: Rgb) -> Rgb {
+        let key = u64::from(key(fg)) << 24 | u64::from(key(bg));
+        if let Some(found) = self
+            .readable_cache
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&key).copied())
+        {
+            return found;
+        }
+        let out = self.make_readable(fg, bg);
+        if let Ok(mut cache) = self.readable_cache.lock() {
+            if cache.len() > 8192 {
+                cache.clear();
+            }
+            cache.insert(key, out);
+        }
+        out
+    }
+
+    fn make_readable(&self, fg: Rgb, bg: Rgb) -> Rgb {
         let want = self.settings.min_contrast;
         if contrast(fg, bg) >= want {
             return fg;
@@ -155,6 +179,10 @@ impl Harmonizer {
         }
         out
     }
+}
+
+fn key(c: Rgb) -> u32 {
+    u32::from(c.r) << 16 | u32::from(c.g) << 8 | u32::from(c.b)
 }
 
 /// The WCAG contrast ratio of two colors: 1 (the same) .. 21 (black and white).

@@ -103,6 +103,46 @@ does not give it (`bg` = the background, `fg` = the text color).
 The built-in themes give every role. You can see them in the fterm repository:
 [assets/themes](../assets/themes). Copy one and change it to make your own theme.
 
+## The colors of programs (harmonize)
+A theme changes the 16 colors of the terminal. Many programs use them (`ls`, `git`, PowerShell), so they
+follow the theme. But some programs choose their own exact colors (truecolor, or the 256-color table), for
+example the red and green lines of a diff in Claude Code. Those colors stay as the program chose them, so in a
+gray or a light theme they can look wrong, or be hard to read.
+
+`harmonize` in a theme makes them fit:
+
+```json
+{ "name": "Graphite", "terminal": { ... }, "harmonize": { "strength": 0.8, "min_contrast": 3.0 } }
+```
+
+- `strength`: 0 = the colors of programs as they are (the default), 1 = fully in the style of the theme.
+  0.5 or 0.6 keeps them close to their own colors.
+- `min_contrast`: the lowest contrast of text against its background (1 to 21; the default 3).
+
+What fterm does with a color of a program:
+- **Hue:** it goes to the nearest color of the theme. A red stays red, but it is the theme's red.
+- **Strength of the color:** it goes to that of the theme color. So a gray theme makes all colors gray, and a
+  pastel theme makes them pastel. A gray stays a gray.
+- **Lightness:** programs expect a dark background. fterm keeps how much lighter than the background a color
+  is. On a light theme this goes the other way: light gray text becomes dark gray text, and a dark red line
+  of a diff becomes a light red one.
+- **Readable:** at the end, text gets at least `min_contrast` against its background.
+
+The 16 colors of the theme do not change. The results are kept in a cache, so this does not make fterm slower.
+
+You can change it without a new theme, and turn it off for some programs:
+
+```lua
+harmonize = { strength = 0.6 },          -- in fterm.lua: changes the value of the theme
+profiles = {
+  { name = "btop", command = "btop", harmonize = false },   -- this program keeps its exact colors
+},
+```
+
+The action `toggle_original_colors` ("Original colors of programs on or off" in the palette) shows the
+colors of programs as they are, and back. Give it a key to compare fast:
+`keys = { { key = "ctrl+shift+f8", action = "toggle_original_colors" } }`.
+
 ## When something is wrong
 A theme with a bad color, an unknown key, or bad JSON is not used. fterm keeps the last good theme and shows
 an error toast that says where the problem is (for example `ui.acent is not a UI role`).

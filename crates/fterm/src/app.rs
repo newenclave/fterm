@@ -127,6 +127,8 @@ struct Pane {
     scene: Option<std::sync::Mutex<fterm_scene::Scene>>,
     /// A Review tab: the review that the grid shows; keys go to it.
     review: Option<review_calls::ReviewPane>,
+    /// The colors of its programs may fit the theme (`harmonize = false` in its profile: no).
+    harmonize: bool,
 }
 
 /// Everything that exists only while the window is open.
@@ -370,6 +372,8 @@ pub struct App {
     theme_override: Option<crate::themes::Override>,
     /// The system is in dark mode (for `theme = { light = ..., dark = ... }`).
     system_dark: bool,
+    /// `toggle_original_colors`: the colors that programs chose, as they are.
+    original_colors: bool,
     /// A message box (for example, an error in the config). Any key closes it.
     message: Option<Vec<String>>,
     /// Editors save in several steps: we load the config a moment after the last change.
@@ -483,6 +487,7 @@ impl App {
             ui: UiColors::default(),
             theme_override: None,
             system_dark: true,
+            original_colors: false,
             message,
             reload_at: None,
             theme_reload_at: None,
@@ -1363,10 +1368,15 @@ impl App {
 
     /// The terminal palette: the theme, with `colors` of the config on top.
     pub(crate) fn palette(&self) -> Palette {
-        Palette::with_colors(&crate::themes::palette_colors(
+        let mut palette = Palette::with_colors(&crate::themes::palette_colors(
             &self.theme,
             &self.config.config.colors,
-        ))
+        ));
+        palette.set_harmonize(crate::themes::harmonize_settings(
+            &self.theme,
+            &self.config.config.harmonize,
+        ));
+        palette
     }
 
     /// The folders with theme files.
@@ -1658,6 +1668,7 @@ impl App {
                 intro_lines: 0,
                 scene: Some(std::sync::Mutex::new(scene)),
                 review: None,
+                harmonize: true,
             },
         );
         tracing::info!(
@@ -1693,6 +1704,7 @@ impl App {
             .map(std::path::PathBuf::from)
             .filter(|dir| dir.is_dir());
         let profile_name = self.profile(profile).map(|p| p.name.clone());
+        let harmonize = self.profile(profile).is_none_or(|p| p.harmonize);
         let options = match self.profile(profile) {
             Some(profile) => {
                 let (program, mut args) = launch_command(&profile, cfg!(windows), path_extension);
@@ -1839,6 +1851,7 @@ impl App {
                 intro_lines: 0,
                 scene: None,
                 review: None,
+                harmonize,
             },
         );
         Ok(id)
@@ -2372,6 +2385,21 @@ impl App {
                 }
             }
             A::Zoom => running.mux.toggle_zoom(),
+            A::ToggleOriginalColors => {
+                self.original_colors = !self.original_colors;
+                let (title, body) = if self.original_colors {
+                    ("Original colors", "Programs show their own colors.")
+                } else {
+                    (
+                        "Theme colors",
+                        "The colors of programs fit the theme (harmonize).",
+                    )
+                };
+                if let Some(running) = &self.running {
+                    running.window.request_redraw();
+                }
+                return self.notify(None, title, body, Level::Info, Source::App);
+            }
             A::ToggleFullscreen => {
                 // Borderless on the monitor of the window: no frame and no title bar.
                 let full = running.window.fullscreen().is_some();
@@ -3874,6 +3902,7 @@ impl App {
         let tabs_width = self.running.as_ref().map_or(0.0, |r| {
             self.tabs_width(r.window.inner_size().width as f32, r.renderer.cell())
         });
+        let original_colors = self.original_colors;
         let running = self.running.as_mut().unwrap();
         let area = running.tab_area();
         let Running {
@@ -3965,8 +3994,9 @@ impl App {
                     if let Some(pane) = panes.get(id) {
                         let is_active = Some(*id) == active_pane;
                         let has_keys = focused && is_active && !dock_focused;
+                        let harmonize = pane.harmonize && !original_colors;
                         pane.session
-                            .with_term(|term| parts.pane(term, *rect, has_keys))?;
+                            .with_term(|term| parts.pane(term, *rect, has_keys, harmonize))?;
                     }
                 }
                 if let Some((text, column, line)) = &hint

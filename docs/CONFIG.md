@@ -60,6 +60,7 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `gpu` | table | `{ backend = "auto", power = "high" }` | The GPU that draws the window. See "The GPU". |
 | `data_dir` | string | the folders of the user | One folder for the history, the sessions, and the shell scripts. See "A portable fterm". |
 | `theme` | string or table | `"Catppuccin Mocha"` | All colors: the terminal and the UI. See [THEMES.md](THEMES.md). |
+| `harmonize` | table | the theme | `{ strength = 0.6, min_contrast = 3 }`: fit the colors that programs choose to the theme. See [THEMES.md](THEMES.md#the-colors-of-programs-harmonize). |
 | `colors` | table | the theme | Change some terminal colors of the theme. See "Colors". |
 | `default_profile` | string | the first profile | The profile for new tabs and splits. |
 | `profiles` | list | found by fterm | See "Profiles". |
@@ -109,6 +110,7 @@ profiles = {
 | `cwd` | The start folder. `~` is your home folder. |
 | `env` | More environment variables. |
 | `wsl` | A WSL distro (for example `"Ubuntu"`). fterm starts `wsl.exe -d Ubuntu --cd ~` and knows that the pane has Linux folders. |
+| `harmonize` | `false`: the programs of this profile keep their exact colors (see [THEMES.md](THEMES.md#the-colors-of-programs-harmonize)). |
 | `tab_color` | A color (`#rrggbb`) for the tabs that this profile opens: a line at the top of the tab (see [Tab colors](#tab-colors)). |
 
 With no `profiles` in the config, fterm finds them itself: PowerShell 7, Windows PowerShell, cmd,
@@ -158,6 +160,7 @@ also work on other layouts (for example, Russian).
 | `sessions` (Ctrl+Shift+S), `save_session_as`, `restore_session` | Saved sessions (see [Sessions](#sessions)). |
 | `toggle_fullscreen` (Alt+Enter) | Full screen with no window frame. |
 | `choose_theme` | The list of themes; Enter uses one until fterm closes (see [THEMES.md](THEMES.md)). |
+| `toggle_original_colors` | The colors that programs chose as they are, or fitted to the theme (`harmonize`). |
 
 ### Lua functions
 A function gets an object `fterm` with these functions:

@@ -11,6 +11,8 @@ pub struct Palette {
     colors: [Rgb; COUNT],
     /// Background of selected cells.
     pub selection: Rgb,
+    /// Fits the colors that programs choose to the theme (`None` = they stay as they are).
+    harmonizer: Option<crate::harmonize::Harmonizer>,
 }
 
 /// Colors from the user config. `None` = keep the built-in color.
@@ -80,6 +82,7 @@ impl Default for Palette {
         Self {
             colors,
             selection: hex(SELECTION),
+            harmonizer: None,
         }
     }
 }
@@ -117,6 +120,14 @@ impl Palette {
     }
 
     /// Returns the color in `index`. A color set by the app (OSC 4/10/11) wins.
+    /// Fits the colors that programs choose to this palette. Strength 0 = they stay as they are.
+    pub fn set_harmonize(&mut self, settings: crate::harmonize::Settings) {
+        let mut sixteen = [Rgb::default(); 16];
+        sixteen.copy_from_slice(&self.colors[..16]);
+        let background = self.colors[NamedColor::Background as usize];
+        self.harmonizer = crate::harmonize::Harmonizer::new(settings, background, &sixteen);
+    }
+
     pub fn get(&self, index: usize, overrides: &Colors) -> Rgb {
         overrides[index].unwrap_or(self.colors[index])
     }
@@ -154,8 +165,56 @@ impl Palette {
     }
 }
 
-/// Final colors of one cell, after bold, dim, inverse, and hidden.
+/// Final colors of one cell; colors that programs choose fit the theme (when the palette says so).
+/// See `cell_colors_with`.
 pub fn cell_colors(
+    fg: Color,
+    bg: Color,
+    flags: Flags,
+    palette: &Palette,
+    overrides: &Colors,
+) -> (Rgb, Rgb) {
+    cell_colors_with(fg, bg, flags, palette, overrides, true)
+}
+
+/// Final colors of one cell, after bold, dim, inverse, and hidden. With `harmonize`, the colors that the
+/// program chose (truecolor and the 256-color cube) fit the theme, and text keeps a minimum contrast.
+pub fn cell_colors_with(
+    fg: Color,
+    bg: Color,
+    flags: Flags,
+    palette: &Palette,
+    overrides: &Colors,
+    harmonize: bool,
+) -> (Rgb, Rgb) {
+    let harmonizer = palette.harmonizer.as_ref().filter(|_| harmonize);
+    let Some(h) = harmonizer else {
+        return cell_colors_plain(fg, bg, flags, palette, overrides);
+    };
+    // Only the colors that the program chose: the first 16 are the theme already.
+    let foreign = |c: Color| match c {
+        Color::Spec(_) => true,
+        Color::Indexed(i) => i >= 16,
+        Color::Named(_) => false,
+    };
+    let mut fg_rgb = palette.fg(fg, flags, overrides);
+    let mut bg_rgb = palette.bg(bg, overrides);
+    if foreign(fg) {
+        fg_rgb = h.color(fg_rgb);
+    }
+    if foreign(bg) {
+        bg_rgb = h.color(bg_rgb);
+    }
+    if flags.contains(Flags::INVERSE) {
+        std::mem::swap(&mut fg_rgb, &mut bg_rgb);
+    }
+    if flags.contains(Flags::HIDDEN) {
+        return (bg_rgb, bg_rgb);
+    }
+    (h.readable(fg_rgb, bg_rgb), bg_rgb)
+}
+
+fn cell_colors_plain(
     fg: Color,
     bg: Color,
     flags: Flags,
@@ -248,6 +307,48 @@ mod tests {
         assert_eq!(fg, p.get(NamedColor::BrightRed as usize, &o));
         let (fg, _) = colors(Color::Indexed(1), BG, Flags::BOLD);
         assert_eq!(fg, p.get(NamedColor::BrightRed as usize, &o));
+    }
+
+    #[test]
+    fn program_colors_fit_the_theme_when_asked() {
+        use crate::harmonize::{Settings, contrast};
+        let o = Colors::default();
+        let red = Color::Spec(rgb(255, 0, 0));
+        let mut p = Palette::default();
+        let (plain, _) = cell_colors(red, BG, Flags::empty(), &p, &o);
+        assert_eq!(plain, rgb(255, 0, 0), "no harmonizer: as it is");
+        p.set_harmonize(Settings {
+            strength: 1.0,
+            min_contrast: 3.0,
+        });
+        let (fit, _) = cell_colors(red, BG, Flags::empty(), &p, &o);
+        assert_ne!(fit, rgb(255, 0, 0));
+        assert!(fit.r > fit.g && fit.r > fit.b, "still red: {fit:?}");
+        // The palette colors are the theme already.
+        let (named, _) = cell_colors(Color::Named(NamedColor::Red), BG, Flags::empty(), &p, &o);
+        assert_eq!(named, p.get(NamedColor::Red as usize, &o));
+        // The 256-color cube is the program's own too.
+        let (cube, _) = cell_colors(Color::Indexed(196), BG, Flags::empty(), &p, &o);
+        assert_ne!(cube, rgb(255, 0, 0));
+        // Off for one pane.
+        let (raw, _) = cell_colors_with(red, BG, Flags::empty(), &p, &o, false);
+        assert_eq!(raw, rgb(255, 0, 0));
+        // Text that is hard to read gets the minimum contrast.
+        let (dark, back) = cell_colors(
+            Color::Spec(rgb(0x30, 0x30, 0x50)),
+            BG,
+            Flags::empty(),
+            &p,
+            &o,
+        );
+        assert!(contrast(dark, back) >= 3.0, "{dark:?}");
+        // Hidden text stays hidden.
+        let (fg, bg) = cell_colors(red, BG, Flags::HIDDEN, &p, &o);
+        assert_eq!(fg, bg);
+        // Strength 0 takes it away.
+        p.set_harmonize(Settings::default());
+        let (plain, _) = cell_colors(red, BG, Flags::empty(), &p, &o);
+        assert_eq!(plain, rgb(255, 0, 0));
     }
 
     #[test]

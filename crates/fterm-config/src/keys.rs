@@ -208,11 +208,13 @@ pub enum BuiltinAction {
     ChooseTheme,
     /// Put the fterm hooks into the Claude Code settings (after a question).
     InstallClaudeHooks,
+    /// The colors that programs chose, as they are, or fitted to the theme (`harmonize`).
+    ToggleOriginalColors,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 51] = [
+    pub const ALL: [BuiltinAction; 52] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -264,6 +266,7 @@ impl BuiltinAction {
         Self::ToggleFullscreen,
         Self::ChooseTheme,
         Self::InstallClaudeHooks,
+        Self::ToggleOriginalColors,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -320,6 +323,7 @@ impl BuiltinAction {
             Self::ToggleFullscreen => "toggle_fullscreen",
             Self::ChooseTheme => "choose_theme",
             Self::InstallClaudeHooks => "install_claude_hooks",
+            Self::ToggleOriginalColors => "toggle_original_colors",
         };
         name.to_owned()
     }
@@ -364,6 +368,7 @@ impl BuiltinAction {
             Self::ToggleFullscreen => "Full screen on or off".to_owned(),
             Self::ChooseTheme => "Theme…".to_owned(),
             Self::InstallClaudeHooks => "Install Claude Code hooks (agent states)".to_owned(),
+            Self::ToggleOriginalColors => "Original colors of programs on or off".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -620,6 +625,14 @@ mod tests {
             keys.get(&chord("ctrl+shift+a")),
             Some(&Action::Builtin(BuiltinAction::PanelAgents))
         );
+    }
+
+    #[test]
+    fn original_colors_action() {
+        let action = BuiltinAction::from_name("toggle_original_colors").unwrap();
+        assert_eq!(action, BuiltinAction::ToggleOriginalColors);
+        assert_eq!(action.label(), "Original colors of programs on or off");
+        assert!(BuiltinAction::ALL.contains(&action));
     }
 
     #[test]
