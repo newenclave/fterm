@@ -78,6 +78,20 @@ pub struct Theme {
     pub ui: UiColors,
 }
 
+/// What the config says about the theme.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ThemeChoice {
+    /// No `theme`: the default theme.
+    #[default]
+    Default,
+    /// A built-in theme or a file in a themes folder.
+    Named(String),
+    /// A theme written in the config (a Lua table or JSON text).
+    Inline(Box<Theme>),
+    /// One theme for a light system and one for a dark system.
+    System { light: String, dark: String },
+}
+
 /// The themes in fterm itself: (file name, JSON).
 const BUILTIN: &[(&str, &str)] = &[
     (

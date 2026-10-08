@@ -12,6 +12,12 @@ return {
   -- One folder for the history, the sessions, and the shell scripts (read at start; relative to this file).
   -- data_dir = "data",
 
+  -- The theme: the colors of the terminal and the UI (see docs/THEMES.md). A name of a built-in theme or of a
+  -- file in the themes folder next to this file, or one theme for a light and one for a dark system.
+  -- theme = "Catppuccin Latte",
+  -- theme = { light = "Catppuccin Latte", dark = "Catppuccin Mocha" },
+
+  -- `colors` changes some colors of the theme.
   colors = {
     -- background = "#1e1e2e",
     -- foreground = "#cdd6f4",

@@ -405,6 +405,8 @@ pub struct Config {
     pub scrollback: usize,
     pub braille_style: BrailleStyle,
     pub colors: ColorConfig,
+    /// The theme: the colors of the terminal and the UI. `colors` changes it.
+    pub theme: crate::theme::ThemeChoice,
     /// The profile for new tabs and splits. `None` = the first profile.
     pub default_profile: Option<String>,
     /// Profiles from the config. Empty = fterm finds them itself.
@@ -453,6 +455,7 @@ impl Default for Config {
             scrollback: 10_000,
             braille_style: BrailleStyle::Pixels,
             colors: ColorConfig::default(),
+            theme: crate::theme::ThemeChoice::Default,
             default_profile: None,
             profiles: Vec::new(),
             keys: Keymap::with_defaults(),
@@ -905,6 +908,85 @@ fn spawn_place(split: Option<&str>) -> Result<SpawnWhere, String> {
     }
 }
 
+/// `theme`: a name, JSON text, `{ light = ..., dark = ... }`, or a theme as a Lua table.
+fn theme_choice(root: &Table) -> Result<crate::theme::ThemeChoice, String> {
+    use crate::theme::{Theme, ThemeChoice};
+    let inline = |json: &serde_json::Value| {
+        Theme::from_json(json)
+            .map(|t| ThemeChoice::Inline(Box::new(t)))
+            .map_err(|err| format!("theme: {err}"))
+    };
+    match root
+        .get::<Value>("theme")
+        .map_err(|err| format!("theme: {err}"))?
+    {
+        Value::Nil => Ok(ThemeChoice::Default),
+        Value::String(text) => {
+            let text = text.to_string_lossy();
+            if text.trim_start().starts_with('{') {
+                let json: serde_json::Value =
+                    serde_json::from_str(&text).map_err(|err| format!("theme: bad JSON: {err}"))?;
+                inline(&json)
+            } else {
+                Ok(ThemeChoice::Named(text.trim().to_owned()))
+            }
+        }
+        Value::Table(table) => {
+            let light = string_field(&table, "light", "theme.light")?;
+            let dark = string_field(&table, "dark", "theme.dark")?;
+            if light.is_some() || dark.is_some() {
+                return Ok(ThemeChoice::System {
+                    light: light.unwrap_or_else(|| "Catppuccin Latte".to_owned()),
+                    dark: dark.unwrap_or_else(|| crate::theme::DEFAULT_THEME.to_owned()),
+                });
+            }
+            inline(&lua_to_json(&Value::Table(table), "theme")?)
+        }
+        other => Err(format!(
+            "theme: expected a name, a table, or JSON text, got {}",
+            other.type_name()
+        )),
+    }
+}
+
+/// A Lua value as JSON: a table with keys 1..n is a list, other tables are objects.
+fn lua_to_json(value: &Value, path: &str) -> Result<serde_json::Value, String> {
+    use serde_json::Value as Json;
+    Ok(match value {
+        Value::Nil => Json::Null,
+        Value::Boolean(b) => Json::Bool(*b),
+        Value::Integer(n) => Json::from(*n),
+        Value::Number(n) => Json::from(*n),
+        Value::String(s) => Json::String(s.to_string_lossy()),
+        Value::Table(table) => {
+            let items = list(table);
+            let count = table.pairs::<Value, Value>().count();
+            if !items.is_empty() && items.len() == count {
+                Json::Array(
+                    items
+                        .iter()
+                        .map(|(i, v)| lua_to_json(v, &format!("{path}[{i}]")))
+                        .collect::<Result<_, _>>()?,
+                )
+            } else {
+                let mut map = serde_json::Map::new();
+                for pair in table.pairs::<String, Value>() {
+                    let (key, v) = pair.map_err(|err| format!("{path}: {err}"))?;
+                    let json = lua_to_json(&v, &format!("{path}.{key}"))?;
+                    map.insert(key, json);
+                }
+                Json::Object(map)
+            }
+        }
+        other => {
+            return Err(format!(
+                "{path}: expected a string, a number, or a table, got {}",
+                other.type_name()
+            ));
+        }
+    })
+}
+
 /// Reads the config table. Error messages have the path to the bad field.
 struct Reader {
     functions: Vec<Function>,
@@ -962,6 +1044,7 @@ impl Reader {
         if let Some(colors) = table_field(root, "colors", "colors")? {
             config.colors = self.colors(&colors)?;
         }
+        config.theme = theme_choice(root)?;
         config.default_profile = string_field(root, "default_profile", "default_profile")?;
         if let Some(on) = bool_field(root, "shell_integration", "shell_integration")? {
             config.shell_integration = on;
@@ -1953,6 +2036,67 @@ mod tests {
         .config;
         assert_eq!(config.font_size, 20.0);
         assert_eq!(config.profiles.len(), 2);
+    }
+
+    #[test]
+    fn the_theme_by_name_by_system_or_inline() {
+        use crate::theme::ThemeChoice;
+        assert_eq!(load("return {}").config.theme, ThemeChoice::Default);
+        assert_eq!(
+            load(r#"return { theme = "Nord" }"#).config.theme,
+            ThemeChoice::Named("Nord".into())
+        );
+        assert_eq!(
+            load(r#"return { theme = { light = "Catppuccin Latte", dark = "Nord" } }"#)
+                .config
+                .theme,
+            ThemeChoice::System {
+                light: "Catppuccin Latte".into(),
+                dark: "Nord".into()
+            }
+        );
+        // Only one of them: the other is the built-in one.
+        assert_eq!(
+            load(r#"return { theme = { dark = "Nord" } }"#).config.theme,
+            ThemeChoice::System {
+                light: "Catppuccin Latte".into(),
+                dark: "Nord".into()
+            }
+        );
+        // A theme in Lua: the same keys as the JSON.
+        let lua = load(
+            r##"return { theme = {
+              name = "Mine",
+              terminal = { background = "#101010", ansi = { "#000000", "#cc0000", "#00cc00", "#cccc00",
+                                                            "#0000cc", "#cc00cc", "#00cccc", "#cccccc" } },
+              ui = { accent = "#123456" },
+            } }"##,
+        );
+        let ThemeChoice::Inline(theme) = lua.config.theme else {
+            panic!("not inline: {:?}", lua.config.theme);
+        };
+        assert_eq!(theme.name, "Mine");
+        assert_eq!(theme.ui.accent.r, 0x12);
+        assert_eq!(theme.terminal.ansi[1].r, 0xcc);
+        assert_eq!(theme.ui.surface_active.r, 0x10, "made from the background");
+        // A theme as JSON text.
+        let json =
+            load(r##"return { theme = [[ { "name": "Json", "ui": { "accent": "#654321" } } ]] }"##);
+        let ThemeChoice::Inline(theme) = json.config.theme else {
+            panic!("not inline");
+        };
+        assert_eq!((theme.name.as_str(), theme.ui.accent.r), ("Json", 0x65));
+    }
+
+    #[test]
+    fn a_bad_theme_says_where() {
+        assert!(error(r#"return { theme = 5 }"#).contains("theme"));
+        let bad = error(r#"return { theme = { ui = { accent = "blue" } } }"#);
+        assert!(bad.contains("theme") && bad.contains("ui.accent"), "{bad}");
+        let bad = error(r#"return { theme = "{ nope" }"#);
+        assert!(bad.contains("theme") && bad.contains("JSON"), "{bad}");
+        let bad = error(r#"return { theme = { light = 5 } }"#);
+        assert!(bad.contains("theme.light"), "{bad}");
     }
 
     #[test]
