@@ -181,6 +181,9 @@ pub fn build_message_box(
         kind: KIND_SOLID,
         _pad: [0; 3],
     }];
+    // At most as wide as the view: longer lines are cut (with "…").
+    let max_cells = ((view.width / cell.width) as usize).saturating_sub(6);
+    let lines: Vec<String> = lines.iter().map(|l| fit_title(l, max_cells)).collect();
     let longest = lines
         .iter()
         .map(|l| l.chars().map(char_cells).sum::<usize>())
@@ -413,6 +416,21 @@ mod tests {
         // Text: "> ne" (3 glyphs, the space is not drawn) + "New tab" (6) + the key (12) + "Next tab" (7).
         let glyphs = quads.iter().filter(|q| q.kind == KIND_GLYPH).count();
         assert_eq!(glyphs, 3 + 6 + 12 + 7);
+    }
+
+    #[test]
+    fn a_message_box_with_a_long_line_stays_on_the_screen() {
+        let view = Rect::new(0.0, 0.0, 400.0, 300.0);
+        let lines = vec!["Short".to_owned(), "x".repeat(500)];
+        let quads = build_message_box(&lines, view, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        for q in quads.iter().skip(1) {
+            assert!(q.rect[0] >= view.x, "{:?}", q.rect);
+            assert!(
+                q.rect[0] + q.rect[2] <= view.x + view.width + 0.5,
+                "{:?}",
+                q.rect
+            );
+        }
     }
 
     #[test]
