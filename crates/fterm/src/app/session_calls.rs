@@ -187,10 +187,10 @@ impl App {
     pub(super) fn restore_question_lines(&self) -> Option<Vec<String>> {
         let entry = self.restore_offer.as_ref()?;
         Some(vec![
-            "Restore the last session?".to_owned(),
+            tr!("box.restore"),
             entry.session.describe(now_ms()),
             String::new(),
-            "Enter = restore, Esc = no (Ctrl+Shift+S: all sessions)".to_owned(),
+            tr!("box.restore_keys"),
         ])
     }
 
@@ -341,11 +341,10 @@ impl App {
     pub(super) fn name_prompt_lines(&self) -> Option<Vec<String>> {
         let input = self.name_prompt.as_ref()?;
         Some(vec![
-            "Save this session as:".to_owned(),
+            tr!("box.save_session"),
             format!("{}▏", input.text),
             String::new(),
-            "Enter = save, Esc = cancel. A saved session stays in the list (Ctrl+Shift+S)."
-                .to_owned(),
+            tr!("box.save_session_keys"),
         ])
     }
 

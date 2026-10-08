@@ -2,6 +2,7 @@
 //! Pure: what runs, what to do, and the text of the question.
 
 use fterm_config::load::ConfirmClose;
+use fterm_config::{tr, trn};
 
 /// What runs in the window now. Tab numbers start at 1.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -61,40 +62,40 @@ pub fn decide_again(
 
 /// The lines of the question box.
 pub fn question(state: &WindowState) -> Vec<String> {
-    let plural = |n: usize, word: &str| {
-        if n == 1 {
-            format!("{n} {word}")
-        } else {
-            format!("{n} {word}s")
-        }
-    };
     let mut lines = vec![
-        "Close fterm?".to_owned(),
-        format!(
-            "{}, {}.",
-            plural(state.tabs, "tab"),
-            plural(state.panes, "pane")
+        tr!("box.close_fterm"),
+        tr!(
+            "box.tabs_and_panes",
+            tabs = trn!("count.tabs", state.tabs),
+            panes = trn!("count.panes", state.panes)
         ),
     ];
     if !state.running.is_empty() {
         let list: Vec<String> = state
             .running
             .iter()
-            .map(|(tab, program)| format!("{program} (tab {tab})"))
+            .map(|(tab, program)| tr!("box.in_tab", what = program, tab = tab))
             .collect();
-        lines.push(format!("Running: {}", list.join(", ")));
+        lines.push(tr!("box.running", list = list.join(", ")));
     }
     let agents: Vec<String> = state
         .agents
         .iter()
         .filter(|(_, _, s)| s == "working" || s == "waiting")
-        .map(|(tab, name, s)| format!("{name} is {s} (tab {tab})"))
+        .map(|(tab, name, s)| {
+            let what = if s == "working" {
+                tr!("box.agent_working", name = name)
+            } else {
+                tr!("box.agent_waiting", name = name)
+            };
+            tr!("box.in_tab", what = what, tab = tab)
+        })
         .collect();
     if !agents.is_empty() {
-        lines.push(format!("Agents: {}", agents.join(", ")));
+        lines.push(tr!("box.agents", list = agents.join(", ")));
     }
     lines.push(String::new());
-    lines.push("Enter = close, Esc = cancel".to_owned());
+    lines.push(tr!("box.close_keys"));
     lines
 }
 

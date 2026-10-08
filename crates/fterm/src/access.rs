@@ -3,6 +3,7 @@
 //! A client may always use its own pane (the pane where it runs) and the panes it opened.
 //! For other panes, fterm asks the user once per client. A pane with "no remote control" is never used.
 
+use fterm_config::tr;
 use std::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,14 +46,14 @@ pub fn check(c: &Check) -> Verdict {
 /// The lines of the question box.
 pub fn question(name: &str, tab: Option<usize>) -> Vec<String> {
     let who = match tab {
-        Some(tab) => format!("{name} (tab {tab})"),
+        Some(tab) => tr!("box.in_tab", what = name, tab = tab),
         None => name.to_owned(),
     };
     vec![
-        format!("Allow {who} to read and type into other panes?"),
-        "It can see their text and run commands there.".to_owned(),
+        tr!("box.access", who = who),
+        tr!("box.access_why"),
         String::new(),
-        format!("Enter = allow, A = always allow {name}, Esc = no"),
+        tr!("box.access_keys", name = name),
     ]
 }
 

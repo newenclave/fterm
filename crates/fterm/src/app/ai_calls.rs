@@ -734,15 +734,15 @@ impl App {
         let name = self.config.config.ai.provider.clone();
         let dots: String = "•".repeat(input.text.chars().count().min(40));
         Some(vec![
-            format!("The API key for {name}:"),
+            tr!("box.ai_key", provider = name),
             if dots.is_empty() {
-                "(paste it with Ctrl+V)".to_owned()
+                tr!("box.ai_key_paste")
             } else {
                 dots
             },
             String::new(),
-            "It goes to the Windows Credential Manager, not to a file.".to_owned(),
-            "Enter = save, Esc = cancel (an empty key deletes the saved one)".to_owned(),
+            tr!("box.ai_key_where"),
+            tr!("box.ai_key_keys"),
         ])
     }
 

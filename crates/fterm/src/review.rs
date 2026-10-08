@@ -834,14 +834,14 @@ pub fn skipped() -> Value {
 /// The question before a plan of plan mode opens in a Review tab.
 pub fn question_lines(from: &str, title: &str) -> Vec<String> {
     let mut lines = vec![
-        format!("{from} has a plan: {title}"),
+        fterm_config::tr!("box.plan", agent = from, title = title),
         String::new(),
-        "R = review it here, item by item".to_owned(),
-        format!("Esc = the dialog of {from}"),
+        fterm_config::tr!("box.plan_review"),
+        fterm_config::tr!("box.plan_dialog", agent = from),
     ];
     if from == "claude" {
         // The dialog of Claude Code can open the plan in your editor.
-        lines.push("      (there Ctrl+G edits the plan in your editor)".to_owned());
+        lines.push(fterm_config::tr!("box.plan_editor"));
     }
     lines
 }

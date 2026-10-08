@@ -2225,16 +2225,16 @@ impl App {
             return;
         }
         let what = match target {
-            CloseTarget::Tab(_) => "Close this tab?",
-            CloseTarget::Pane(_) | CloseTarget::Window => "Close this pane?",
+            CloseTarget::Tab(_) => tr!("box.close_tab"),
+            CloseTarget::Pane(_) | CloseTarget::Window => tr!("box.close_pane"),
         };
         self.close_question = Some(CloseQuestion {
             target,
             lines: vec![
-                what.to_owned(),
-                format!("Running: {}", programs.join(", ")),
+                what,
+                tr!("box.running", list = programs.join(", ")),
                 String::new(),
-                "Enter = close, Esc = cancel".to_owned(),
+                tr!("box.close_keys"),
             ],
         });
         running.window.request_redraw();
@@ -3197,16 +3197,15 @@ impl App {
         self.palette = None;
         self.hooks_question = Some(HooksQuestion {
             lines: vec![
-                "Add the fterm hooks to Claude Code?".to_owned(),
+                tr!("box.hooks"),
                 String::new(),
                 shown,
-                format!("Hooks for: {}", added.join(", ")),
-                "PreToolUse (ExitPlanMode) shows the plans of plan mode in a Review tab."
-                    .to_owned(),
-                "Your other settings and hooks stay. The old file is kept".to_owned(),
-                "as settings.json.bak-fterm. New Claude Code sessions use them.".to_owned(),
+                tr!("box.hooks_for", list = added.join(", ")),
+                tr!("box.hooks_plan"),
+                tr!("box.hooks_stay"),
+                tr!("box.hooks_backup"),
                 String::new(),
-                "Enter = add, Esc = no".to_owned(),
+                tr!("box.hooks_keys"),
             ],
             path,
             text,
@@ -4874,7 +4873,7 @@ fn edge_of(action: BuiltinAction) -> Edge {
 /// An error as lines for the message box (long lines are cut into parts).
 fn error_lines(error: &str) -> Vec<String> {
     const WIDTH: usize = 90;
-    let mut lines = vec!["Config error:".to_owned(), String::new()];
+    let mut lines = vec![tr!("box.config_error"), String::new()];
     for line in error.lines() {
         let chars: Vec<char> = line.chars().collect();
         for part in chars.chunks(WIDTH) {
@@ -4882,9 +4881,7 @@ fn error_lines(error: &str) -> Vec<String> {
         }
     }
     lines.push(String::new());
-    lines.push(
-        "The old config is still used. Fix the file and save it. Any key closes this.".to_owned(),
-    );
+    lines.push(tr!("box.config_error_end"));
     lines
 }
 
