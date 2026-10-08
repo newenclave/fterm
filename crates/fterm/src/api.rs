@@ -189,10 +189,12 @@ pub struct ReviewRequest {
     pub from: String,
     pub items: Vec<crate::review::ReviewItem>,
     pub timeout: Duration,
+    /// From the Claude Code plan mode hook: `plan_review` in the config says if the review opens.
+    pub plan_mode: bool,
 }
 
 /// `review`: `title`, `from` (default: the client name), `text` (markdown) or `items` (a list of texts),
-/// `timeout_ms` (default one hour, at most a day).
+/// `timeout_ms` (default one hour, at most a day), `plan_mode` (from the plan mode hook).
 pub fn review_param(params: &Value, client_name: &str) -> Result<ReviewRequest, RpcError> {
     let items = match (str_param(params, "text")?, params.get("items")) {
         (Some(text), _) => crate::review::parse_markdown(&text),
@@ -222,6 +224,7 @@ pub fn review_param(params: &Value, client_name: &str) -> Result<ReviewRequest, 
         from: str_param(params, "from")?.unwrap_or_else(|| client_name.to_owned()),
         items,
         timeout: review_timeout(params),
+        plan_mode: bool_param(params, "plan_mode")?.unwrap_or(false),
     })
 }
 
@@ -378,6 +381,10 @@ mod tests {
             "no items"
         );
         assert!(review_param(&json!({"items": "a"}), "x").is_err());
+        assert!(!r.plan_mode, "not from the plan mode hook");
+        let hook = review_param(&json!({"items": ["a"], "plan_mode": true}), "x").unwrap();
+        assert!(hook.plan_mode, "the plan mode hook");
+        assert!(review_param(&json!({"items": ["a"], "plan_mode": 1}), "x").is_err());
         // The server waits as long as the review.
         assert_eq!(
             timeout_for("review", &json!({"timeout_ms": 1000})),

@@ -60,6 +60,7 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `gpu` | table | `{ backend = "auto", power = "high" }` | The GPU that draws the window. See "The GPU". |
 | `data_dir` | string | the folders of the user | One folder for the history, the sessions, and the shell scripts. See "A portable fterm". |
 | `theme` | string or table | `"Catppuccin Mocha"` | All colors: the terminal and the UI. See [THEMES.md](THEMES.md). |
+| `plan_review` | `"ask"`, `"always"`, `"never"` | `"ask"` | When a plan of Claude Code plan mode opens in a Review tab: fterm asks first (R = review, Esc = the dialog of Claude), each time, or never. See [REVIEW.md](REVIEW.md#claude-code-plan-mode). |
 | `palette_changes` | true / false | `true` | Programs may change the 16 colors (OSC 4, 10, 11), like Far Manager does. `false` = the theme's colors stay. A profile can have its own `palette_changes`. See [THEMES.md](THEMES.md#the-colors-of-programs-harmonize). |
 | `harmonize` | table | the theme | `{ strength = 0.6, min_contrast = 3 }`: fit the colors that programs choose to the theme. See [THEMES.md](THEMES.md#the-colors-of-programs-harmonize). |
 | `colors` | table | the theme | Change some terminal colors of the theme. See "Colors". |
@@ -164,6 +165,7 @@ also work on other layouts (for example, Russian).
 | `choose_theme` | The list of themes; Enter uses one until fterm closes (see [THEMES.md](THEMES.md)). |
 | `toggle_original_colors` | The colors that programs chose as they are, or fitted to the theme (`harmonize`). |
 | `harmonize_more`, `harmonize_less` (Ctrl+Shift+], Ctrl+Shift+[) | Try a stronger or weaker `harmonize` (steps of 0.1) until the config changes. |
+| `plan_review_mode` | The next `plan_review` mode (ask → always → never), until the config changes. |
 
 ### Lua functions
 A function gets an object `fterm` with these functions:

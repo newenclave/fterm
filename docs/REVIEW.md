@@ -53,12 +53,26 @@ Other keys (tabs, the palette) work as usual.
 ## Claude Code plan mode
 In the command palette run **Install Claude Code hooks (agent states)** (see [CLAUDE.md](CLAUDE.md)). It also adds
 a `PreToolUse` hook for `ExitPlanMode`. Then, when Claude finishes a plan in plan mode:
-- fterm shows the plan in a Review tab;
+- fterm asks first: **R** shows the plan in a Review tab, **Esc** gives the plan dialog of Claude. With no answer in
+  2 minutes, Claude shows its own dialog too;
 - **approved** → the plan is accepted, and Claude starts the work;
 - **changes** → Claude gets your feedback, stays in plan mode, and makes a new plan (which comes back to you);
 - **cancelled**, or Claude runs outside fterm → Claude shows its own plan dialog, as usual.
 
 The hook waits for you up to one hour. It runs `ftermctl review --hook` (ftermctl is next to fterm.exe).
+
+You choose when the Review tab opens with `plan_review` in `fterm.lua`:
+
+```lua
+plan_review = "ask",     -- the default: fterm asks each time (R = review, Esc = the dialog of Claude)
+plan_review = "always",  -- each plan opens in a Review tab
+plan_review = "never",   -- Claude shows its own dialog; the hook does nothing
+```
+
+The palette action **Review the plans of Claude Code: ask, always, never** (`plan_review_mode`) changes the mode
+while fterm runs: ask → always → never → ask. A toast says the new mode. It lasts until the config changes or
+fterm closes. `plan_review` is only for the plans of plan mode: when you ask an agent to show a plan
+(`review_plan`), or a script runs `ftermctl review`, the Review tab always opens.
 
 ## Other agents and scripts
 - MCP tool `review_plan` with `plan` (markdown) and `title` (see [MCP.md](MCP.md)).

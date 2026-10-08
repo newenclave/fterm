@@ -251,15 +251,8 @@ fn run_review(
         }
         (None, None) => return Err("review needs a file".to_owned()),
     };
-    let mut params = json!({
-        "title": title.map_or_else(|| review::plan_title(&plan), str::to_owned),
-        "text": plan,
-    });
-    if let Some(ms) = timeout_ms {
-        params["timeout_ms"] = json!(ms);
-    }
+    let params = review::params(&plan, title, timeout_ms, hook);
     if hook {
-        params["from"] = json!("claude");
         // A hook outside fterm (or with no window) gives no answer.
         if std::env::var_os("FTERM_SOCKET").is_none() && cli.window.is_none() {
             return Ok(ExitCode::SUCCESS);

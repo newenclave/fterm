@@ -805,9 +805,76 @@ pub fn render(
     out
 }
 
+/// What a `review` call does now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Start {
+    /// Open the Review tab.
+    Open,
+    /// Ask the user first.
+    Ask,
+    /// No review: the caller (the plan mode hook) lets Claude Code show its own dialog.
+    Skip,
+}
+
+/// A plan of the plan mode hook follows `plan_review`; a review that an agent or a script asked for opens.
+pub fn start(plan_mode: bool, mode: fterm_config::load::PlanReview) -> Start {
+    use fterm_config::load::PlanReview as P;
+    match (plan_mode, mode) {
+        (false, _) | (true, P::Always) => Start::Open,
+        (true, P::Ask) => Start::Ask,
+        (true, P::Never) => Start::Skip,
+    }
+}
+
+/// The answer when there is no review.
+pub fn skipped() -> Value {
+    json!({ "decision": "skipped", "feedback": "", "items": [] })
+}
+
+/// The question before a plan of plan mode opens in a Review tab.
+pub fn question_lines(from: &str, title: &str) -> Vec<String> {
+    vec![
+        format!("{from} has a plan: {title}"),
+        String::new(),
+        "R = review it here, item by item".to_owned(),
+        format!("Esc = the dialog of {from}"),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plan_of_plan_mode_follows_plan_review() {
+        use fterm_config::load::PlanReview as P;
+        assert_eq!(start(true, P::Always), Start::Open);
+        assert_eq!(start(true, P::Ask), Start::Ask);
+        assert_eq!(start(true, P::Never), Start::Skip);
+        // An agent or a script asked for the review itself: it always opens.
+        for mode in [P::Always, P::Ask, P::Never] {
+            assert_eq!(start(false, mode), Start::Open);
+        }
+    }
+
+    #[test]
+    fn a_skipped_review() {
+        let out = skipped();
+        assert_eq!(out["decision"], "skipped");
+        assert_eq!(out["items"], json!([]));
+    }
+
+    #[test]
+    fn the_question_before_a_plan_review() {
+        let lines = question_lines("claude", "Themes");
+        assert_eq!(lines[0], "claude has a plan: Themes");
+        assert!(lines.iter().any(|l| l.contains("R = review it here")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("Esc = the dialog of claude"))
+        );
+    }
 
     const PLAN: &str = "# Themes for fterm
 

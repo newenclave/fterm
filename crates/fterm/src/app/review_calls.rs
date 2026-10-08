@@ -8,7 +8,8 @@ use serde_json::Value;
 
 use super::*;
 use crate::api::ApiRequest;
-use crate::review::{Decision, Outcome, Review};
+use crate::review::{Decision, Outcome, Review, Start};
+use fterm_config::load::PlanReview;
 
 /// A review in a tab, and the grid size it was last drawn for.
 pub(super) struct ReviewPane {
@@ -24,8 +25,24 @@ pub(super) struct PendingReview {
     pub reply: std::sync::mpsc::Sender<Result<Value, RpcError>>,
 }
 
+/// "Review the plan here?" before a plan of plan mode opens (`plan_review = "ask"`).
+pub(super) struct PlanQuestion {
+    pub request: ApiRequest,
+    pub asked: crate::api::ReviewRequest,
+    pub near: Option<PaneId>,
+    /// No answer by then: the dialog of the agent.
+    pub deadline: Instant,
+    /// The time of the review counts from the call.
+    pub review_deadline: Instant,
+    pub lines: Vec<String>,
+}
+
+/// How long the question waits for R or Esc.
+const QUESTION_TIME: std::time::Duration = std::time::Duration::from_secs(120);
+
 impl App {
     /// `review`: opens a Review tab; the answer comes when the user sends it, closes the tab, or the time ends.
+    /// A plan of the plan mode hook follows `plan_review`: it may ask first, or not open.
     pub(super) fn api_review(&mut self, event_loop: &ActiveEventLoop, request: ApiRequest) {
         let client = self.api_clients.get(&request.client);
         let name = client.map_or("an agent".to_owned(), |c| c.name.clone());
@@ -43,6 +60,109 @@ impl App {
                 return;
             }
         };
+        let now = Instant::now();
+        let review_deadline = now + asked.timeout;
+        match crate::review::start(asked.plan_mode, self.plan_review()) {
+            Start::Open => self.start_review(event_loop, request, asked, near, review_deadline),
+            Start::Skip => {
+                let _ = request.reply.send(Ok(crate::review::skipped()));
+            }
+            Start::Ask => {
+                let lines = crate::review::question_lines(&asked.from, &asked.title);
+                let title = lines[0].clone();
+                let body = format!("R = review it in fterm, Esc = the dialog of {}", asked.from);
+                self.plan_questions.push(PlanQuestion {
+                    request,
+                    asked,
+                    near,
+                    deadline: now + QUESTION_TIME,
+                    review_deadline,
+                    lines,
+                });
+                self.notify(near, &title, &body, Level::Attention, Source::App);
+                if let Some(running) = &self.running {
+                    running.window.request_redraw();
+                }
+            }
+        }
+    }
+
+    /// `plan_review` now: a mode chosen in the palette, else the config.
+    pub(super) fn plan_review(&self) -> PlanReview {
+        self.plan_review_live
+            .unwrap_or(self.config.config.plan_review)
+    }
+
+    /// `plan_review_mode`: the next mode, with a toast.
+    pub(super) fn step_plan_review(&mut self) {
+        let mode = self.plan_review().next();
+        self.plan_review_live = Some(mode);
+        let what = match mode {
+            PlanReview::Always => "Each plan of plan mode opens in a Review tab.",
+            PlanReview::Ask => "fterm asks first: R = review, Esc = the dialog of Claude Code.",
+            PlanReview::Never => "Claude Code shows its own dialog.",
+        };
+        let body = format!(
+            "{what} plan_review = \"{}\" in fterm.lua keeps it.",
+            mode.name()
+        );
+        let title = format!("Plan review: {}", mode.name());
+        self.notify(None, &title, &body, Level::Info, Source::App);
+    }
+
+    /// The lines of the first open plan question.
+    pub(super) fn plan_question_lines(&self) -> Option<Vec<String>> {
+        self.plan_questions.first().map(|q| q.lines.clone())
+    }
+
+    /// Keys while a plan question is open: R reviews, Esc gives the dialog of the agent.
+    pub(super) fn plan_question_key(&mut self, event_loop: &ActiveEventLoop, event: &KeyEvent) {
+        let review = match &event.logical_key {
+            Key::Character(c) if c.eq_ignore_ascii_case("r") => true,
+            Key::Named(NamedKey::Escape) => false,
+            _ => return,
+        };
+        if self.plan_questions.is_empty() {
+            return;
+        }
+        let q = self.plan_questions.remove(0);
+        if review {
+            self.start_review(event_loop, q.request, q.asked, q.near, q.review_deadline);
+        } else {
+            let _ = q.request.reply.send(Ok(crate::review::skipped()));
+        }
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// Plan questions with no answer in time: the dialog of the agent. Gives the next deadline.
+    pub(super) fn expire_plan_questions(&mut self, now: Instant) -> Option<Instant> {
+        let (over, waiting): (Vec<PlanQuestion>, Vec<PlanQuestion>) =
+            std::mem::take(&mut self.plan_questions)
+                .into_iter()
+                .partition(|q| q.deadline <= now);
+        self.plan_questions = waiting;
+        if !over.is_empty()
+            && let Some(running) = &self.running
+        {
+            running.window.request_redraw();
+        }
+        for q in over {
+            let _ = q.request.reply.send(Ok(crate::review::skipped()));
+        }
+        self.plan_questions.iter().map(|q| q.deadline).min()
+    }
+
+    /// Opens the Review tab of a request, and waits for the user.
+    fn start_review(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        request: ApiRequest,
+        asked: crate::api::ReviewRequest,
+        near: Option<PaneId>,
+        deadline: Instant,
+    ) {
         let review = Review::new(&asked.title, &asked.from, asked.items);
         let Some(pane) = self.open_review(event_loop, review, near) else {
             let _ = request
@@ -53,7 +173,7 @@ impl App {
         self.reviews.push(PendingReview {
             pane,
             client: request.client,
-            deadline: Instant::now() + asked.timeout,
+            deadline,
             reply: request.reply,
         });
     }

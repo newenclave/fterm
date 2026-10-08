@@ -6,6 +6,12 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 
 ## [Unreleased]
 
+### Changed
+- **The Review tab for plans of Claude Code plan mode opens only when you want it.** fterm asks first:
+  R opens the Review tab, Esc (or no answer in 2 minutes) gives the plan dialog of Claude. `plan_review = "always"`
+  or `"never"` in the config changes this, and the palette action `plan_review_mode` changes it while fterm runs.
+  An agent or a script that asks for a review itself (`review_plan`, `ftermctl review`) still gets the tab.
+
 ## [0.2.0] - 2026-10-08
 
 More for agents (plan reviews, screenshots, colored text, the AI panel), themes for the whole window,

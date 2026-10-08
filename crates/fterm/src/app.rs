@@ -380,6 +380,10 @@ pub struct App {
     harmonize_live: Option<f32>,
     /// The notification that shows the value being tried (it changes, not a new one per step).
     harmonize_note: Option<u64>,
+    /// `plan_review_mode`: a mode chosen in the palette, until the config changes.
+    plan_review_live: Option<fterm_config::load::PlanReview>,
+    /// "Review the plan here?" questions (`plan_review = "ask"`); the first one is shown.
+    plan_questions: Vec<review_calls::PlanQuestion>,
     /// A message box (for example, an error in the config). Any key closes it.
     message: Option<Vec<String>>,
     /// Editors save in several steps: we load the config a moment after the last change.
@@ -495,6 +499,8 @@ impl App {
             system_dark: true,
             original_colors: false,
             harmonize_live: None,
+            plan_review_live: None,
+            plan_questions: Vec::new(),
             harmonize_note: None,
             message,
             reload_at: None,
@@ -1500,6 +1506,7 @@ impl App {
                 self.apply_notification_config();
                 self.theme_override = None;
                 self.harmonize_live = None;
+                self.plan_review_live = None;
                 self.load_theme();
                 self.apply_config();
                 // Say which file it read: with FTERM_CONFIG it is not always the one you think.
@@ -2436,6 +2443,7 @@ impl App {
             A::Zoom => running.mux.toggle_zoom(),
             A::HarmonizeMore => return self.step_harmonize(1),
             A::HarmonizeLess => return self.step_harmonize(-1),
+            A::PlanReviewMode => return self.step_plan_review(),
             A::ToggleOriginalColors => {
                 self.original_colors = !self.original_colors;
                 let (title, body) = if self.original_colors {
@@ -3905,6 +3913,7 @@ impl App {
             .or_else(|| self.access_question_lines())
             .or_else(|| self.close_question.as_ref().map(|q| q.lines.clone()))
             .or_else(|| self.hooks_question.as_ref().map(|q| q.lines.clone()))
+            .or_else(|| self.plan_question_lines())
             .or_else(|| self.message.clone());
         let hovered = self.toast_under_mouse().map(|(id, _)| id);
         let toast_layout = self.toast_layout();
@@ -4468,6 +4477,9 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(at) = self.expire_reviews(now) {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
+        if let Some(at) = self.expire_plan_questions(now) {
+            wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
+        }
         if self.running.is_some() {
             let at = self.autosave(now);
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
@@ -4578,6 +4590,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if self.hooks_question.is_some() {
                     self.hooks_question_key(&event);
+                    return;
+                }
+                if !self.plan_questions.is_empty() {
+                    self.plan_question_key(event_loop, &event);
                     return;
                 }
                 if self.palette.is_some() {

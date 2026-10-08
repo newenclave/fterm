@@ -292,6 +292,38 @@ pub enum ConfirmClose {
     Never,
 }
 
+/// When a plan of Claude Code plan mode (the `ExitPlanMode` hook) opens a Review tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlanReview {
+    /// Each time.
+    Always,
+    /// fterm asks first: R = review, Esc = the dialog of Claude Code.
+    #[default]
+    Ask,
+    /// Never: Claude Code shows its own dialog.
+    Never,
+}
+
+impl PlanReview {
+    /// The name in the config.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::Ask => "ask",
+            Self::Never => "never",
+        }
+    }
+
+    /// The next mode (for the palette action): ask, always, never, and ask again.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Ask => Self::Always,
+            Self::Always => Self::Never,
+            Self::Never => Self::Ask,
+        }
+    }
+}
+
 /// What runs in the window, for `on_close_window`. Tab numbers start at 1.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CloseIn {
@@ -411,6 +443,8 @@ pub struct Config {
     pub harmonize: HarmonizeConfig,
     /// Programs may change the palette colors (OSC 4, 10, 11). `false` = the theme's colors stay.
     pub palette_changes: bool,
+    /// When a plan of Claude Code plan mode opens a Review tab.
+    pub plan_review: PlanReview,
     /// The profile for new tabs and splits. `None` = the first profile.
     pub default_profile: Option<String>,
     /// Profiles from the config. Empty = fterm finds them itself.
@@ -462,6 +496,7 @@ impl Default for Config {
             theme: crate::theme::ThemeChoice::Default,
             harmonize: HarmonizeConfig::default(),
             palette_changes: true,
+            plan_review: PlanReview::default(),
             default_profile: None,
             profiles: Vec::new(),
             keys: Keymap::with_defaults(),
@@ -1060,6 +1095,18 @@ impl Reader {
         config.theme = theme_choice(root)?;
         if let Some(on) = bool_field(root, "palette_changes", "palette_changes")? {
             config.palette_changes = on;
+        }
+        if let Some(mode) = string_field(root, "plan_review", "plan_review")? {
+            config.plan_review = match mode.as_str() {
+                "always" => PlanReview::Always,
+                "ask" => PlanReview::Ask,
+                "never" => PlanReview::Never,
+                other => {
+                    return Err(format!(
+                        "plan_review: must be \"always\", \"ask\", or \"never\", got `{other}`"
+                    ));
+                }
+            };
         }
         if let Some(table) = table_field(root, "harmonize", "harmonize")? {
             let number = |key: &str| -> Result<Option<f32>, String> {
@@ -2070,6 +2117,32 @@ mod tests {
         .config;
         assert_eq!(config.font_size, 20.0);
         assert_eq!(config.profiles.len(), 2);
+    }
+
+    #[test]
+    fn when_a_plan_of_plan_mode_opens_a_review() {
+        assert_eq!(load("return {}").config.plan_review, PlanReview::Ask);
+        assert_eq!(
+            load(r#"return { plan_review = "always" }"#)
+                .config
+                .plan_review,
+            PlanReview::Always
+        );
+        assert_eq!(
+            load(r#"return { plan_review = "never" }"#)
+                .config
+                .plan_review,
+            PlanReview::Never
+        );
+        assert!(error(r#"return { plan_review = "yes" }"#).contains("plan_review"));
+    }
+
+    #[test]
+    fn the_plan_review_modes_go_round() {
+        assert_eq!(PlanReview::Ask.next(), PlanReview::Always);
+        assert_eq!(PlanReview::Always.next(), PlanReview::Never);
+        assert_eq!(PlanReview::Never.next(), PlanReview::Ask);
+        assert_eq!(PlanReview::Never.name(), "never");
     }
 
     #[test]

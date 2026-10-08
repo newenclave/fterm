@@ -28,6 +28,23 @@ pub fn plan_title(plan: &str) -> String {
         .unwrap_or_else(|| "Plan".to_owned())
 }
 
+/// The params of the `review` call. A hook says `plan_mode`, so `plan_review` in the config decides
+/// if the review opens.
+pub fn params(plan: &str, title: Option<&str>, timeout_ms: Option<u64>, hook: bool) -> Value {
+    let mut params = json!({
+        "title": title.map_or_else(|| plan_title(plan), str::to_owned),
+        "text": plan,
+    });
+    if let Some(ms) = timeout_ms {
+        params["timeout_ms"] = json!(ms);
+    }
+    if hook {
+        params["from"] = json!("claude");
+        params["plan_mode"] = json!(true);
+    }
+    params
+}
+
 /// The answer of the hook to Claude Code: approved = allow (with the same input), changes = deny with
 /// the feedback (Claude revises the plan), cancelled = no answer (the normal dialog) (stub).
 pub fn hook_answer(input: &Value, result: &Value) -> Option<Value> {
@@ -102,5 +119,21 @@ mod tests {
         assert_eq!(out["permissionDecisionReason"], "changes text");
 
         assert_eq!(hook_answer(&input(), &result("cancelled")), None);
+        // plan_review = "never", or Esc on the question: Claude shows its own dialog.
+        assert_eq!(hook_answer(&input(), &result("skipped")), None);
+    }
+
+    #[test]
+    fn the_params_of_a_review() {
+        let p = params("# Themes\n- one", None, None, false);
+        assert_eq!(p["title"], "Themes");
+        assert_eq!(p["text"], "# Themes\n- one");
+        assert!(p.get("plan_mode").is_none(), "a script asks itself");
+        assert!(p.get("timeout_ms").is_none());
+        let p = params("- one", Some("Mine"), Some(5), true);
+        assert_eq!(p["title"], "Mine");
+        assert_eq!(p["timeout_ms"], 5);
+        assert_eq!(p["from"], "claude");
+        assert_eq!(p["plan_mode"], true, "plan_review in the config decides");
     }
 }

@@ -214,11 +214,13 @@ pub enum BuiltinAction {
     HarmonizeMore,
     /// One step back to their own colors (strength - 0.1).
     HarmonizeLess,
+    /// When a plan of Claude Code plan mode opens a Review tab: ask, always, never (round).
+    PlanReviewMode,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 54] = [
+    pub const ALL: [BuiltinAction; 55] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -273,6 +275,7 @@ impl BuiltinAction {
         Self::ToggleOriginalColors,
         Self::HarmonizeMore,
         Self::HarmonizeLess,
+        Self::PlanReviewMode,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -332,6 +335,7 @@ impl BuiltinAction {
             Self::ToggleOriginalColors => "toggle_original_colors",
             Self::HarmonizeMore => "harmonize_more",
             Self::HarmonizeLess => "harmonize_less",
+            Self::PlanReviewMode => "plan_review_mode",
         };
         name.to_owned()
     }
@@ -382,6 +386,9 @@ impl BuiltinAction {
             }
             Self::HarmonizeLess => {
                 "Harmonize: less (program colors closer to their own)".to_owned()
+            }
+            Self::PlanReviewMode => {
+                "Review the plans of Claude Code: ask, always, never".to_owned()
             }
             other => {
                 let name = other.name().replace('_', " ");
@@ -665,6 +672,17 @@ mod tests {
                 .starts_with("Harmonize: more")
         );
         assert!(BuiltinAction::ALL.contains(&BuiltinAction::HarmonizeLess));
+    }
+
+    #[test]
+    fn plan_review_mode_action() {
+        let action = BuiltinAction::from_name("plan_review_mode").unwrap();
+        assert_eq!(action, BuiltinAction::PlanReviewMode);
+        assert_eq!(
+            action.label(),
+            "Review the plans of Claude Code: ask, always, never"
+        );
+        assert!(BuiltinAction::ALL.contains(&action));
     }
 
     #[test]
