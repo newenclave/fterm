@@ -17,6 +17,10 @@ return {
   -- theme = "Catppuccin Latte",
   -- theme = { light = "Catppuccin Latte", dark = "Catppuccin Mocha" },
 
+  -- The language of the UI (see docs/L10N.md): a file l10n/<code>.json next to this file. English when
+  -- it is not set. "system" = the language of the system, if there is a file for it.
+  -- language = "ru",
+
   -- `colors` changes some colors of the theme.
   colors = {
     -- background = "#1e1e2e",

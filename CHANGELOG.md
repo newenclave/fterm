@@ -6,6 +6,13 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 
 ## [Unreleased]
 
+### Added
+- **The UI in your language.** All texts of the window (the palette, toasts, questions, the dock, the Review tab,
+  the AI panel, the history lists, the window title) come from a language file. English is built in; another
+  language is a JSON file `l10n/<code>.json` next to `fterm.lua`, chosen with `language = "ru"` (or
+  `"system"`). A text that the file does not have stays English, and plural forms follow the rules of the
+  language. The archive has `l10n/en.json` to start a translation. See docs/L10N.md.
+
 ### Changed
 - **The Review tab for plans of Claude Code plan mode opens only when you want it.** fterm asks first:
   R opens the Review tab, Esc (or no answer in 2 minutes) gives the plan dialog of Claude (there Ctrl+G edits

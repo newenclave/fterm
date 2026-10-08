@@ -60,6 +60,7 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `gpu` | table | `{ backend = "auto", power = "high" }` | The GPU that draws the window. See "The GPU". |
 | `data_dir` | string | the folders of the user | One folder for the history, the sessions, and the shell scripts. See "A portable fterm". |
 | `theme` | string or table | `"Catppuccin Mocha"` | All colors: the terminal and the UI. See [THEMES.md](THEMES.md). |
+| `language` | a code (`"ru"`), `"system"`, or a path to a `.json` | English | The language of the UI: a file `l10n/<code>.json` next to `fterm.lua`. See [L10N.md](L10N.md). |
 | `plan_review` | `"ask"`, `"always"`, `"never"` | `"ask"` | When a plan of Claude Code plan mode opens in a Review tab: fterm asks first (R = review, Esc = the dialog of Claude), each time, or never. See [REVIEW.md](REVIEW.md#claude-code-plan-mode). |
 | `palette_changes` | true / false | `true` | Programs may change the 16 colors (OSC 4, 10, 11), like Far Manager does. `false` = the theme's colors stay. A profile can have its own `palette_changes`. See [THEMES.md](THEMES.md#the-colors-of-programs-harmonize). |
 | `harmonize` | table | the theme | `{ strength = 0.6, min_contrast = 3 }`: fit the colors that programs choose to the theme. See [THEMES.md](THEMES.md#the-colors-of-programs-harmonize). |

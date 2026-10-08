@@ -55,6 +55,8 @@ def files(bin_dir: Path, system: str) -> list[tuple[Path, str]]:
         # The built-in themes, as examples for your own: copy one and change it.
         (ROOT / "assets/themes/catppuccin-mocha.json", "themes/catppuccin-mocha.json"),
         (ROOT / "assets/themes/catppuccin-latte.json", "themes/catppuccin-latte.json"),
+        # The English texts, as a start for a translation: copy it to ru.json (or another code) and change it.
+        (ROOT / "assets/l10n/en.json", "l10n/en.json"),
     ]
     if system == "linux":
         out += [(ROOT / "assets/linux/fterm.desktop", "fterm.desktop"), (ROOT / "assets/icon/fterm-256.png", "fterm.png")]
