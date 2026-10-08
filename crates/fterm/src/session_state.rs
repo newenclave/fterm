@@ -157,25 +157,15 @@ impl SavedSession {
 
     /// The text of the question: "4 tabs, 7 panes, saved 10 min ago".
     pub fn describe(&self, now: u64) -> String {
-        let plural = |n: usize, word: &str| {
-            if n == 1 {
-                format!("1 {word}")
-            } else {
-                format!("{n} {word}s")
-            }
-        };
-        let age = crate::panels::short_ago(std::time::Duration::from_millis(
-            now.saturating_sub(self.saved),
-        ));
-        let when = if age == "now" {
-            "saved now".to_owned()
-        } else {
-            format!("saved {age} ago")
-        };
-        format!(
-            "{}, {}, {when}",
-            plural(self.tabs.len(), "tab"),
-            plural(self.pane_count(), "pane")
+        let when = crate::panels::long_ago(
+            std::time::Duration::from_millis(now.saturating_sub(self.saved)),
+            false,
+        );
+        fterm_config::tr!(
+            "session.describe",
+            tabs = fterm_config::trn!("count.tabs", self.tabs.len()),
+            panes = fterm_config::trn!("count.panes", self.pane_count()),
+            when = when
         )
     }
 }
@@ -381,20 +371,14 @@ pub fn entry_text(entry: &Entry, now: u64) -> (String, String) {
             text
         }
     };
-    let plural = |n: usize, word: &str| {
-        if n == 1 {
-            format!("1 {word}")
-        } else {
-            format!("{n} {word}s")
-        }
-    };
     let age = crate::panels::short_ago(std::time::Duration::from_millis(
         now.saturating_sub(s.saved),
     ));
-    let hint = format!(
-        "{}, {} · {age}",
-        plural(s.tabs.len(), "tab"),
-        plural(s.pane_count(), "pane")
+    let hint = fterm_config::tr!(
+        "session.row",
+        tabs = fterm_config::trn!("count.tabs", s.tabs.len()),
+        panes = fterm_config::trn!("count.panes", s.pane_count()),
+        ago = age
     );
     (text, hint)
 }
@@ -439,7 +423,8 @@ pub fn intro_bytes(lines: &[String], ago: &str) -> Vec<u8> {
         out.extend(line.chars().filter(|c| !c.is_control()));
         out.push_str("\r\n");
     }
-    out.push_str(&format!("── restored · saved {ago} ──\x1b[0m\r\n"));
+    out.push_str(&fterm_config::tr!("session.restored", ago = ago));
+    out.push_str("\x1b[0m\r\n");
     out.into_bytes()
 }
 

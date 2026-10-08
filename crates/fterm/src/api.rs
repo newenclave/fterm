@@ -220,7 +220,7 @@ pub fn review_param(params: &Value, client_name: &str) -> Result<ReviewRequest, 
         ));
     }
     Ok(ReviewRequest {
-        title: str_param(params, "title")?.unwrap_or_else(|| "Review".to_owned()),
+        title: str_param(params, "title")?.unwrap_or_else(|| fterm_config::tr!("review.title")),
         from: str_param(params, "from")?.unwrap_or_else(|| client_name.to_owned()),
         items,
         timeout: review_timeout(params),
@@ -247,7 +247,7 @@ pub fn theme_param(params: &Value) -> Result<crate::themes::Override, RpcError> 
             let mut theme = fterm_config::theme::Theme::from_json(json)
                 .map_err(|err| RpcError::invalid_params(format!("theme: {err}")))?;
             if theme.name.is_empty() {
-                theme.name = "From the API".to_owned();
+                theme.name = fterm_config::tr!("theme.from_api");
             }
             Ok(Override::Inline(Box::new(theme)))
         }

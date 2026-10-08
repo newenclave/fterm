@@ -186,7 +186,7 @@ impl App {
         let running = self.running.as_mut()?;
         let size = running.grid_for(running.tab_area());
         let id = running.mux.new_pane_id();
-        let title = format!("Review: {}", review.title);
+        let title = tr!("review.tab", title = review.title);
         running.panes.insert(
             id,
             Pane {
@@ -220,7 +220,7 @@ impl App {
         tracing::info!(pane = id.0, %title, "new review");
         self.draw_reviews();
         // A yellow dot and a notification: the user must act.
-        self.agent_state(event_loop, id, "waiting", "a plan to review");
+        self.agent_state(event_loop, id, "waiting", &tr!("review.waiting"));
         self.tab_changed();
         Some(id)
     }

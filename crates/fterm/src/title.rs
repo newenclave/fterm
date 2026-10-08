@@ -27,10 +27,10 @@ pub fn default_title(info: &TitleInfo) -> String {
     }
     let mut status = Vec::new();
     if info.waiting > 0 {
-        status.push(format!("⏳ {} waiting", info.waiting));
+        status.push(fterm_config::tr!("title.waiting", n = info.waiting));
     }
     if info.failed > 0 {
-        status.push(format!("✗ {} failed", info.failed));
+        status.push(fterm_config::tr!("title.failed", n = info.failed));
     }
     if !status.is_empty() {
         title = format!("{title} — {}", status.join(" · "));
