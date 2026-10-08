@@ -833,12 +833,17 @@ pub fn skipped() -> Value {
 
 /// The question before a plan of plan mode opens in a Review tab.
 pub fn question_lines(from: &str, title: &str) -> Vec<String> {
-    vec![
+    let mut lines = vec![
         format!("{from} has a plan: {title}"),
         String::new(),
         "R = review it here, item by item".to_owned(),
         format!("Esc = the dialog of {from}"),
-    ]
+    ];
+    if from == "claude" {
+        // The dialog of Claude Code can open the plan in your editor.
+        lines.push("      (there Ctrl+G edits the plan in your editor)".to_owned());
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -874,6 +879,12 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("Esc = the dialog of claude"))
         );
+        assert!(
+            lines.iter().any(|l| l.contains("Ctrl+G")),
+            "Claude Code can edit the plan in an editor"
+        );
+        let other = question_lines("opencode", "Themes");
+        assert!(!other.iter().any(|l| l.contains("Ctrl+G")), "only Claude");
     }
 
     const PLAN: &str = "# Themes for fterm

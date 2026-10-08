@@ -53,8 +53,9 @@ Other keys (tabs, the palette) work as usual.
 ## Claude Code plan mode
 In the command palette run **Install Claude Code hooks (agent states)** (see [CLAUDE.md](CLAUDE.md)). It also adds
 a `PreToolUse` hook for `ExitPlanMode`. Then, when Claude finishes a plan in plan mode:
-- fterm asks first: **R** shows the plan in a Review tab, **Esc** gives the plan dialog of Claude. With no answer in
-  2 minutes, Claude shows its own dialog too;
+- fterm asks first: **R** shows the plan in a Review tab, **Esc** gives the plan dialog of Claude (there **Ctrl+G**
+  opens the plan in your editor, so you can change its text). With no answer in 2 minutes, Claude shows its own
+  dialog too;
 - **approved** → the plan is accepted, and Claude starts the work;
 - **changes** → Claude gets your feedback, stays in plan mode, and makes a new plan (which comes back to you);
 - **cancelled**, or Claude runs outside fterm → Claude shows its own plan dialog, as usual.
