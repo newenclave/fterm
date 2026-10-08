@@ -149,6 +149,7 @@ also work on other layouts (for example, Russian).
 | `command_palette` (Ctrl+Shift+P), `reload_config` (Ctrl+Shift+F5), `open_config` (Ctrl+Shift+,) | fterm itself. |
 | `copy_claude_hooks` | Copy the Claude Code hooks for tab dots (see [CLAUDE.md](CLAUDE.md)). |
 | `install_claude_skill` | Write the fterm skill for Claude Code (see [CLAUDE.md](CLAUDE.md#the-fterm-skill)). |
+| `install_claude_hooks` | Add the fterm hooks to the Claude Code settings, after a question (see [CLAUDE.md](CLAUDE.md#set-up-the-hooks)). |
 | `new_scene` | A Braille scene on the right (see [SCENE.md](SCENE.md)). |
 | `toggle_dock`, `panel_events`, `panel_agents`, `focus_dock` | The dock and its panels (see [KEYS.md](KEYS.md)). |
 | `history_commands`, `history_dirs` | The command and folder history (Alt+F8, Alt+F12). |

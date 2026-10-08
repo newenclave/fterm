@@ -28,6 +28,12 @@ Claude Code tells fterm its state with **hooks**. Each hook prints one line of J
 `terminalSequence`, so Claude Code writes a short escape sequence to the terminal:
 `ESC ] 777 ; fterm-agent ; <state> ; <message> BEL`. There is no script and no extra program.
 
+**The easy way:** open the command palette (`Ctrl+Shift+P`) and run **Install Claude Code hooks (agent states)**.
+fterm shows which file and which hooks change, and asks first. It adds the hooks to `settings.json` in
+`CLAUDE_CONFIG_DIR` or in `~/.claude`. Your other settings and hooks stay, and the old file is kept as
+`settings.json.bak-fterm`. A second time changes nothing. Then start `claude` again.
+
+**By hand:**
 1. In fterm, open the command palette (`Ctrl+Shift+P`) and run **Copy Claude Code hooks (settings.json)**.
    Or take the file [assets/claude/hooks.json](../assets/claude/hooks.json).
 2. Open `~/.claude/settings.json` (on Windows: `%USERPROFILE%\.claude\settings.json`).

@@ -6,6 +6,7 @@ mod agent;
 mod ai_chat;
 mod api;
 mod app;
+mod claude_hooks;
 mod clipboard;
 mod close;
 mod env;

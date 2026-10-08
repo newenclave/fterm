@@ -17,6 +17,9 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 - **Agents with no hooks.** When `claude`, `opencode`, `codex`, `aider`, or `gemini` runs in a pane, it is
   in the Agents panel and has a dot on its tab. Its state comes from the window title (Claude Code shows a
   spinner while it works). Hooks, when they are set up, are more exact and win.
+- **Install the Claude Code hooks from the palette.** "Install Claude Code hooks (agent states)" adds the fterm
+  hooks to the Claude Code settings after a question. Your other settings and hooks stay, and the old file is
+  kept as `settings.json.bak-fterm`.
 - **Read a whole event.** In the Events panel, Space (or Right) opens the full text of an event, for
   example a long message from an agent. Enter goes to its pane, Ctrl + C copies it, Esc goes back.
 - **Themes.** One theme gives all colors: the terminal and the whole UI (the tab bar, the dock, toasts,
@@ -35,6 +38,7 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   dim) of the text, as the user sees it. So an agent can find red errors, or what is selected in a menu.
 
 ### Fixed
+- A message box with a very long line (for example a long path) went out of the window.
 - On Windows, after you made the window taller, PowerShell wrote what you typed one row (or more) above
   the prompt, and the old text stayed there. The rows now stay where ConPTY has them.
 - A test of the data folder failed on Linux and macOS (it used a Windows path).

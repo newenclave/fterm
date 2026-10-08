@@ -206,11 +206,13 @@ pub enum BuiltinAction {
     ToggleFullscreen,
     /// The list of themes; Enter uses one.
     ChooseTheme,
+    /// Put the fterm hooks into the Claude Code settings (after a question).
+    InstallClaudeHooks,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 50] = [
+    pub const ALL: [BuiltinAction; 51] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -261,6 +263,7 @@ impl BuiltinAction {
         Self::InstallClaudeSkill,
         Self::ToggleFullscreen,
         Self::ChooseTheme,
+        Self::InstallClaudeHooks,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -316,6 +319,7 @@ impl BuiltinAction {
             Self::InstallClaudeSkill => "install_claude_skill",
             Self::ToggleFullscreen => "toggle_fullscreen",
             Self::ChooseTheme => "choose_theme",
+            Self::InstallClaudeHooks => "install_claude_hooks",
         };
         name.to_owned()
     }
@@ -359,6 +363,7 @@ impl BuiltinAction {
             Self::InstallClaudeSkill => "Install the fterm skill for Claude Code".to_owned(),
             Self::ToggleFullscreen => "Full screen on or off".to_owned(),
             Self::ChooseTheme => "Theme…".to_owned(),
+            Self::InstallClaudeHooks => "Install Claude Code hooks (agent states)".to_owned(),
             other => {
                 let name = other.name().replace('_', " ");
                 let mut chars = name.chars();
@@ -615,6 +620,14 @@ mod tests {
             keys.get(&chord("ctrl+shift+a")),
             Some(&Action::Builtin(BuiltinAction::PanelAgents))
         );
+    }
+
+    #[test]
+    fn install_claude_hooks_action() {
+        let action = BuiltinAction::from_name("install_claude_hooks").unwrap();
+        assert_eq!(action, BuiltinAction::InstallClaudeHooks);
+        assert_eq!(action.label(), "Install Claude Code hooks (agent states)");
+        assert!(BuiltinAction::ALL.contains(&action));
     }
 
     #[test]

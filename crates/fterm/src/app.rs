@@ -328,6 +328,13 @@ struct ListView {
     bad: Vec<bool>,
 }
 
+/// "Add the fterm hooks to Claude Code?": the file and its new text.
+struct HooksQuestion {
+    path: std::path::PathBuf,
+    text: String,
+    lines: Vec<String>,
+}
+
 /// "Close the tab? A program is running."
 struct CloseQuestion {
     target: CloseTarget,
@@ -346,6 +353,7 @@ pub struct App {
     /// The tab that is being renamed, and the text typed so far.
     renaming: Option<(TabId, String)>,
     close_question: Option<CloseQuestion>,
+    hooks_question: Option<HooksQuestion>,
     config: LoadedConfig,
     config_path: std::path::PathBuf,
     /// Profiles from the config, or the ones that fterm found.
@@ -461,6 +469,7 @@ impl App {
             title_message_until: None,
             renaming: None,
             close_question: None,
+            hooks_question: None,
             config,
             config_path,
             profiles,
@@ -2242,6 +2251,9 @@ impl App {
         if action == A::RestoreSession {
             return self.restore_last_session();
         }
+        if action == A::InstallClaudeHooks {
+            return self.ask_install_hooks();
+        }
         if action == A::ChooseTheme {
             return self.open_theme_popup();
         }
@@ -2411,6 +2423,7 @@ impl App {
             | A::Sessions
             | A::SaveSessionAs
             | A::ChooseTheme
+            | A::InstallClaudeHooks
             | A::NewScene => {}
             A::ToggleRemoteControl => {
                 let Some(pane) = running.mux.active_pane() else {
@@ -2901,6 +2914,128 @@ impl App {
                     text.extend(typed.chars().filter(|c| !c.is_control()));
                 }
             }
+        }
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// `install_claude_hooks`: shows what changes in the Claude Code settings, and asks first.
+    fn ask_install_hooks(&mut self) {
+        let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from);
+        let home = fterm_config::profiles::home_dir();
+        let Some(path) = crate::claude_hooks::settings_path(config_dir.as_deref(), home.as_deref())
+        else {
+            return self.notify(None, "No home folder", "", Level::Error, Source::App);
+        };
+        let shown = path.display().to_string();
+        let settings = match std::fs::read_to_string(&path) {
+            Ok(text) if text.trim().is_empty() => serde_json::json!({}),
+            Ok(text) => match serde_json::from_str(text.trim_start_matches('\u{feff}')) {
+                Ok(value) => value,
+                Err(err) => {
+                    let body = format!("{shown}: {err}. It is not changed.");
+                    return self.notify(
+                        None,
+                        "Bad Claude Code settings",
+                        &body,
+                        Level::Error,
+                        Source::App,
+                    );
+                }
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+            Err(err) => {
+                let body = format!("{shown}: {err}");
+                return self.notify(
+                    None,
+                    "Cannot read the Claude Code settings",
+                    &body,
+                    Level::Error,
+                    Source::App,
+                );
+            }
+        };
+        let ours: serde_json::Value =
+            serde_json::from_str(crate::agent::CLAUDE_HOOKS).expect("the fterm hooks are JSON");
+        let (merged, added) = match crate::claude_hooks::merge_hooks(&settings, &ours) {
+            Ok(result) => result,
+            Err(err) => {
+                let body = format!("{shown}: {err}. It is not changed.");
+                return self.notify(
+                    None,
+                    "Cannot add the hooks",
+                    &body,
+                    Level::Error,
+                    Source::App,
+                );
+            }
+        };
+        if added.is_empty() {
+            return self.notify(
+                None,
+                "The fterm hooks are already there",
+                &shown,
+                Level::Info,
+                Source::App,
+            );
+        }
+        let text = serde_json::to_string_pretty(&merged).expect("JSON") + "\n";
+        self.palette = None;
+        self.hooks_question = Some(HooksQuestion {
+            lines: vec![
+                "Add the fterm hooks to Claude Code?".to_owned(),
+                String::new(),
+                shown,
+                format!("Hooks for: {}", added.join(", ")),
+                "Your other settings and hooks stay. The old file is kept".to_owned(),
+                "as settings.json.bak-fterm. New Claude Code sessions use them.".to_owned(),
+                String::new(),
+                "Enter = add, Esc = no".to_owned(),
+            ],
+            path,
+            text,
+        });
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// Keys while the hooks question is open.
+    fn hooks_question_key(&mut self, event: &KeyEvent) {
+        match &event.logical_key {
+            Key::Named(NamedKey::Enter) => {
+                if let Some(q) = self.hooks_question.take() {
+                    let shown = q.path.display().to_string();
+                    let written = (|| -> std::io::Result<()> {
+                        if let Some(dir) = q.path.parent() {
+                            std::fs::create_dir_all(dir)?;
+                        }
+                        if q.path.exists() {
+                            std::fs::copy(&q.path, q.path.with_extension("json.bak-fterm"))?;
+                        }
+                        std::fs::write(&q.path, &q.text)
+                    })();
+                    match written {
+                        Ok(()) => self.notify(
+                            None,
+                            "The fterm hooks are in Claude Code",
+                            &format!("{shown}. Start Claude Code again to use them."),
+                            Level::Success,
+                            Source::App,
+                        ),
+                        Err(err) => self.notify(
+                            None,
+                            "Cannot write the Claude Code settings",
+                            &format!("{shown}: {err}"),
+                            Level::Error,
+                            Source::App,
+                        ),
+                    }
+                }
+            }
+            Key::Named(NamedKey::Escape) => self.hooks_question = None,
+            _ => return,
         }
         if let Some(running) = &self.running {
             running.window.request_redraw();
@@ -3667,6 +3802,7 @@ impl App {
             .or_else(|| self.key_prompt_lines())
             .or_else(|| self.access_question_lines())
             .or_else(|| self.close_question.as_ref().map(|q| q.lines.clone()))
+            .or_else(|| self.hooks_question.as_ref().map(|q| q.lines.clone()))
             .or_else(|| self.message.clone());
         let hovered = self.toast_under_mouse().map(|(id, _)| id);
         let toast_layout = self.toast_layout();
@@ -3746,7 +3882,9 @@ impl App {
         let dock_empty = match (dock_active, dock_filter) {
             (PanelKind::Events, EventFilter::All) => "No events yet.",
             (PanelKind::Events, EventFilter::Important) => "No important events.",
-            (PanelKind::Agents, _) => "No agents. See docs/CLAUDE.md.",
+            (PanelKind::Agents, _) => {
+                "No agents. For exact states: palette → Install Claude Code hooks."
+            }
             (PanelKind::Ai, _) => "",
         };
         let dock_active_index = PanelKind::ALL
@@ -4326,6 +4464,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if self.close_question.is_some() {
                     self.close_question_key(event_loop, &event);
+                    return;
+                }
+                if self.hooks_question.is_some() {
+                    self.hooks_question_key(&event);
                     return;
                 }
                 if self.palette.is_some() {
