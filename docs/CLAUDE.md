@@ -13,6 +13,11 @@ When the state changes and you do not see that pane (it is in another tab, or ft
 fterm shows a notification: "… waits for you", "… is done", or "… failed".
 The dot for `done` and `error` goes away when you look at the pane.
 
+## Review the plans of plan mode
+The same palette action also adds a hook for `ExitPlanMode`: when Claude finishes a plan in plan mode, fterm
+shows it in a Review tab. You mark each item Ok, comment, change, add, or remove items. All Ok accepts the plan;
+anything else goes back to Claude, which makes a new plan. See [REVIEW.md](REVIEW.md).
+
 ## With no hooks
 fterm also finds an agent itself. When `claude`, `opencode`, `codex`, `aider`, or `gemini` runs in a pane
 (fterm knows the command with shell integration), the pane is in the Agents panel. Its state comes from the

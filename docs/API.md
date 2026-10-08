@@ -78,6 +78,7 @@ A missing `pane` means: the pane of the client (from `hello`), else the active p
 | `zoom` | `pane` | |
 | `set_title` | `pane`, `title` (the title of its tab; empty = the automatic title) | |
 | `set_tab_color` | `pane`, `color`: `"#rrggbb"` or `"#rgb"`; `"none"` or `null` = no color | |
+| `review` | `text` (a markdown plan) or `items` (a list of texts); `title`, `from` (default: the client name), `pane` (the pane that asks), `timeout_ms` (default one hour, at most a day). It waits for the user (see [REVIEW.md](REVIEW.md)). | `decision` (`approved`, `changes`, `cancelled`), `feedback` (text for an agent), `items` (`text`, `mark`, `comment`, `edited`, `added`); `timed_out` when the time ran out |
 | `themes` | | `current` (the theme in use), `themes` (all names) |
 | `set_theme` | `name` (a theme name), or `theme` (a whole theme as JSON, see [THEMES.md](THEMES.md)). It lasts until fterm closes or the config changes. | `name` |
 | `notify` | `title`, `body`, `level` (`info`, `success`, `warning`, `error`, `attention`) | |

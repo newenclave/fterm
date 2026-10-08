@@ -17,6 +17,10 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 - **Agents with no hooks.** When `claude`, `opencode`, `codex`, `aider`, or `gemini` runs in a pane, it is
   in the Agents panel and has a dot on its tab. Its state comes from the window title (Claude Code shows a
   spinner while it works). Hooks, when they are set up, are more exact and win.
+- **Review a plan item by item.** An agent can show its plan in a Review tab: you mark each item Ok, comment on
+  it, change its text, add or remove items, and send the review back. Claude Code plan mode uses it through a hook
+  (all Ok accepts the plan, any change goes back to Claude), other agents through the MCP tool `review_plan`, and
+  scripts through `ftermctl review plan.md`. See docs/REVIEW.md.
 - **Install the Claude Code hooks from the palette.** "Install Claude Code hooks (agent states)" adds the fterm
   hooks to the Claude Code settings after a question. Your other settings and hooks stay, and the old file is
   kept as `settings.json.bak-fterm`.
