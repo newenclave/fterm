@@ -3688,9 +3688,7 @@ impl App {
             (dock.active, dock.selected(), dock.scroll(), dock.filter);
         let reader_scroll = dock.reader_scroll();
         let dock_hints = match (dock_active, dock_filter) {
-            (PanelKind::Events, _) if reader.is_some() => {
-                "Enter go · Ctrl+C copy · Esc back"
-            }
+            (PanelKind::Events, _) if reader.is_some() => "Enter go · Ctrl+C copy · Esc back",
             (PanelKind::Events, EventFilter::All) => {
                 "Enter go · Space read · F important only · M read · Tab · Esc"
             }
