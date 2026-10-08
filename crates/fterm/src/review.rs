@@ -407,6 +407,322 @@ impl Review {
     }
 }
 
+/// How a part of a line looks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Look {
+    Title,
+    Dim,
+    Text,
+    Heading,
+    Ok,
+    Remove,
+    Changed,
+    Comment,
+    Code,
+    Input,
+    Cursor,
+}
+
+/// A part of a screen line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Span {
+    pub text: String,
+    pub look: Look,
+}
+
+/// One screen line: its parts, the item it belongs to, and the selection background.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Row {
+    pub spans: Vec<Span>,
+    pub selected: bool,
+}
+
+impl Row {
+    /// The text with no looks (for tests and for the width).
+    pub fn plain(&self) -> String {
+        self.spans.iter().map(|s| s.text.as_str()).collect()
+    }
+}
+
+/// The width of a text in cells.
+fn cells(text: &str) -> usize {
+    use unicode_width::UnicodeWidthChar;
+    text.chars().map(|c| c.width().unwrap_or(0)).sum()
+}
+
+/// The first `width` cells of a text.
+fn fit(text: &str, width: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w > width {
+            break;
+        }
+        used += w;
+        out.push(c);
+    }
+    out
+}
+
+fn span(text: impl Into<String>, look: Look) -> Span {
+    Span {
+        text: text.into(),
+        look,
+    }
+}
+
+/// The lines of the open input under a label, with the cursor cell. `pad` = the cells on the left.
+fn input_rows(label: &str, input: &InputBox, pad: usize, width: usize) -> Vec<Vec<Span>> {
+    let mut out = vec![vec![
+        span(" ".repeat(pad), Look::Dim),
+        span(label, Look::Dim),
+    ]];
+    let (lines, (cursor_line, cursor_cell)) = input.layout(width.max(1));
+    for (n, line) in lines.iter().enumerate() {
+        let mut row = vec![span(" ".repeat(pad), Look::Dim)];
+        if n == cursor_line {
+            let before = fit(line, cursor_cell);
+            let rest: String = line.chars().skip(before.chars().count()).collect();
+            let mut chars = rest.chars();
+            let under = chars.next().map_or(" ".to_owned(), String::from);
+            row.push(span(before, Look::Input));
+            row.push(span(under, Look::Cursor));
+            row.push(span(chars.as_str(), Look::Input));
+        } else {
+            row.push(span(line.clone(), Look::Input));
+        }
+        out.push(row);
+    }
+    out
+}
+
+/// The screen lines of the review for `cols` x `rows` cells. It moves `scroll` so the selection is seen.
+pub fn rows(review: &mut Review, cols: usize, rows: usize) -> Vec<Row> {
+    let cols = cols.max(20);
+    let row = |spans: Vec<Span>, selected: bool| Row { spans, selected };
+    // The top: the title and who asked, and a short count.
+    let from = format!("from {}", review.from);
+    let title_room = cols.saturating_sub(cells(&from) + 2);
+    let title = fit(&review.title, title_room);
+    let gap = cols.saturating_sub(cells(&title) + cells(&from));
+    let ok = review.items.iter().filter(|i| i.mark == Mark::Ok).count();
+    let changed = review
+        .items
+        .iter()
+        .filter(|i| i.added || i.mark == Mark::Remove || i.comment.is_some() || i.edited.is_some())
+        .count();
+    let summary = format!(
+        "{} items · {ok} ok · {changed} with changes or comments",
+        review.items.len()
+    );
+    let header = vec![
+        row(
+            vec![
+                span(title, Look::Title),
+                span(" ".repeat(gap), Look::Dim),
+                span(from, Look::Dim),
+            ],
+            false,
+        ),
+        row(vec![span(fit(&summary, cols), Look::Dim)], false),
+        row(Vec::new(), false),
+    ];
+
+    // The items, with their comments and the open input.
+    let mut body: Vec<(Row, usize)> = Vec::new();
+    let mut number = 0;
+    for (i, item) in review.items.iter().enumerate() {
+        let selected = i == review.selected;
+        let num = if item.added {
+            String::new()
+        } else {
+            number += 1;
+            format!("{number}. ")
+        };
+        let (mark, mark_look) = if item.added {
+            ('+', Look::Changed)
+        } else if item.mark == Mark::Remove {
+            ('✗', Look::Remove)
+        } else if item.edited.is_some() {
+            ('✎', Look::Changed)
+        } else if item.comment.is_some() {
+            ('»', Look::Comment)
+        } else if item.mark == Mark::Ok {
+            ('✔', Look::Ok)
+        } else {
+            (' ', Look::Dim)
+        };
+        let look = match (item.kind, item.mark) {
+            (_, Mark::Remove) => Look::Remove,
+            _ if item.edited.is_some() => Look::Changed,
+            (Kind::Heading, _) => Look::Heading,
+            (Kind::Code, _) => Look::Code,
+            _ => Look::Text,
+        };
+        let indent = (item.depth * 2).min(cols / 3);
+        let pad = 3 + indent + cells(&num);
+        let width = cols.saturating_sub(pad).max(8);
+        let text = item.edited.as_deref().unwrap_or(&item.text);
+        let mut first = true;
+        for source in text.lines() {
+            for line in crate::ai_chat::wrap(source, width) {
+                let lead = if first {
+                    vec![
+                        span(if selected { "▶" } else { " " }, Look::Title),
+                        span(mark.to_string(), mark_look),
+                        span(" ".repeat(1 + indent), Look::Dim),
+                        span(num.clone(), Look::Dim),
+                    ]
+                } else {
+                    vec![span(" ".repeat(pad), Look::Dim)]
+                };
+                first = false;
+                let mut spans = lead;
+                spans.push(span(line, look));
+                body.push((row(spans, selected), i));
+            }
+        }
+        if item.edited.is_some() {
+            let was = fit(
+                &format!("was: {}", item.text.lines().next().unwrap_or("")),
+                width,
+            );
+            body.push((
+                row(
+                    vec![span(" ".repeat(pad), Look::Dim), span(was, Look::Dim)],
+                    selected,
+                ),
+                i,
+            ));
+        }
+        if let Some(comment) = &item.comment {
+            for (n, line) in comment
+                .lines()
+                .flat_map(|l| crate::ai_chat::wrap(l, width.saturating_sub(2)))
+                .enumerate()
+            {
+                let lead = if n == 0 { "└ " } else { "  " };
+                body.push((
+                    row(
+                        vec![
+                            span(" ".repeat(pad), Look::Dim),
+                            span(format!("{lead}{line}"), Look::Comment),
+                        ],
+                        selected,
+                    ),
+                    i,
+                ));
+            }
+        }
+        if selected {
+            let open = match &review.mode {
+                Mode::Browse => None,
+                Mode::Comment(input) => Some(("Comment:", input)),
+                Mode::Edit(input) => Some(("New text:", input)),
+                Mode::Add(input) => Some(("New item after this one:", input)),
+            };
+            if let Some((label, input)) = open {
+                for spans in input_rows(label, input, pad, width) {
+                    body.push((row(spans, false), i));
+                }
+            }
+        }
+    }
+
+    // Keep the selection on the screen.
+    let height = rows.saturating_sub(header.len() + 1).max(1);
+    let first = body.iter().position(|(_, i)| *i == review.selected);
+    let last = body.iter().rposition(|(_, i)| *i == review.selected);
+    if let (Some(first), Some(last)) = (first, last) {
+        if first < review.scroll {
+            review.scroll = first;
+        } else if last >= review.scroll + height {
+            review.scroll = (last + 1 - height).min(first);
+        }
+    }
+    review.scroll = review.scroll.min(body.len().saturating_sub(height));
+
+    let hints = match review.mode {
+        Mode::Browse => {
+            "S send · Space ok · C comment · E edit · A add · D remove · Shift+O rest ok · ↑↓"
+        }
+        _ => "Enter save · Shift+Enter new line · Esc cancel",
+    };
+    let mut out = header;
+    out.extend(
+        body.into_iter()
+            .skip(review.scroll)
+            .take(height)
+            .map(|(r, _)| r),
+    );
+    while out.len() + 1 < rows.max(2) {
+        out.push(row(Vec::new(), false));
+    }
+    out.push(row(vec![span(fit(hints, cols), Look::Dim)], false));
+    // Every row fits the width.
+    for r in &mut out {
+        let mut used = 0;
+        for s in &mut r.spans {
+            let room = cols.saturating_sub(used);
+            if cells(&s.text) > room {
+                s.text = fit(&s.text, room);
+            }
+            used += cells(&s.text);
+        }
+    }
+    out
+}
+
+/// The review as ANSI text for the grid: from the top left, colors from the theme.
+pub fn render(
+    review: &mut Review,
+    cols: usize,
+    rows_n: usize,
+    ui: &fterm_render::theme::UiColors,
+) -> String {
+    use std::fmt::Write;
+    let fg = |c: fterm_term::alacritty_terminal::vte::ansi::Rgb| {
+        format!("\x1b[38;2;{};{};{}m", c.r, c.g, c.b)
+    };
+    let bg = |c: fterm_term::alacritty_terminal::vte::ansi::Rgb| {
+        format!("\x1b[48;2;{};{};{}m", c.r, c.g, c.b)
+    };
+    let mut out = String::from("\x1b[H\x1b[?25l");
+    let lines = rows(review, cols, rows_n);
+    let count = lines.len();
+    for (n, row) in lines.into_iter().enumerate() {
+        let back = if row.selected {
+            bg(ui.selected)
+        } else {
+            "\x1b[49m".to_owned()
+        };
+        out.push_str("\x1b[0m");
+        out.push_str(&back);
+        for s in &row.spans {
+            let style = match s.look {
+                Look::Title | Look::Heading => format!("\x1b[1m{}", fg(ui.accent)),
+                Look::Dim | Look::Code => fg(ui.text_dim),
+                Look::Text => fg(ui.text),
+                Look::Ok => fg(ui.success),
+                Look::Remove => format!("\x1b[9m{}", fg(ui.error)),
+                Look::Changed => fg(ui.warning),
+                Look::Comment => fg(ui.info),
+                Look::Input => format!("{}{}", fg(ui.text), bg(ui.input_bg)),
+                Look::Cursor => format!("{}{}", fg(ui.surface_active), bg(ui.text)),
+            };
+            let _ = write!(out, "\x1b[0m{back}{style}{}", s.text);
+        }
+        // The rest of the line in the row's background.
+        let _ = write!(out, "\x1b[0m{back}\x1b[K\x1b[0m");
+        if n + 1 < count {
+            out.push_str("\r\n");
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,5 +912,100 @@ let x = 1;
                 .starts_with("Approved")
         );
         assert!(review().feedback(Decision::Cancelled).contains("closed"));
+    }
+
+    fn plain(rows: &[Row]) -> Vec<String> {
+        rows.iter().map(Row::plain).collect()
+    }
+
+    #[test]
+    fn the_screen_of_a_review() {
+        let mut r = Review::new("Themes plan", "claude", parse_markdown(PLAN));
+        r.move_by(3);
+        r.toggle_ok();
+        r.move_by(1);
+        r.start_comment();
+        type_text(&mut r, "and light/dark");
+        r.save_input();
+        let screen = rows(&mut r, 60, 30);
+        let text = plain(&screen);
+        assert_eq!(screen.len(), 30, "one row per line of the grid");
+        assert!(
+            text[0].contains("Themes plan") && text[0].contains("claude"),
+            "{}",
+            text[0]
+        );
+        assert!(text.iter().any(|l| l.contains("Steps")));
+        // The number the agent sees in the feedback, and the mark.
+        let model = text.iter().find(|l| l.contains("Theme model")).unwrap();
+        // Headings and text count too: the agent gets the same numbers in the feedback.
+        assert!(model.contains('✔') && model.contains("4."), "{model}");
+        let config = text.iter().position(|l| l.contains("Config")).unwrap();
+        assert!(
+            screen[config].selected,
+            "the selected item has the selection"
+        );
+        assert!(
+            text[config + 1].contains("and light/dark"),
+            "the comment is under it"
+        );
+        // A nested item is further right.
+        let top = text.iter().find(|l| l.contains("Config")).unwrap();
+        let nested = text.iter().find(|l| l.contains("a name")).unwrap();
+        let column = |line: &str, word: &str| line[..line.find(word).unwrap()].chars().count();
+        assert!(column(nested, "a name") > column(top, "Config"));
+        // Key hints at the bottom.
+        assert!(
+            text[29].contains("send") || text[28].contains("send"),
+            "{:?}",
+            &text[27..]
+        );
+        for line in &text {
+            assert!(line.chars().count() <= 60, "too wide: {line}");
+        }
+    }
+
+    #[test]
+    fn the_selection_is_always_on_the_screen() {
+        let items: Vec<String> = (1..=100).map(|n| format!("step {n}")).collect();
+        let mut r = Review::new("long", "claude", from_items(&items));
+        r.move_by(80);
+        let screen = rows(&mut r, 40, 20);
+        let text = plain(&screen);
+        let i = text
+            .iter()
+            .position(|l| l.contains("step 81"))
+            .expect("on the screen");
+        assert!(screen[i].selected);
+        r.move_by(-80);
+        let text = plain(&rows(&mut r, 40, 20));
+        assert!(
+            text.iter()
+                .any(|l| l.contains("step 1 ") || l.ends_with("step 1"))
+        );
+    }
+
+    #[test]
+    fn an_open_input_shows_its_text_and_a_cursor() {
+        let mut r = review();
+        r.start_edit();
+        type_text(&mut r, "the new text");
+        let screen = rows(&mut r, 50, 15);
+        let text = plain(&screen);
+        assert!(text.iter().any(|l| l.contains("the new text")));
+        assert!(
+            screen
+                .iter()
+                .any(|row| row.spans.iter().any(|s| s.look == Look::Cursor)),
+            "a cursor cell"
+        );
+        assert!(
+            text.iter().any(|l| l.contains("Enter save")),
+            "the hints of the input"
+        );
+        let ansi = render(&mut r, 50, 15, &fterm_render::theme::UiColors::default());
+        assert!(ansi.starts_with("\x1b[H"), "from the top left");
+        assert!(ansi.contains("38;2;"), "colors of the theme");
+        assert!(ansi.contains("the new text"));
     }
 }
