@@ -389,8 +389,20 @@ program (the Windows screenshot tool) and draw with a pen there. fterm could do 
 Waits. Do we need them at all, and where are they useful? On Windows only iTerm2 (OSC 1337) gets through ConPTY
 (see Phase 3b). Also open: load `conpty.dll` from PATH, or only next to `fterm.exe`?
 
+### Sessions that live on (like tmux), here and on other machines
+Like tmux: the tabs and panes run in a server process. You close the window, the programs go on; you open fterm
+again and attach to them. And not only on this machine: also on another one, over the network (the user said
+"SSL": SSH, or our own connection with TLS). WezTerm does this with its mux server ("multiplexing domains").
+Things to think about:
+- a small `fterm-mux` server on the other machine (Linux first), and fterm attaches to it over SSH;
+- what goes over the wire: the screen changes (like WezTerm) or the raw pty output;
+- the API, agents, and the Agents panel for remote panes too;
+- what happens when the network drops (attach again, nothing lost).
+
 ### Plugins
-The user is thinking about it.
+The user is thinking about it. One plugin idea:
+- **git:** for example the branch and the state (changed files, ahead/behind) of the pane's folder in the tab bar,
+  a quick diff view, or the changes of an agent before you commit. Not decided what exactly.
 
 ## Next step
 Choose the next phase: 10 (release on all systems), or one of the ideas above.
