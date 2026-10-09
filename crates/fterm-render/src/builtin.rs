@@ -13,6 +13,11 @@ pub enum BrailleStyle {
     Dots,
 }
 
+/// A Braille char (U+2800..U+28FF).
+pub fn is_braille(c: char) -> bool {
+    matches!(c, '\u{2800}'..='\u{28FF}')
+}
+
 /// True when fterm draws this char itself.
 pub fn is_builtin(c: char) -> bool {
     matches!(c, '\u{2500}'..='\u{259F}' | '\u{2800}'..='\u{28FF}')

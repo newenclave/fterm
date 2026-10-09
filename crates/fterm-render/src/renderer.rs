@@ -65,7 +65,6 @@ pub struct Renderer {
     palette: Palette,
     ui: UiColors,
     padding: f32,
-    braille: BrailleStyle,
     /// Font glyph alpha after `text_alpha`, for every alpha value.
     gamma: [u8; 256],
     mask: AtlasTexture,
@@ -205,7 +204,6 @@ impl Renderer {
             palette: Palette::default(),
             ui: UiColors::default(),
             padding,
-            braille: BrailleStyle::default(),
             gamma: std::array::from_fn(|a| (text_alpha(a as f32 / 255.0) * 255.0).round() as u8),
             mask,
             color,
@@ -232,16 +230,6 @@ impl Renderer {
     /// New UI colors (from the theme). They show on the next frame.
     pub fn set_ui(&mut self, ui: UiColors) {
         self.ui = ui;
-    }
-
-    /// A new Braille style. The atlases are made again, so all Braille chars are drawn again.
-    pub fn set_braille_style(&mut self, device: &wgpu::Device, style: BrailleStyle) {
-        if self.braille != style {
-            self.braille = style;
-            self.mask = AtlasTexture::new(device, ATLAS_START_SIZE, self.mask.format);
-            self.color = AtlasTexture::new(device, COLOR_ATLAS_START_SIZE, self.color.format);
-            self.update_bind_group(device);
-        }
     }
 
     /// The font size in physical pixels.
@@ -342,7 +330,7 @@ impl Renderer {
         for _ in 0..4 {
             let (cell, padding) = (self.fonts.cell(), self.padding);
             let (mask, color, fonts) = (&mut self.mask, &mut self.color, &mut self.fonts);
-            let (braille, gamma, palette) = (self.braille, &self.gamma, &self.palette);
+            let (gamma, palette) = (&self.gamma, &self.palette);
             let ui = &self.ui;
             // True when the color atlas was the full one.
             let mut full_color = false;
@@ -350,7 +338,7 @@ impl Renderer {
                 if let Some(glyph) = mask.atlas.cached(key).or_else(|| color.atlas.cached(key)) {
                     return Ok(glyph);
                 }
-                match draw_glyph(fonts, key, braille, gamma) {
+                match draw_glyph(fonts, key, gamma) {
                     Some(image) if image.kind == ImageKind::Color => {
                         let glyph = color.get(queue, key, Some(image));
                         full_color = glyph.is_err();
@@ -420,7 +408,8 @@ impl FrameParts<'_> {
     }
 
     /// A terminal pane in `area` (window pixels). `harmonize` = the colors that programs choose fit the
-    /// theme (when the theme asks for it); `program_palette` = palette changes of the program count.
+    /// theme (when the theme asks for it); `program_palette` = palette changes of the program count;
+    /// `braille` = how Braille chars look in it.
     pub fn pane<T: EventListener>(
         &mut self,
         term: &Term<T>,
@@ -428,6 +417,7 @@ impl FrameParts<'_> {
         focused: bool,
         harmonize: bool,
         program_palette: bool,
+        braille: BrailleStyle,
     ) -> Result<(), AtlasFull> {
         let input = FrameInput {
             cell: self.cell,
@@ -438,6 +428,7 @@ impl FrameParts<'_> {
             area,
             harmonize,
             program_palette,
+            braille,
         };
         let quads = build_frame(term, &input, &mut self.glyph)?;
         self.quads.extend(quads);
@@ -519,13 +510,13 @@ impl FrameParts<'_> {
 }
 
 /// Draws one glyph: builtin chars in code, all other chars with the font.
-fn draw_glyph(
-    fonts: &mut Fonts,
-    key: &GlyphKey,
-    braille: BrailleStyle,
-    gamma: &[u8; 256],
-) -> Option<GlyphImage> {
+fn draw_glyph(fonts: &mut Fonts, key: &GlyphKey, gamma: &[u8; 256]) -> Option<GlyphImage> {
     if key.extra.is_none() && is_builtin(key.c) {
+        let braille = if key.dots {
+            BrailleStyle::Dots
+        } else {
+            BrailleStyle::Pixels
+        };
         return builtin_glyph(key.c, fonts.cell(), braille);
     }
     let cells = if key.wide { 2 } else { 1 };

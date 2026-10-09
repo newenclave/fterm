@@ -294,6 +294,7 @@ pub(crate) fn push_text(
                 bold: false,
                 italic: false,
                 wide: width == 2,
+                dots: false,
             };
             if let Some(g) = glyph(&key)? {
                 let cx = x + col as f32 * cell.width;

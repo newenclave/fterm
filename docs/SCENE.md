@@ -2,8 +2,8 @@
 
 A scene is a pane with no program. Agents and scripts draw into it: charts, graphs, simple games.
 Every cell is a 2×4 grid of dots (Braille chars `U+2800`–`U+28FF`), so a pane of 80×24 cells is a screen
-of 160×96 dots. fterm draws Braille as square pixels with no gaps (`braille_style = "pixels"`, see
-[CONFIG.md](CONFIG.md)), so a scene looks like a small picture.
+of 160×96 dots. In a scene fterm always draws Braille as square pixels with no gaps, so a scene looks like a small picture.
+(Other panes use `braille_style`, round dots by default; see [CONFIG.md](CONFIG.md).)
 
 A scene pane is a normal pane: split, zoom (Ctrl+Shift+Z), focus, resize, select, and copy work as in any pane.
 When it gets a new size, fterm draws the picture again for it: zoom makes it bigger and sharper, and

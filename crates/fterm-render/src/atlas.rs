@@ -20,6 +20,8 @@ pub struct GlyphKey {
     pub italic: bool,
     /// The char takes 2 cells.
     pub wide: bool,
+    /// A Braille char drawn as round dots (`false` = as square pixels). Only Braille chars set it.
+    pub dots: bool,
 }
 
 impl GlyphKey {
@@ -141,6 +143,7 @@ mod tests {
             bold: false,
             italic: false,
             wide: false,
+            dots: false,
         }
     }
 

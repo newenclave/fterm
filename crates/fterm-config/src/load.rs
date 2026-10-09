@@ -10,11 +10,13 @@ use crate::colors::{ColorConfig, Rgb, parse_color};
 use crate::keys::{Action, BuiltinAction, KeyChord, Keymap, SpawnWhere};
 use crate::profiles::{Profile, expand_home, home_dir};
 
-/// How Braille chars are drawn.
+/// How Braille chars are drawn in panes with programs (scenes always use pixels).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BrailleStyle {
-    #[default]
+    /// Square pixels with no gaps (graphs look solid).
     Pixels,
+    /// Round dots, like in a font (spinners of agents look right).
+    #[default]
     Dots,
 }
 
@@ -493,7 +495,7 @@ impl Default for Config {
             font_size: 14.0,
             padding: 6.0,
             scrollback: 10_000,
-            braille_style: BrailleStyle::Pixels,
+            braille_style: BrailleStyle::Dots,
             colors: ColorConfig::default(),
             theme: crate::theme::ThemeChoice::Default,
             harmonize: HarmonizeConfig::default(),
@@ -1904,7 +1906,7 @@ mod tests {
               font = { size = 18 },
               padding = 10,
               scrollback = 50000,
-              braille_style = "dots",
+              braille_style = "pixels",
               colors = {
                 background = "#000000",
                 cursor = "#fff",
@@ -1923,7 +1925,7 @@ mod tests {
         assert_eq!(config.font_size, 18.0);
         assert_eq!(config.padding, 10.0);
         assert_eq!(config.scrollback, 50_000);
-        assert_eq!(config.braille_style, BrailleStyle::Dots);
+        assert_eq!(config.braille_style, BrailleStyle::Pixels);
         assert_eq!(config.colors.background, Some(Rgb { r: 0, g: 0, b: 0 }));
         assert_eq!(
             config.colors.cursor,
@@ -2121,6 +2123,17 @@ mod tests {
         .config;
         assert_eq!(config.font_size, 20.0);
         assert_eq!(config.profiles.len(), 2);
+    }
+
+    #[test]
+    fn braille_in_panes_is_round_dots_by_default() {
+        assert_eq!(load("return {}").config.braille_style, BrailleStyle::Dots);
+        assert_eq!(
+            load(r#"return { braille_style = "pixels" }"#)
+                .config
+                .braille_style,
+            BrailleStyle::Pixels
+        );
     }
 
     #[test]

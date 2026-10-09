@@ -56,7 +56,7 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `font.size` | number | `14` | Font size in pixels (it is made bigger on HiDPI screens). |
 | `padding` | number | `6` | Empty space around the text, in pixels. |
 | `scrollback` | number | `10000` | Lines of history. New tabs and panes use it. |
-| `braille_style` | `"pixels"` or `"dots"` | `"pixels"` | Braille chars as square pixels with no gaps, or as round dots. |
+| `braille_style` | `"dots"` or `"pixels"` | `"dots"` | Braille chars in panes with programs: round dots (like a font; the spinners of agents look right), or square pixels with no gaps. Scenes always use pixels. |
 | `gpu` | table | `{ backend = "auto", power = "high" }` | The GPU that draws the window. See "The GPU". |
 | `data_dir` | string | the folders of the user | One folder for the history, the sessions, and the shell scripts. See "A portable fterm". |
 | `theme` | string or table | `"Catppuccin Mocha"` | All colors: the terminal and the UI. See [THEMES.md](THEMES.md). |

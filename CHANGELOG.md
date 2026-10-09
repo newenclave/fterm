@@ -14,6 +14,10 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   language. The archive has `l10n/en.json` to start a translation. See docs/L10N.md.
 
 ### Changed
+- **Braille in panes is round dots now.** The spinners of agents (opencode, and others) are Braille chars, and as
+  square pixels they looked like little blocks. Panes with programs now draw Braille as round dots, like a font;
+  scenes always draw it as square pixels. `braille_style = "pixels"` brings the pixels back to all panes. If your
+  `fterm.lua` came from an older sample, it may have `braille_style = "pixels"`: remove that line for dots.
 - **The Review tab for plans of Claude Code plan mode opens only when you want it.** fterm asks first:
   R opens the Review tab, Esc (or no answer in 2 minutes) gives the plan dialog of Claude (there Ctrl+G edits
   the plan in your editor). `plan_review = "always"`

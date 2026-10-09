@@ -10,6 +10,7 @@ use fterm_term::alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use fterm_term::colors::{Palette, cell_colors_with};
 
 use crate::atlas::{AtlasFull, AtlasGlyph, GlyphKey};
+use crate::builtin::{BrailleStyle, is_braille};
 use crate::color::linear;
 use crate::font::CellMetrics;
 use crate::theme::UiColors;
@@ -49,6 +50,8 @@ pub struct FrameInput<'a> {
     pub harmonize: bool,
     /// The palette colors that the program changed (OSC 4, 10, 11) are used; `false` = the theme's.
     pub program_palette: bool,
+    /// How Braille chars look in this pane.
+    pub braille: BrailleStyle,
 }
 
 /// Width of the scroll indicator in pixels.
@@ -149,6 +152,7 @@ pub fn build_frame<T: EventListener>(
                 bold: flags.contains(Flags::BOLD),
                 italic: flags.contains(Flags::ITALIC),
                 wide: flags.contains(Flags::WIDE_CHAR),
+                dots: input.braille == BrailleStyle::Dots && is_braille(c),
             };
             if let Some(g) = glyph(&key)? {
                 let color = if under_block_cursor { bg } else { fg };
@@ -302,18 +306,27 @@ mod tests {
         term
     }
 
-    fn frame(bytes: &[u8], focused: bool) -> (Vec<Instance>, Vec<GlyphKey>) {
-        let term = term_with(bytes);
-        let palette = Palette::default();
-        let input = FrameInput {
+    fn input_for<'a>(palette: &'a Palette, ui: &'a UiColors) -> FrameInput<'a> {
+        FrameInput {
             cell: CELL,
             padding: PADDING,
-            palette: &palette,
-            ui: &UiColors::default(),
-            focused,
+            palette,
+            ui,
+            focused: true,
             area: AREA,
             harmonize: true,
             program_palette: true,
+            braille: BrailleStyle::Pixels,
+        }
+    }
+
+    fn frame(bytes: &[u8], focused: bool) -> (Vec<Instance>, Vec<GlyphKey>) {
+        let term = term_with(bytes);
+        let palette = Palette::default();
+        let ui = UiColors::default();
+        let input = FrameInput {
+            focused,
+            ..input_for(&palette, &ui)
         };
         let mut keys = Vec::new();
         let quads = build_frame(&term, &input, &mut |key| {
@@ -398,6 +411,7 @@ mod tests {
                 area: AREA,
                 harmonize: true,
                 program_palette,
+                braille: BrailleStyle::Pixels,
             };
             let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
             solids(&quads)
@@ -421,6 +435,35 @@ mod tests {
     }
 
     #[test]
+    fn the_braille_style_of_the_pane_goes_to_the_key_of_braille_chars() {
+        let keys = |style: BrailleStyle| {
+            let term = term_with("⠋X─".as_bytes());
+            let palette = Palette::default();
+            let ui = UiColors::default();
+            let input = FrameInput {
+                braille: style,
+                ..input_for(&palette, &ui)
+            };
+            let mut keys = Vec::new();
+            build_frame(&term, &input, &mut |key| {
+                keys.push(key.clone());
+                Ok(Some(GLYPH))
+            })
+            .unwrap();
+            keys.iter().map(|k| (k.c, k.dots)).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            keys(BrailleStyle::Dots),
+            [('⠋', true), ('X', false), ('─', false)],
+            "only Braille chars"
+        );
+        assert_eq!(
+            keys(BrailleStyle::Pixels),
+            [('⠋', false), ('X', false), ('─', false)]
+        );
+    }
+
+    #[test]
     fn bold_and_italic_go_to_the_glyph_key() {
         let (_, keys) = frame(b"\x1b[1;3mX", true);
         assert_eq!(
@@ -431,6 +474,7 @@ mod tests {
                 bold: true,
                 italic: true,
                 wide: false,
+                dots: false,
             }
         );
     }
@@ -476,6 +520,7 @@ mod tests {
             area: AREA,
             harmonize: true,
             program_palette: true,
+            braille: BrailleStyle::Pixels,
         };
         let quads = build_frame(&term, &input, &mut |key| {
             Ok(Some(AtlasGlyph {
@@ -576,6 +621,7 @@ mod tests {
             area: AREA,
             harmonize: true,
             program_palette: true,
+            braille: BrailleStyle::Pixels,
         };
         let got = build_frame(&term, &input, &mut |_| Err(AtlasFull));
         assert_eq!(got, Err(AtlasFull));
@@ -592,6 +638,7 @@ mod tests {
             area: AREA,
             harmonize: true,
             program_palette: true,
+            braille: BrailleStyle::Pixels,
         };
         build_frame(term, &input, &mut |_| Ok(Some(GLYPH))).unwrap()
     }
@@ -704,6 +751,7 @@ mod tests {
             area,
             harmonize: true,
             program_palette: true,
+            braille: BrailleStyle::Pixels,
         };
         let moved = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         let at_origin = build(&term);
@@ -730,6 +778,7 @@ mod tests {
             area,
             harmonize: true,
             program_palette: true,
+            braille: BrailleStyle::Pixels,
         };
         let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         let rects = rects_with_color(&quads, UiColors::default().scrollbar);
@@ -779,6 +828,7 @@ mod tests {
             area: AREA,
             harmonize: true,
             program_palette: true,
+            braille: BrailleStyle::Pixels,
         };
         let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         assert_eq!(rects_with_color(&quads, ui.scrollbar).len(), 1);

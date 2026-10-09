@@ -1649,13 +1649,6 @@ impl App {
         }
         running.renderer.set_palette(palette);
         running.renderer.set_ui(self.ui);
-        let braille = match config.braille_style {
-            fterm_config::load::BrailleStyle::Pixels => BrailleStyle::Pixels,
-            fterm_config::load::BrailleStyle::Dots => BrailleStyle::Dots,
-        };
-        running
-            .renderer
-            .set_braille_style(running.gpu.device(), braille);
         running.dock.side = dock_side(config.panels.dock);
         Self::open_history(&mut self.history, &config.history);
         running.dock.ratio = config.panels.size;
@@ -1720,9 +1713,6 @@ impl App {
         )?;
         renderer.set_palette(self.palette());
         renderer.set_ui(self.ui);
-        if config.braille_style == fterm_config::load::BrailleStyle::Dots {
-            renderer.set_braille_style(gpu.device(), BrailleStyle::Dots);
-        }
         Ok(Running {
             window,
             gpu,
@@ -4067,6 +4057,11 @@ impl App {
         });
         let original_colors = self.original_colors;
         let palette_changes = self.config.config.palette_changes;
+        // Braille in panes with programs as the config says; scenes are pictures, so always pixels.
+        let braille = match self.config.config.braille_style {
+            fterm_config::load::BrailleStyle::Pixels => BrailleStyle::Pixels,
+            fterm_config::load::BrailleStyle::Dots => BrailleStyle::Dots,
+        };
         let running = self.running.as_mut().unwrap();
         let area = running.tab_area();
         let Running {
@@ -4157,8 +4152,13 @@ impl App {
                         let has_keys = focused && is_active && !dock_focused;
                         let harmonize = pane.harmonize && !original_colors;
                         let program_palette = pane.palette_changes.unwrap_or(palette_changes);
+                        let braille = if pane.scene.is_some() {
+                            BrailleStyle::Pixels
+                        } else {
+                            braille
+                        };
                         pane.session.with_term(|term| {
-                            parts.pane(term, *rect, has_keys, harmonize, program_palette)
+                            parts.pane(term, *rect, has_keys, harmonize, program_palette, braille)
                         })?;
                     }
                 }
