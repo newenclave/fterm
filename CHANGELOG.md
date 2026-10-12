@@ -11,7 +11,11 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   panes run in a small background server (`fterm --mux-server`). Close the window, and they go on running; open
   fterm again, and the panes come back in the same tabs, with their screen, their history, and the programs
   still running. Closing such a pane (or its tab) ends its program. `ftermctl mux list|stop` and the palette
-  action "Stop the mux server" end them all. On this machine for now; see docs/MUX.md.
+  action "Stop the mux server" end them all. See docs/MUX.md.
+- **Panes on other machines (SSH).** `remotes = { { name = "prod", host = "me@prod" } }` in the config adds
+  "Connect: prod" to the palette (and "Connect over SSH…" is there for any host). The programs run in a mux server
+  on that machine (`ftermctl mux serve`, reached with `ssh ... ftermctl mux proxy`), so they go on when the
+  connection ends, and "Connect" brings them back. Only ftermctl is needed there.
 - **The UI in your language.** All texts of the window (the palette, toasts, questions, the dock, the Review tab,
   the AI panel, the history lists, the window title) come from a language file. English is built in; another
   language is a JSON file `l10n/<code>.json` next to `fterm.lua`, chosen with `language = "ru"` (or

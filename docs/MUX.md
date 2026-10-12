@@ -40,8 +40,42 @@ Both end all panes of the server, also the ones that no window shows, and then t
 Only the current user can connect to the server (the same rule as for the API). `FTERM_MUX_SOCKET=<name>`
 starts and uses a second server with its own name (for tests).
 
+## Panes on other machines (SSH)
+The same works with a mux server on another machine: its programs run there, and fterm shows them.
+
+1. Put `ftermctl` on that machine, in its PATH (take it from the fterm archive for Linux or macOS). Only ftermctl
+   is needed there: it has no window and needs no GPU.
+2. Make sure that `ssh user@host` works with no password question: a key or the ssh agent. fterm has no console
+   to ask for a password.
+3. Add the machine to `fterm.lua`:
+
+```lua
+remotes = {
+  { name = "prod", host = "me@prod.example.com" },
+  { name = "build", host = "build", ssh_args = { "-p", "2222" }, ftermctl = "~/bin/ftermctl" },
+  -- Any command that runs `ftermctl mux proxy` there (WSL, a jump host, docker exec):
+  { name = "wsl", command = { "wsl", "-d", "Ubuntu", "--", "ftermctl", "mux", "proxy" } },
+},
+profiles = {
+  { name = "prod htop", remote = "prod", command = "htop" },   -- a profile that opens on that machine
+},
+```
+
+Then the palette has **Connect: prod**. It runs `ssh -T -o BatchMode=yes me@prod.example.com ftermctl mux proxy`.
+On that machine `ftermctl mux proxy` starts the mux server there (`ftermctl mux serve`) when it does not run, and
+connects to it. The panes of that server that no window shows come back in a workspace called `prod`; with none,
+a new tab opens there. **Connect over SSH…** asks for `user@host` for a machine that is not in the config.
+
+- New tabs and splits of a pane on `prod` open on `prod` too. A pane there starts the shell of the user there, in
+  the home folder.
+- When the connection ends (the network goes, or you close the window), the panes there go on running. fterm
+  says so, and **Connect: prod** brings them back.
+- Closing such a pane or its tab ends its program there. `ftermctl mux stop` on that machine stops its server.
+- When something is wrong (no ftermctl there, ssh refused the key), the toast shows what ssh or the other side said.
+
 ## Now, in the first version
-- It works on one machine. Panes on other machines (over SSH) come later, with the same protocol.
+- Shell integration (the folder, the command marks) works in a remote pane only when its shell sends it. The
+  fterm scripts are not on the other machine.
 - One window shows a pane at a time. When a second window takes a pane, the first one does not see its output
   any more.
 - `FTERM_PANE_ID` and `FTERM_SOCKET` in a mux pane are the values of the window that started it. After the pane

@@ -392,8 +392,9 @@ Waits. Do we need them at all, and where are they useful? On Windows only iTerm2
 ### Sessions that live on (like tmux), here and on other machines
 **Step 1 is done (on this machine): `mux = true`, see [MUX.md](MUX.md).** The server is `fterm --mux-server`
 (crate `fterm-server`); the window keeps its own copy of each Term, gets a snapshot on attach and then the raw
-output. Next: SSH (`fterm --mux-server --stdio` on the other machine, the same frames over the SSH channel), more
-than one window per pane, and `FTERM_SOCKET`/`FTERM_PANE_ID` that follow the pane to its new window.
+output. **Step 2 is done too: other machines** (`remotes`, "Connect over SSH…"; `ftermctl mux proxy` there, the
+same frames over the SSH channel). Next: more than one window per pane, `FTERM_SOCKET`/`FTERM_PANE_ID` that follow
+the pane to its new window, and the fterm shell scripts on the other machine.
 
 Like tmux: the tabs and panes run in a server process. You close the window, the programs go on; you open fterm
 again and attach to them. And not only on this machine: also on another one, over SSH. WezTerm does this with its

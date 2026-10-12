@@ -60,6 +60,7 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `gpu` | table | `{ backend = "auto", power = "high" }` | The GPU that draws the window. See "The GPU". |
 | `data_dir` | string | the folders of the user | One folder for the history, the sessions, and the shell scripts. See "A portable fterm". |
 | `theme` | string or table | `"Catppuccin Mocha"` | All colors: the terminal and the UI. See [THEMES.md](THEMES.md). |
+| `remotes` | a list of `{ name, host, ssh_args, ftermctl }` or `{ name, command }` | none | Other machines with a mux server: the palette shows "Connect: <name>". See [MUX.md](MUX.md#panes-on-other-machines-ssh). |
 | `mux` | true / false | `false` | New panes live in the mux server: their programs go on when the window closes, and the panes come back in the next window. A profile can have its own `mux`. See [MUX.md](MUX.md). |
 | `language` | a code (`"ru"`), `"system"`, or a path to a `.json` | English | The language of the UI: a file `l10n/<code>.json` next to `fterm.lua`. See [L10N.md](L10N.md). |
 | `plan_review` | `"ask"`, `"always"`, `"never"` | `"ask"` | When a plan of Claude Code plan mode opens in a Review tab: fterm asks first (R = review, Esc = the dialog of Claude), each time, or never. See [REVIEW.md](REVIEW.md#claude-code-plan-mode). |
@@ -115,6 +116,7 @@ profiles = {
 | `env` | More environment variables. |
 | `wsl` | A WSL distro (for example `"Ubuntu"`). fterm starts `wsl.exe -d Ubuntu --cd ~` and knows that the pane has Linux folders. |
 | `palette_changes` | `true` / `false`: may its programs change the 16 colors (default: the value of the config). |
+| `remote` | The `name` of a `remotes` machine: its tabs open there (see [MUX.md](MUX.md#panes-on-other-machines-ssh)). |
 | `mux` | `true` / `false`: its panes live in the mux server (default: the value of the config; see [MUX.md](MUX.md)). |
 | `workspace` | The workspace of the tabs that it opens, for example `"agents"` (made when it is not there; see [KEYS.md](KEYS.md#workspaces)). |
 | `harmonize` | `false`: the programs of this profile keep their exact colors (see [THEMES.md](THEMES.md#the-colors-of-programs-harmonize)). |
@@ -170,6 +172,7 @@ also work on other layouts (for example, Russian).
 | `toggle_original_colors` | The colors that programs chose as they are, or fitted to the theme (`harmonize`). |
 | `harmonize_more`, `harmonize_less` (Ctrl+Shift+], Ctrl+Shift+[) | Try a stronger or weaker `harmonize` (steps of 0.1) until the config changes. |
 | `choose_workspace` (Ctrl+Alt+W), `move_tab_to_workspace` | The list of workspaces: go to one or make one, or move the active tab there. |
+| `connect_ssh` | "Connect over SSH…": asks for `user@host`, then shows the panes of the mux server there. |
 | `stop_mux` | Stop the mux server: all its panes end (after a question; see [MUX.md](MUX.md)). |
 | `next_workspace`, `prev_workspace`, `rename_workspace` | The next / the previous workspace, a new name for this one. |
 | `open_link_hints` (Ctrl+Shift+U) | Labels on the links of the screen: a label opens its link, Shift + label copies it. |
