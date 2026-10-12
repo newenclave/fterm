@@ -2850,7 +2850,8 @@ impl App {
         }
     }
 
-    /// Builds the rows again (after a filter, a pin, or a forget). The query stays.
+    /// Builds the rows again (after a filter, a pin, or a forget, or for a new popup), and draws them. The query
+    /// stays.
     fn refresh_history_popup(&mut self) {
         let Some(popup) = &self.history_popup else {
             return;
@@ -2863,6 +2864,10 @@ impl App {
         );
         if let Some(popup) = &mut self.history_popup {
             popup.set_rows(rows);
+        }
+        // A popup opened by a key (Ctrl+Alt+W, a key for `choose_theme`) shows at once, not after the next key.
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
         }
     }
 
