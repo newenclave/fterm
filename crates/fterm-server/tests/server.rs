@@ -183,9 +183,9 @@ fn stop_ends_all_panes_and_the_server() {
     assert_eq!(server.pane_count(), 2);
     assert_eq!(client.stop(), Ok(2));
     assert_eq!(server.pane_count(), 0);
-    // `run_until_idle` returns at once now, with no idle time.
+    // `run_until_idle` returns at once now, also for a server that never ends by itself.
     let started = Instant::now();
-    server.run_until_idle(Duration::from_secs(60));
+    server.run_until_idle(None);
     assert!(started.elapsed() < Duration::from_secs(5));
 }
 
@@ -194,7 +194,7 @@ fn a_server_with_nothing_to_do_ends() {
     let name = fterm_api::transport::named_socket(&format!("mux-test-{}-idle", std::process::id()));
     let server = Server::start(&name).expect("server");
     let started = Instant::now();
-    server.run_until_idle(Duration::from_millis(300));
+    server.run_until_idle(Some(Duration::from_millis(300)));
     assert!(started.elapsed() < Duration::from_secs(5));
 }
 

@@ -44,8 +44,11 @@ pub enum Command {
     Mux {
         stop: bool,
     },
-    /// `mux serve`: runs the mux server (on a remote machine).
-    MuxServe,
+    /// `mux serve [SECONDS|inf]`: runs the mux server (on a remote machine). It ends after `idle` with no panes
+    /// and no windows; `None` (`inf`) = only `mux stop` ends it.
+    MuxServe {
+        idle: Option<std::time::Duration>,
+    },
     /// `mux proxy`: stdin/stdout to the mux server of this machine (the command that SSH runs).
     MuxProxy,
 }
@@ -224,7 +227,15 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
         "mux" => match args.first().map(String::as_str) {
             Some("list") => Command::Mux { stop: false },
             Some("stop") => Command::Mux { stop: true },
-            Some("serve") => Command::MuxServe,
+            Some("serve") => Command::MuxServe {
+                idle: match args.get(1).map(String::as_str) {
+                    None => Some(fterm_server::IDLE),
+                    Some("inf" | "never") => None,
+                    Some(secs) => Some(std::time::Duration::from_secs(secs.parse().map_err(
+                        |_| format!("mux serve: `{secs}` is not a number of seconds or `inf`"),
+                    )?)),
+                },
+            },
             Some("proxy") => Command::MuxProxy,
             _ => return Err("mux needs `list`, `stop`, `serve`, or `proxy`".to_owned()),
         },
@@ -483,7 +494,23 @@ mod tests {
             cli("mux stop").unwrap().command,
             Command::Mux { stop: true }
         );
-        assert_eq!(cli("mux serve").unwrap().command, Command::MuxServe);
+        assert_eq!(
+            cli("mux serve").unwrap().command,
+            Command::MuxServe {
+                idle: Some(std::time::Duration::from_secs(60))
+            }
+        );
+        assert_eq!(
+            cli("mux serve 300").unwrap().command,
+            Command::MuxServe {
+                idle: Some(std::time::Duration::from_secs(300))
+            }
+        );
+        assert_eq!(
+            cli("mux serve inf").unwrap().command,
+            Command::MuxServe { idle: None }
+        );
+        assert!(cli("mux serve soon").is_err());
         assert_eq!(cli("mux proxy").unwrap().command, Command::MuxProxy);
         assert!(cli("mux").is_err());
         assert!(cli("mux start").is_err());

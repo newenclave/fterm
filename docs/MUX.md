@@ -78,7 +78,9 @@ a new tab opens there. **Connect over SSH…** asks for `user@host` for a machin
   the server there ends too when the connection ends. `loginctl enable-linger <user>` on that machine stops this
   (tmux needs the same).
 - WSL ends the programs that a `wsl.exe` started when that `wsl.exe` ends. So for WSL, keep the server running
-  yourself, for example in a pane: `wsl -d Ubuntu -- ftermctl mux serve`.
+  yourself, for example in a pane: `wsl -d Ubuntu -- ftermctl mux serve inf`.
+- `ftermctl mux serve` ends one minute after its last pane and window are gone. `ftermctl mux serve 600` waits
+  600 seconds, and `ftermctl mux serve inf` does not end by itself: only `ftermctl mux stop` ends it.
 
 ## Now, in the first version
 - Shell integration (the folder, the command marks) works in a remote pane only when its shell sends it. The

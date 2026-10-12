@@ -83,8 +83,8 @@ impl Server {
         Ok(server)
     }
 
-    /// Runs until the server has no panes and no windows for `idle`.
-    pub fn run_until_idle(&self, idle: Duration) {
+    /// Runs until the server has no panes and no windows for `idle`, or until `Stop` (`None` = only `Stop`).
+    pub fn run_until_idle(&self, idle: Option<Duration>) {
         loop {
             if self.inner.stopped.load(Ordering::SeqCst) {
                 tracing::info!("mux server: stopped");
@@ -92,7 +92,8 @@ impl Server {
             }
             std::thread::sleep(Duration::from_millis(200));
             let since = *self.inner.idle_since.lock().unwrap();
-            if self.pane_count() == 0
+            if let Some(idle) = idle
+                && self.pane_count() == 0
                 && self.inner.clients.load(Ordering::SeqCst) == 0
                 && since.is_some_and(|t| t.elapsed() >= idle)
             {

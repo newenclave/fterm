@@ -44,7 +44,7 @@ fn main() -> anyhow::Result<()> {
 
     // The mux server: no window; it ends a minute after its last pane and window are gone.
     if std::env::args().any(|a| a == "--mux-server") {
-        fterm_server::run()?;
+        fterm_server::run(Some(fterm_server::IDLE))?;
         return Ok(());
     }
 

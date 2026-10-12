@@ -19,12 +19,16 @@ pub fn socket_name() -> String {
     fterm_api::transport::named_socket(&base)
 }
 
-/// Runs the server (`fterm --mux-server`) until it has had no panes and no windows for a minute.
-pub fn run() -> std::io::Result<()> {
+/// How long a server with no panes and no windows waits before it ends (`fterm --mux-server`, `ftermctl mux
+/// serve`).
+pub const IDLE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Runs the server until it has had no panes and no windows for `idle` (`None` = until `ftermctl mux stop`).
+pub fn run(idle: Option<std::time::Duration>) -> std::io::Result<()> {
     let name = socket_name();
-    tracing::info!(%name, "mux server starts");
+    tracing::info!(%name, ?idle, "mux server starts");
     let server = server::Server::start(&name)?;
-    server.run_until_idle(std::time::Duration::from_secs(60));
+    server.run_until_idle(idle);
     Ok(())
 }
 

@@ -71,7 +71,9 @@ Other:
   call METHOD [JSON]                     any API call (see docs/API.md)
   mcp                                    an MCP server on stdin/stdout (see docs/MCP.md)
   mux list | mux stop                    the panes of the mux server; stop = end them all and the server
-  mux serve | mux proxy                  run the mux server / connect stdin and stdout to it (for SSH)
+  mux serve [SECONDS|inf]                run the mux server; it ends SECONDS (default 60) after its last pane
+                                         and window, `inf` = only `mux stop` ends it
+  mux proxy                              connect stdin and stdout to the mux server (what ssh runs there)
   guide [--skill]                        how agents use fterm (recipes and rules); --skill = as a
                                          Claude Code skill (~/.claude/skills/fterm/SKILL.md)
 
@@ -104,7 +106,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         }
         Command::Mcp => mcp::serve(cli.window).map(|()| ExitCode::SUCCESS),
         Command::Mux { stop } => run_mux(*stop, cli.json),
-        Command::MuxServe => fterm_server::run()
+        Command::MuxServe { idle } => fterm_server::run(*idle)
             .map(|()| ExitCode::SUCCESS)
             .map_err(|err| format!("mux server: {err}")),
         Command::MuxProxy => fterm_server::proxy(|| {
