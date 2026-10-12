@@ -333,24 +333,5 @@ impl App {
 /// Starts `fterm --mux-server` in the background (with no window and no console).
 fn start_server() -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
-    let mut command = std::process::Command::new(exe);
-    command
-        .arg("--mux-server")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // DETACHED_PROCESS | CREATE_NO_WINDOW: no console, so it does not end with the console of this window. Not
-        // CREATE_NEW_PROCESS_GROUP: that turns Ctrl+C off for the server and every program in its panes.
-        command.creation_flags(0x0000_0008 | 0x0800_0000);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // Its own session: closing the terminal of fterm does not end it.
-        command.process_group(0);
-    }
-    command.spawn().map(|_| ())
+    fterm_server::spawn_detached(&exe, &["--mux-server"])
 }

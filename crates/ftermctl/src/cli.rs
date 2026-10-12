@@ -44,6 +44,10 @@ pub enum Command {
     Mux {
         stop: bool,
     },
+    /// `mux serve`: runs the mux server (on a remote machine).
+    MuxServe,
+    /// `mux proxy`: stdin/stdout to the mux server of this machine (the command that SSH runs).
+    MuxProxy,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -220,7 +224,9 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
         "mux" => match args.first().map(String::as_str) {
             Some("list") => Command::Mux { stop: false },
             Some("stop") => Command::Mux { stop: true },
-            _ => return Err("mux needs `list` or `stop`".to_owned()),
+            Some("serve") => Command::MuxServe,
+            Some("proxy") => Command::MuxProxy,
+            _ => return Err("mux needs `list`, `stop`, `serve`, or `proxy`".to_owned()),
         },
         "guide" => Command::Guide {
             skill: read(&[], &["skill"])?.flag("skill"),
@@ -477,6 +483,8 @@ mod tests {
             cli("mux stop").unwrap().command,
             Command::Mux { stop: true }
         );
+        assert_eq!(cli("mux serve").unwrap().command, Command::MuxServe);
+        assert_eq!(cli("mux proxy").unwrap().command, Command::MuxProxy);
         assert!(cli("mux").is_err());
         assert!(cli("mux start").is_err());
     }

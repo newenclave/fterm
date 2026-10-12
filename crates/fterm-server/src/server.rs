@@ -240,6 +240,10 @@ impl Server {
                 layout: self.inner.layout.lock().unwrap().clone(),
                 ..Reply::ok(id)
             },
+            Request::Hello { .. } => Reply {
+                version: Some(crate::proto::VERSION),
+                ..Reply::ok(id)
+            },
             Request::Stop { .. } => {
                 let panes = self.list();
                 // The sessions go, so their programs end.

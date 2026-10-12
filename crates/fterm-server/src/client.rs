@@ -1,7 +1,7 @@
 //! The window side: one connection to the mux server for all its mux panes.
 
 use std::collections::HashMap;
-use std::io::{self, BufReader, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -37,8 +37,17 @@ struct Panes {
     snapshots: HashMap<u64, Vec<u8>>,
 }
 
+/// The process of a connect command (`ssh ... ftermctl mux proxy`), and the last lines of its stderr.
+struct Command {
+    child: std::process::Child,
+    errors: Arc<Mutex<Vec<String>>>,
+}
+
 pub struct MuxClient {
     writer: Mutex<Box<dyn Write + Send>>,
+    command: Option<Command>,
+    /// The connection ended.
+    dead: std::sync::atomic::AtomicBool,
     next: AtomicU64,
     waiting: Mutex<HashMap<u64, mpsc::Sender<Answer>>>,
     panes: Mutex<Panes>,
@@ -48,11 +57,103 @@ impl MuxClient {
     /// Connects to the server at `name`. `gone` runs when the connection ends (the server stopped).
     pub fn connect(name: &str, gone: impl Fn() + Send + 'static) -> io::Result<Arc<Self>> {
         let (recv, send) = fterm_api::transport::connect(name)?.split();
+        Self::over(Box::new(recv), Box::new(send), None, gone)
+    }
+
+    /// Starts `command` (for example `ssh host ftermctl mux proxy`) and speaks to the server through its stdin and
+    /// stdout. Its stderr is kept for the error text (`last_error`). `env` is added to its environment.
+    pub fn connect_command(
+        command: &[String],
+        env: &[(String, String)],
+        gone: impl Fn() + Send + 'static,
+    ) -> io::Result<Arc<Self>> {
+        let (program, args) = command
+            .split_first()
+            .ok_or_else(|| io::Error::other("an empty connect command"))?;
+        let mut cmd = std::process::Command::new(program);
+        cmd.args(args)
+            .envs(env.iter().map(|(k, v)| (k, v)))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // No console window for ssh.exe or wsl.exe.
+            cmd.creation_flags(0x0800_0000);
+        }
+        let mut child = cmd.spawn()?;
+        let stdin = child.stdin.take().expect("piped");
+        let stdout = child.stdout.take().expect("piped");
+        let stderr = child.stderr.take().expect("piped");
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let into = errors.clone();
+        std::thread::Builder::new()
+            .name("mux stderr".into())
+            .spawn(move || {
+                use std::io::BufRead;
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    let line = line.trim().to_owned();
+                    if !line.is_empty() {
+                        tracing::info!("mux connect: {line}");
+                        let mut e = into.lock().unwrap();
+                        e.push(line);
+                        let n = e.len();
+                        if n > 20 {
+                            e.drain(..n - 20);
+                        }
+                    }
+                }
+            })?;
+        let client = Self::over(
+            Box::new(stdout),
+            Box::new(stdin),
+            Some(Command { child, errors }),
+            gone,
+        )?;
+        Ok(client)
+    }
+
+    /// The last lines that the connect command wrote to its stderr.
+    pub fn last_error(&self) -> Option<String> {
+        let command = self.command.as_ref()?;
+        let errors = command.errors.lock().unwrap();
+        (!errors.is_empty()).then(|| errors.join("\n"))
+    }
+
+    /// Asks the version of the server. Over a connect command it is the first request: when the other side is not
+    /// a mux server (no ftermctl there, SSH refused), the error says what its stderr said.
+    pub fn hello(&self, timeout: Duration) -> Result<u32, String> {
+        let answer = self.call_within(timeout, |id| Request::Hello {
+            id,
+            version: crate::proto::VERSION,
+        });
+        match answer {
+            Ok((reply, _)) => Ok(reply.version.unwrap_or(0)),
+            Err(err) => {
+                // Give the stderr a moment: the command may have just ended.
+                std::thread::sleep(Duration::from_millis(200));
+                Err(match self.last_error() {
+                    Some(text) => text,
+                    None => err,
+                })
+            }
+        }
+    }
+
+    fn over(
+        recv: Box<dyn Read + Send>,
+        send: Box<dyn Write + Send>,
+        command: Option<Command>,
+        gone: impl Fn() + Send + 'static,
+    ) -> io::Result<Arc<Self>> {
         let client = Arc::new(Self {
-            writer: Mutex::new(Box::new(send)),
+            writer: Mutex::new(send),
             next: AtomicU64::new(1),
             waiting: Mutex::new(HashMap::new()),
             panes: Mutex::new(Panes::default()),
+            command,
+            dead: std::sync::atomic::AtomicBool::new(false),
         });
         let reader = Arc::downgrade(&client);
         std::thread::Builder::new()
@@ -66,6 +167,9 @@ impl MuxClient {
                     client.dispatch(kind, &body);
                 }
                 if let Some(client) = reader.upgrade() {
+                    // Requests that wait get no answer now: they fail at once (not at their timeout).
+                    client.dead.store(true, Ordering::SeqCst);
+                    client.waiting.lock().unwrap().clear();
                     // All panes of the server end for this window.
                     let panes = std::mem::take(&mut client.panes.lock().unwrap().handlers);
                     for h in panes.values() {
@@ -139,6 +243,9 @@ impl MuxClient {
     ) -> Result<Answer, String> {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
+        if self.dead.load(Ordering::SeqCst) {
+            return Err("the connection to the mux server ended".to_owned());
+        }
         self.waiting.lock().unwrap().insert(id, tx);
         if let Err(err) = self.send(&make(id)) {
             self.waiting.lock().unwrap().remove(&id);
@@ -239,6 +346,16 @@ impl MuxClient {
             client: self.clone(),
             pane,
         })
+    }
+}
+
+impl Drop for MuxClient {
+    fn drop(&mut self) {
+        // The connect command ends with the connection (the panes live on in the server there).
+        if let Some(command) = &mut self.command {
+            let _ = command.child.kill();
+            let _ = command.child.wait();
+        }
     }
 }
 

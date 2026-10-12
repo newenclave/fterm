@@ -4,6 +4,9 @@ use fterm_term::osc::OscEvent;
 use fterm_term::size::GridSize;
 use serde::{Deserialize, Serialize};
 
+/// The version of the protocol. `Hello` tells it, so a window knows that the other side speaks it.
+pub const VERSION: u32 = 1;
+
 /// What to start in a new pane (like `fterm_term::session::SessionOptions`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Spawn {
@@ -60,6 +63,11 @@ pub enum Request {
     Stop {
         id: u64,
     },
+    /// The first request over a connect command: the answer has the `version` of the server.
+    Hello {
+        id: u64,
+        version: u32,
+    },
 }
 
 impl Request {
@@ -73,7 +81,8 @@ impl Request {
             | Self::List { id }
             | Self::SetLayout { id, .. }
             | Self::GetLayout { id }
-            | Self::Stop { id } => *id,
+            | Self::Stop { id }
+            | Self::Hello { id, .. } => *id,
         }
     }
 }
@@ -139,6 +148,8 @@ pub struct Reply {
     pub layout: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<GridSize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
 }
 
 impl Reply {
@@ -152,6 +163,7 @@ impl Reply {
             panes: None,
             layout: None,
             size: None,
+            version: None,
         }
     }
 
