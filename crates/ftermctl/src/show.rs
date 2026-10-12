@@ -7,7 +7,10 @@ pub fn list(answer: &Value) -> String {
     let mut out = String::new();
     let tabs: Vec<&Value> = answer["tabs"].as_array().into_iter().flatten().collect();
     // With more than one workspace, each tab says its workspace.
-    let mut names: Vec<&str> = tabs.iter().filter_map(|t| t["workspace"].as_str()).collect();
+    let mut names: Vec<&str> = tabs
+        .iter()
+        .filter_map(|t| t["workspace"].as_str())
+        .collect();
     names.dedup();
     let named = names.len() > 1;
     for tab in tabs {
@@ -160,13 +163,14 @@ mod tests {
                 { "tab": 1, "workspace": "work", "title": "b", "active": true, "panes": [] }
             ]
         });
-        assert_eq!(list(&answer), "main · tab 1  a
-work · tab 1  b  (active)
-");
+        assert_eq!(
+            list(&answer),
+            "main · tab 1  a\nwork · tab 1  b  (active)\n"
+        );
         // One workspace: no names.
-        let one = json!({ "tabs": [ { "tab": 1, "workspace": "main", "title": "a", "panes": [] } ] });
-        assert_eq!(list(&one), "tab 1  a
-");
+        let one =
+            json!({ "tabs": [ { "tab": 1, "workspace": "main", "title": "a", "panes": [] } ] });
+        assert_eq!(list(&one), "tab 1  a\n");
     }
 
     #[test]
