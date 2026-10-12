@@ -72,6 +72,11 @@ a new tab opens there. **Connect over SSH…** asks for `user@host` for a machin
   says so, and **Connect: prod** brings them back.
 - Closing such a pane or its tab ends its program there. `ftermctl mux stop` on that machine stops its server.
 - When something is wrong (no ftermctl there, ssh refused the key), the toast shows what ssh or the other side said.
+- Some Linux machines end all programs of a user when the user logs out (systemd `KillUserProcesses=yes`). Then
+  the server there ends too when the connection ends. `loginctl enable-linger <user>` on that machine stops this
+  (tmux needs the same).
+- WSL ends the programs that a `wsl.exe` started when that `wsl.exe` ends. So for WSL, keep the server running
+  yourself, for example in a pane: `wsl -d Ubuntu -- ftermctl mux serve`.
 
 ## Now, in the first version
 - Shell integration (the folder, the command marks) works in a remote pane only when its shell sends it. The

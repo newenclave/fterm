@@ -157,6 +157,24 @@ fn the_layout_is_kept_for_the_next_window() {
 }
 
 #[test]
+fn a_pane_with_no_folder_starts_in_the_home_folder() {
+    let (server, client) = start("home");
+    let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).expect("home");
+    let (pane, program) = client.spawn(shell(), GridSize::new(200, 5)).expect("spawn");
+    assert!(
+        program.contains("cmd") || program.contains("sh"),
+        "the real program: {program}"
+    );
+    let (out, _) = collect(&client, pane);
+    client.write(pane, if cfg!(windows) { b"cd\r" } else { b"pwd\r" });
+    wait("the folder", || {
+        String::from_utf8_lossy(&out.lock().unwrap()).contains(&home)
+    });
+    client.close(pane);
+    wait("the pane to go", || server.pane_count() == 0);
+}
+
+#[test]
 fn stop_ends_all_panes_and_the_server() {
     let (server, client) = start("stop");
     for _ in 0..2 {

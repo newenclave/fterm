@@ -174,9 +174,14 @@ impl App {
             },
             scrollback: options.scrollback,
         };
-        let (rid, _) = client.spawn(spawn, size).map_err(anyhow::Error::msg)?;
+        let (rid, program) = client.spawn(spawn, size).map_err(anyhow::Error::msg)?;
+        // The name of the program that the server started (the shell there), for the tab title.
+        let options = SessionOptions {
+            program: Some(program),
+            ..options.clone()
+        };
         let proxy = self.proxy.clone();
-        let session = remote_session(&client, rid, options, size, None, move |event| {
+        let session = remote_session(&client, rid, &options, size, None, move |event| {
             let _ = proxy.send_event(UserEvent::Term(id, event));
         });
         Ok((

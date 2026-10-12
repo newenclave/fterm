@@ -299,7 +299,8 @@ impl Server {
         let options = SessionOptions {
             program: spawn.program,
             args: spawn.args,
-            cwd: spawn.cwd.map(std::path::PathBuf::from),
+            // No folder: the home folder of the user (on a remote, the local folder means nothing there).
+            cwd: spawn.cwd.map(std::path::PathBuf::from).or_else(home_dir),
             env: spawn.env,
             scrollback: spawn.scrollback,
             tap: Some(tap),
@@ -358,4 +359,11 @@ fn programs(pane: &Pane) -> Vec<String> {
         .iter()
         .map(|n| display_name(n).to_owned())
         .collect()
+}
+
+/// The home folder of the user of the server.
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir())
 }
