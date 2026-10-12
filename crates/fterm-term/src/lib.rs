@@ -16,6 +16,7 @@ pub mod select;
 pub mod session;
 pub mod shell;
 pub mod size;
+pub mod snapshot;
 pub mod styled;
 
 pub use alacritty_terminal;
