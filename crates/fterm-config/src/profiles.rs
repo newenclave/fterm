@@ -22,6 +22,8 @@ pub struct Profile {
     pub workspace: Option<String>,
     /// Its panes live in the mux server (`None` = the value of the config).
     pub mux: Option<bool>,
+    /// Its panes run on another machine: a `name` of `remotes` in the config.
+    pub remote: Option<String>,
 }
 
 impl Profile {
@@ -38,6 +40,7 @@ impl Profile {
             palette_changes: None,
             workspace: None,
             mux: None,
+            remote: None,
         }
     }
 }

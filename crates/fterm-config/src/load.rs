@@ -294,6 +294,54 @@ pub enum ConfirmClose {
     Never,
 }
 
+/// Another machine with a mux server: its panes show in this window (`remotes` in the config).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Remote {
+    pub name: String,
+    /// `user@host` (or a name of `~/.ssh/config`) for `ssh`.
+    pub host: Option<String>,
+    /// More arguments for `ssh`, before the host (for example `-p 2222`).
+    pub ssh_args: Vec<String>,
+    /// ftermctl on that machine (default: `ftermctl`, from its PATH).
+    pub ftermctl: Option<String>,
+    /// The whole connect command instead of `ssh` (WSL, a jump host, docker exec): it must run `ftermctl mux proxy`.
+    pub command: Vec<String>,
+}
+
+impl Remote {
+    /// An ad-hoc host ("Connect over SSH…").
+    pub fn ssh(host: &str) -> Self {
+        Self {
+            name: host.to_owned(),
+            host: Some(host.to_owned()),
+            ssh_args: Vec::new(),
+            ftermctl: None,
+            command: Vec::new(),
+        }
+    }
+
+    /// The command that connects to the mux server there (its stdin and stdout are the connection).
+    pub fn connect_command(&self) -> Vec<String> {
+        if !self.command.is_empty() {
+            return self.command.clone();
+        }
+        // BatchMode: no password question (there is no console for it); a key or the ssh agent must work.
+        let mut c: Vec<String> = ["ssh", "-T", "-o", "BatchMode=yes"]
+            .map(str::to_owned)
+            .to_vec();
+        c.extend(self.ssh_args.iter().cloned());
+        c.push(self.host.clone().unwrap_or_default());
+        c.push(
+            self.ftermctl
+                .clone()
+                .unwrap_or_else(|| "ftermctl".to_owned()),
+        );
+        c.push("mux".to_owned());
+        c.push("proxy".to_owned());
+        c
+    }
+}
+
 /// When a plan of Claude Code plan mode (the `ExitPlanMode` hook) opens a Review tab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PlanReview {
@@ -451,6 +499,8 @@ pub struct Config {
     pub language: Option<String>,
     /// New panes live in the mux server: their programs go on when the window closes.
     pub mux: bool,
+    /// Other machines with a mux server (`remotes`).
+    pub remotes: Vec<Remote>,
     /// The profile for new tabs and splits. `None` = the first profile.
     pub default_profile: Option<String>,
     /// Profiles from the config. Empty = fterm finds them itself.
@@ -505,6 +555,7 @@ impl Default for Config {
             plan_review: PlanReview::default(),
             language: None,
             mux: false,
+            remotes: Vec::new(),
             default_profile: None,
             profiles: Vec::new(),
             keys: Keymap::with_defaults(),
@@ -1250,6 +1301,18 @@ impl Reader {
         if let Some(table) = table_field(root, "history", "history")? {
             config.history = history(&table)?;
         }
+        if let Some(remotes) = table_field(root, "remotes", "remotes")? {
+            for (i, value) in list(&remotes) {
+                let path = format!("remotes[{i}]");
+                let Value::Table(table) = value else {
+                    return Err(format!(
+                        "{path}: expected a table, got {}",
+                        value.type_name()
+                    ));
+                };
+                config.remotes.push(remote(&table, &path)?);
+            }
+        }
         if let Some(profiles) = table_field(root, "profiles", "profiles")? {
             for (i, value) in list(&profiles) {
                 let path = format!("profiles[{i}]");
@@ -1638,6 +1701,43 @@ fn notifications(table: &Table) -> Result<NotificationConfig, String> {
     Ok(n)
 }
 
+fn remote(table: &Table, path: &str) -> Result<Remote, String> {
+    let name = string_field(table, "name", &format!("{path}.name"))?
+        .ok_or_else(|| format!("{path}.name: missing"))?;
+    let host = string_field(table, "host", &format!("{path}.host"))?;
+    let command = strings(table, "command", &format!("{path}.command"))?;
+    if host.is_none() && command.is_empty() {
+        return Err(format!(
+            "{path}: give `host` (for ssh) or `command` (a command that runs `ftermctl mux proxy`)"
+        ));
+    }
+    Ok(Remote {
+        name,
+        host,
+        ssh_args: strings(table, "ssh_args", &format!("{path}.ssh_args"))?,
+        ftermctl: string_field(table, "ftermctl", &format!("{path}.ftermctl"))?,
+        command,
+    })
+}
+
+/// A list of strings (`{ "a", "b" }`); missing = empty.
+fn strings(table: &Table, key: &str, path: &str) -> Result<Vec<String>, String> {
+    let Some(items) = table_field(table, key, path)? else {
+        return Ok(Vec::new());
+    };
+    list(&items)
+        .into_iter()
+        .map(|(i, value)| match value {
+            Value::String(text) => Ok(text.to_string_lossy()),
+            Value::Integer(n) => Ok(n.to_string()),
+            other => Err(format!(
+                "{path}[{i}]: expected a string, got {}",
+                other.type_name()
+            )),
+        })
+        .collect()
+}
+
 fn profile(table: &Table, path: &str) -> Result<Profile, String> {
     let name = string_field(table, "name", &format!("{path}.name"))?
         .ok_or_else(|| format!("{path}.name: missing"))?;
@@ -1709,6 +1809,7 @@ fn profile(table: &Table, path: &str) -> Result<Profile, String> {
         harmonize: bool_field(table, "harmonize", &format!("{path}.harmonize"))?.unwrap_or(true),
         palette_changes: bool_field(table, "palette_changes", &format!("{path}.palette_changes"))?,
         mux: bool_field(table, "mux", &format!("{path}.mux"))?,
+        remote: string_field(table, "remote", &format!("{path}.remote"))?,
         workspace: string_field(table, "workspace", &format!("{path}.workspace"))?
             .map(|w| w.trim().to_owned())
             .filter(|w| !w.is_empty()),
@@ -2133,6 +2234,69 @@ mod tests {
         .config;
         assert_eq!(config.font_size, 20.0);
         assert_eq!(config.profiles.len(), 2);
+    }
+
+    #[test]
+    fn remote_machines_and_their_connect_commands() {
+        use super::Remote;
+        let loaded = load(
+            r#"return {
+              remotes = {
+                { name = "prod", host = "me@prod.example.com" },
+                { name = "build", host = "build", ssh_args = { "-p", "2222" }, ftermctl = "~/bin/ftermctl" },
+                { name = "wsl", command = { "wsl", "-d", "Ubuntu", "--", "ftermctl", "mux", "proxy" } },
+              },
+              profiles = { { name = "prod htop", remote = "prod", command = "htop" } },
+            }"#,
+        );
+        let r = &loaded.config.remotes;
+        assert_eq!(r.len(), 3);
+        assert_eq!(
+            r[0].connect_command(),
+            [
+                "ssh",
+                "-T",
+                "-o",
+                "BatchMode=yes",
+                "me@prod.example.com",
+                "ftermctl",
+                "mux",
+                "proxy"
+            ]
+        );
+        assert_eq!(
+            r[1].connect_command(),
+            [
+                "ssh",
+                "-T",
+                "-o",
+                "BatchMode=yes",
+                "-p",
+                "2222",
+                "build",
+                "~/bin/ftermctl",
+                "mux",
+                "proxy"
+            ]
+        );
+        assert_eq!(r[2].connect_command()[0], "wsl");
+        assert_eq!(loaded.config.profiles[0].remote.as_deref(), Some("prod"));
+        assert!(error(r#"return { remotes = { { host = "x" } } }"#).contains("remotes[1].name"));
+        assert!(error(r#"return { remotes = { { name = "x" } } }"#).contains("host"));
+        // An ad-hoc host ("Connect over SSH…") is a remote too.
+        assert_eq!(
+            Remote::ssh("me@h").connect_command(),
+            [
+                "ssh",
+                "-T",
+                "-o",
+                "BatchMode=yes",
+                "me@h",
+                "ftermctl",
+                "mux",
+                "proxy"
+            ]
+        );
     }
 
     #[test]
