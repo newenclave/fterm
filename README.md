@@ -18,6 +18,7 @@ data (`data/`) are in the same folder, so you can move the folder or carry it on
 - Braille scenes (charts and pictures from scripts and agents): [docs/SCENE.md](docs/SCENE.md)
 - Themes (the colors of the terminal and the UI): [docs/THEMES.md](docs/THEMES.md)
 - The language of the UI: [docs/L10N.md](docs/L10N.md)
+- Panes that live on after the window closes (like tmux): [docs/MUX.md](docs/MUX.md)
 - Review a plan of an agent item by item: [docs/REVIEW.md](docs/REVIEW.md)
 - The AI panel (Claude, Ollama, OpenAI-like APIs): [docs/AI.md](docs/AI.md)
 - Config and profiles: [docs/CONFIG.md](docs/CONFIG.md)

@@ -7,6 +7,10 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 ## [Unreleased]
 
 ### Added
+- **Panes that live on (a mux server).** With `mux = true` in `fterm.lua` (or in a profile), the programs of new
+  panes run in a small background server (`fterm --mux-server`). Close the window, and they go on running; open
+  fterm again, and the panes come back in the same tabs, with their screen, their history, and the programs
+  still running. Closing such a pane ends its program. On this machine for now; see docs/MUX.md.
 - **The UI in your language.** All texts of the window (the palette, toasts, questions, the dock, the Review tab,
   the AI panel, the history lists, the window title) come from a language file. English is built in; another
   language is a JSON file `l10n/<code>.json` next to `fterm.lua`, chosen with `language = "ru"` (or
