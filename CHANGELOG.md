@@ -13,6 +13,11 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   `"system"`). A text that the file does not have stays English, and plural forms follow the rules of the
   language. The archive has `l10n/en.json` to start a translation. See docs/L10N.md.
 
+- **Links with the keyboard, and OSC 8 links.** Ctrl + Shift + U puts a label on every link of the screen: press a
+  label to open its link, or Shift + the label to copy it. Hold Ctrl and move the mouse: the link under it is
+  underlined. OSC 8 links (a text with a hidden URL) work too. fterm opens only http, https, ftp, mailto, and file
+  links, and asks first when a link is a file or its text does not show its URL. See docs/KEYS.md.
+
 ### Changed
 - **Braille in panes is round dots now.** The spinners of agents (opencode, and others) are Braille chars, and as
   square pixels they looked like little blocks. Panes with programs now draw Braille as round dots, like a font;

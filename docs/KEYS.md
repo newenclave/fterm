@@ -68,7 +68,22 @@ New output does not move the view while you are scrolled up. A thin bar on the r
 | Alt + drag | Select a block (a rectangle). |
 | Click without a drag | Remove the selection. |
 | Right click | Paste. |
-| Ctrl + click on a URL | Open the link in the browser. |
+| Ctrl + click on a link | Open the link in the browser. Hold Ctrl and move the mouse: a link is underlined, and the mouse shows a hand. |
+
+## Links
+fterm finds URLs in the text (`https://`, `http://`, `ftp://`, `mailto:`, `file://`), also when a long URL goes on to
+the next line. It also knows OSC 8 links: a program can show a text (for example `PR #42`) with a hidden URL behind it.
+
+| Key | What it does |
+|---|---|
+| Ctrl + click | Open the link under the mouse. |
+| Ctrl + Shift + U | Put a label (`a`, `s`, `d`, …) on every link of the screen. |
+| a label | Open its link. With more than 26 links a label has two letters. |
+| Shift + a label | Copy its link. |
+| Backspace / Esc | The last letter back / no labels. |
+
+To be safe, fterm opens only `http`, `https`, `ftp`, `mailto`, and `file` links. It asks first when a link is a file,
+or when the text of an OSC 8 link does not show its URL (Enter = open, C = copy, Esc = no).
 
 The selection stays until you remove it. New output, also from apps that redraw the screen
 (like Claude Code), does not remove it.

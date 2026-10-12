@@ -166,6 +166,7 @@ also work on other layouts (for example, Russian).
 | `choose_theme` | The list of themes; Enter uses one until fterm closes (see [THEMES.md](THEMES.md)). |
 | `toggle_original_colors` | The colors that programs chose as they are, or fitted to the theme (`harmonize`). |
 | `harmonize_more`, `harmonize_less` (Ctrl+Shift+], Ctrl+Shift+[) | Try a stronger or weaker `harmonize` (steps of 0.1) until the config changes. |
+| `open_link_hints` (Ctrl+Shift+U) | Labels on the links of the screen: a label opens its link, Shift + label copies it. |
 | `plan_review_mode` | The next `plan_review` mode (ask → always → never), until the config changes. |
 
 ### Lua functions
