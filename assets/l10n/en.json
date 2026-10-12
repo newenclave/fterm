@@ -161,6 +161,8 @@
     "popup.this_folder": "this folder",
     "reader.meta": "{level} · from {source} · {ago}",
     "reader.no_text": "(no text)",
+    "reader.place": "tab {tab}, pane {pane}",
+    "reader.place_in": "{workspace}, tab {tab}, pane {pane}",
     "review.comment": "Comment:",
     "review.from": "from {agent}",
     "review.input_keys": "Enter save · Shift+Enter new line · Esc cancel",

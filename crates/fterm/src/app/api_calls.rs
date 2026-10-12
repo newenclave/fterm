@@ -227,12 +227,7 @@ impl App {
         let name = client.map_or("A program", |c| c.name.as_str());
         let tab = client.and_then(|c| c.pane).and_then(|pane| {
             let running = self.running.as_ref()?;
-            running
-                .mux
-                .tabs()
-                .iter()
-                .position(|t| t.layout.contains(pane))
-                .map(|i| i + 1)
+            running.pane_tab_number(pane).map(|(n, _)| n)
         });
         Some(crate::access::question(name, tab))
     }
@@ -694,6 +689,7 @@ impl App {
         json!({
             "id": pane.0,
             "tab": tab,
+            "workspace": running.mux.pane_place(pane).map(|(ws, _)| ws),
             "program": display_name(p.session.program()),
             "kind": if p.review.is_some() {
                 "review"
@@ -721,24 +717,27 @@ impl App {
 
     fn api_list(&self) -> Value {
         let running = self.running.as_ref().expect("checked in api_call");
-        let titles = running.tab_titles();
+        let active = running.mux.active_tab().map(|t| t.id);
         let tabs: Vec<Value> = running
             .mux
-            .tabs()
-            .iter()
-            .enumerate()
-            .map(|(i, tab)| {
+            .all_tabs()
+            .map(|tab| {
+                let (number, workspace) = running
+                    .mux
+                    .pane_place(tab.active_pane)
+                    .map_or((0, ""), |(ws, i)| (i + 1, ws));
                 let panes: Vec<Value> = tab
                     .layout
                     .panes()
                     .into_iter()
-                    .map(|pane| self.pane_json(pane, i + 1))
+                    .map(|pane| self.pane_json(pane, number))
                     .collect();
                 json!({
-                    "tab": i + 1,
+                    "tab": number,
+                    "workspace": workspace,
                     "id": tab.id.0,
-                    "title": titles.get(i),
-                    "active": i == running.mux.active_index(),
+                    "title": running.tab_title(tab),
+                    "active": Some(tab.id) == active,
                     "zoomed": tab.zoomed.is_some(),
                     "color": tab.color.map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")),
                     "panes": panes,
@@ -748,6 +747,7 @@ impl App {
         json!({
             "pid": std::process::id(),
             "active_pane": running.mux.active_pane().map(|p| p.0),
+            "workspace": running.mux.workspace(),
             "tabs": tabs,
         })
     }
@@ -993,13 +993,7 @@ impl App {
         let pane = self.target_pane(client, params)?;
         let title = str_param(params, "title")?.unwrap_or_default();
         let running = self.running.as_mut().expect("checked in api_call");
-        let tab = running
-            .mux
-            .tabs()
-            .iter()
-            .find(|t| t.layout.contains(pane))
-            .map(|t| t.id)
-            .ok_or_else(|| not_found("tab"))?;
+        let tab = running.mux.pane_tab(pane).ok_or_else(|| not_found("tab"))?;
         running.mux.rename(tab, &title);
         running.window.request_redraw();
         self.update_window_title();
@@ -1035,13 +1029,7 @@ impl App {
             .inbox
             .send(to, sender.pane, &from_name, &text, now_ms());
         // The user sees it too (a toast and the count in the Agents panel).
-        let tab = running
-            .mux
-            .tabs()
-            .iter()
-            .position(|t| t.layout.contains(to))
-            .and_then(|i| running.tab_titles().get(i).cloned())
-            .unwrap_or_default();
+        let tab = running.pane_tab_title(to).unwrap_or_default();
         let first_line: String = text
             .lines()
             .next()

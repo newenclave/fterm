@@ -347,7 +347,7 @@ impl App {
         let many = self
             .running
             .as_ref()
-            .is_some_and(|r| r.mux.tabs().len() > 1);
+            .is_some_and(|r| r.mux.all_tabs().count() > 1);
         if many {
             self.close_pane_now(pane);
         }

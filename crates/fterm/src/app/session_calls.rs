@@ -24,9 +24,8 @@ impl App {
     /// What the window has now.
     fn capture_session(&self) -> Option<SavedSession> {
         let running = self.running.as_ref()?;
-        if running.mux.tabs().is_empty() {
-            return None;
-        }
+        // No tabs: nothing to save.
+        running.mux.all_tabs().next()?;
         let lines = self.config.config.restore_history;
         let pane_of = |id: PaneId| {
             running
@@ -59,12 +58,16 @@ impl App {
                 .iter()
                 .all(|p| running.panes.get(p).is_some_and(|p| p.review.is_some()))
         };
-        let tabs = running
+        let saved: Vec<&fterm_mux::mux::Tab> = running
             .mux
-            .tabs()
-            .iter()
+            .all_tabs()
             .filter(|tab| !is_review(tab))
+            .collect();
+        let active = running.mux.active_tab().map(|t| t.id);
+        let tabs = saved
+            .iter()
             .map(|tab| SavedTab {
+                workspace: running.mux.tab_workspace(tab.id).map(str::to_owned),
                 title: tab.custom_title.clone(),
                 color: tab.color.map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")),
                 active: tab
@@ -94,13 +97,7 @@ impl App {
             name: None,
             saved: now_ms(),
             window,
-            active_tab: running
-                .mux
-                .tabs()
-                .iter()
-                .take(running.mux.active_index())
-                .filter(|tab| !is_review(tab))
-                .count(),
+            active_tab: saved.iter().position(|t| Some(t.id) == active).unwrap_or(0),
             tabs,
             dock: SavedDock {
                 open: running.dock.open,
@@ -134,7 +131,7 @@ impl App {
         let has_tabs = self
             .running
             .as_ref()
-            .is_some_and(|r| !r.mux.tabs().is_empty());
+            .is_some_and(|r| r.mux.all_tabs().next().is_some());
         if has_tabs {
             self.save_session();
             close_live(&dir, std::process::id());
@@ -414,8 +411,10 @@ impl App {
             _ => None,
         };
         let size = running.grid_for(running.tab_area());
-        let first = running.mux.tabs().len();
+        let here = running.mux.workspace().to_owned();
         let mut opened = 0;
+        // The tab of each saved tab (`None` when it could not open), to select the saved active one.
+        let mut ids: Vec<Option<fterm_mux::TabId>> = Vec::new();
         let (programs, agents) = (
             self.config.config.restore_programs,
             self.config.config.restore_agents,
@@ -456,12 +455,18 @@ impl App {
             self.spawn_cwd = None;
             self.spawn_intro.clear();
             let Some(layout) = layout else {
+                ids.push(None);
                 continue;
             };
             let panes = layout.panes();
             let active = panes[tab.active.min(panes.len() - 1)];
             if let Some(running) = &mut self.running {
-                let id = running.mux.add_tab(layout, active, tab.title.clone());
+                // An old file has no workspaces: its tabs come into the workspace in use.
+                let ws = tab.workspace.as_deref().unwrap_or(&here);
+                let id = running
+                    .mux
+                    .add_tab_in(ws, layout, active, tab.title.clone());
+                ids.push(Some(id));
                 // A bad color in the file (or from on_restore) is only skipped.
                 let color = tab
                     .color
@@ -480,15 +485,28 @@ impl App {
                 Source::App,
             );
         }
-        let mut first = first;
         if let Some(tab) = fresh {
             self.close_tab_now(tab);
-            first -= 1;
         }
         let Some(running) = &mut self.running else {
             return;
         };
-        running.mux.select(first + saved.active_tab.min(opened - 1));
+        // The saved active tab, else the first one that opened.
+        let chosen = ids
+            .get(saved.active_tab)
+            .copied()
+            .flatten()
+            .or_else(|| ids.iter().copied().flatten().next());
+        let pane = chosen.and_then(|id| {
+            running
+                .mux
+                .all_tabs()
+                .find(|t| t.id == id)
+                .map(|t| t.active_pane)
+        });
+        if let Some(pane) = pane {
+            running.mux.reveal(pane);
+        }
         running.dock.open = saved.dock.open;
         if let Some(kind) = saved.dock.panel.as_deref().and_then(PanelKind::from_name) {
             running.dock.active = kind;

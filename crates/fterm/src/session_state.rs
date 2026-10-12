@@ -36,6 +36,9 @@ pub struct SavedWindow {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedTab {
+    /// The workspace of the tab (`None` in files from before workspaces).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// The color of the tab, `#rrggbb`.
@@ -573,6 +576,7 @@ mod tests {
             tabs: cwds
                 .iter()
                 .map(|cwd| SavedTab {
+                    workspace: None,
                     title: None,
                     color: None,
                     active: 0,
@@ -646,6 +650,7 @@ mod tests {
             serde_json::from_str(r#"{"active":0,"layout":{"pane":{"program":"pwsh"}}}"#).unwrap();
         assert_eq!(old.color, None);
         let tab = SavedTab {
+            workspace: None,
             color: Some("#f38ba8".into()),
             ..old.clone()
         };
@@ -654,6 +659,20 @@ mod tests {
         let back: SavedTab = serde_json::from_str(&text).unwrap();
         assert_eq!(back.color.as_deref(), Some("#f38ba8"));
         assert!(!serde_json::to_string(&old).unwrap().contains("color"));
+    }
+
+    #[test]
+    fn a_tab_keeps_its_workspace() {
+        let old: SavedTab =
+            serde_json::from_str(r#"{"active":0,"layout":{"pane":{"program":"pwsh"}}}"#).unwrap();
+        assert_eq!(old.workspace, None, "a file from before workspaces");
+        let tab = SavedTab {
+            workspace: Some("work".into()),
+            ..old.clone()
+        };
+        let back: SavedTab = serde_json::from_str(&serde_json::to_string(&tab).unwrap()).unwrap();
+        assert_eq!(back.workspace.as_deref(), Some("work"));
+        assert!(!serde_json::to_string(&old).unwrap().contains("workspace"));
     }
 
     #[test]
@@ -766,12 +785,14 @@ mod tests {
             active_tab: 1,
             tabs: vec![
                 SavedTab {
+                    workspace: None,
                     title: None,
                     color: None,
                     active: 0,
                     layout: SavedLayout::Pane(pane(1)),
                 },
                 SavedTab {
+                    workspace: None,
                     title: Some("build".into()),
                     color: Some("#a6e3a1".into()),
                     active: 2,

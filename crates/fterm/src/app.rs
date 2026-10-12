@@ -225,7 +225,7 @@ impl Running {
         }
         let area = self.tab_area();
         let cell = cell_px(&self.renderer);
-        for tab in self.mux.tabs() {
+        for tab in self.mux.all_tabs() {
             let rects = match tab.zoomed {
                 Some(pane) => vec![(pane, area)],
                 None => tab.layout.rects(area),
@@ -273,15 +273,50 @@ impl Running {
             .collect()
     }
 
+    /// The titles of the tabs of the current workspace (the tab bar).
     fn tab_titles(&self) -> Vec<String> {
         self.mux
             .tabs()
             .iter()
-            .map(|tab| {
-                let pane = self.panes.get(&tab.active_pane);
-                let app = pane.and_then(|p| p.app_title.as_deref());
-                let program = pane.map_or("", |p| p.session.program());
-                fterm_mux::mux::tab_title(tab.custom_title.as_deref(), app, program).to_owned()
+            .map(|tab| self.tab_title(tab))
+            .collect()
+    }
+
+    fn tab_title(&self, tab: &fterm_mux::mux::Tab) -> String {
+        let pane = self.panes.get(&tab.active_pane);
+        let app = pane.and_then(|p| p.app_title.as_deref());
+        let program = pane.map_or("", |p| p.session.program());
+        fterm_mux::mux::tab_title(tab.custom_title.as_deref(), app, program).to_owned()
+    }
+
+    /// The title of the tab of `pane`, in any workspace.
+    fn pane_tab_title(&self, pane: PaneId) -> Option<String> {
+        self.mux
+            .all_tabs()
+            .find(|t| t.layout.contains(pane))
+            .map(|t| self.tab_title(t))
+    }
+
+    /// The number of the tab of `pane` in its workspace (from 1), and the workspace when there are several.
+    fn pane_tab_number(&self, pane: PaneId) -> Option<(usize, Option<String>)> {
+        let (ws, i) = self.mux.pane_place(pane)?;
+        let named = (self.mux.workspaces().len() > 1).then(|| ws.to_owned());
+        Some((i + 1, named))
+    }
+
+    /// The agent badges of the tabs of all workspaces but the active tab.
+    fn other_badges(&self) -> Vec<AgentKind> {
+        let active = self.mux.active_tab().map(|t| t.id);
+        self.mux
+            .all_tabs()
+            .filter(|tab| Some(tab.id) != active)
+            .filter_map(|tab| {
+                tab_badge(
+                    tab.layout
+                        .panes()
+                        .iter()
+                        .filter_map(|id| self.panes.get(id)?.agent.as_ref()),
+                )
             })
             .collect()
     }
@@ -718,13 +753,7 @@ impl App {
             return;
         };
         let seen = focused && running.visible_panes().contains(&pane);
-        let tab = running
-            .mux
-            .tabs()
-            .iter()
-            .position(|t| t.layout.contains(pane))
-            .and_then(|i| running.tab_titles().get(i).cloned())
-            .unwrap_or_default();
+        let tab = running.pane_tab_title(pane).unwrap_or_default();
         let Some(p) = running.panes.get_mut(&pane) else {
             return;
         };
@@ -810,13 +839,7 @@ impl App {
         if visible && self.focused {
             return;
         }
-        let tab = running
-            .mux
-            .tabs()
-            .iter()
-            .position(|t| t.layout.contains(pane))
-            .and_then(|i| running.tab_titles().get(i).cloned())
-            .unwrap_or_default();
+        let tab = running.pane_tab_title(pane).unwrap_or_default();
         let (title, level) = match exit {
             Some(0) | None => (tr!("toast.command_finished"), Level::Success),
             Some(code) => (tr!("toast.command_failed", code = code), Level::Error),
@@ -958,9 +981,13 @@ impl App {
                 event_rows(self.center.history(), running.dock.filter, now, &self.ui)
             }
             PanelKind::Agents => {
-                let titles = running.tab_titles();
+                let titles: Vec<String> = running
+                    .mux
+                    .all_tabs()
+                    .map(|t| running.tab_title(t))
+                    .collect();
                 let mut entries = Vec::new();
-                for (tab, title) in running.mux.tabs().iter().zip(&titles) {
+                for (tab, title) in running.mux.all_tabs().zip(&titles) {
                     for pane in tab.layout.panes() {
                         if let Some(state) = running.panes.get(&pane).and_then(|p| p.agent.as_ref())
                         {
@@ -1033,12 +1060,11 @@ impl App {
         let cell = running.renderer.cell();
         let width = ((layout.list.width / cell.width) as usize).saturating_sub(2);
         let place = n.pane.and_then(|pane| {
-            let tab = running
-                .mux
-                .tabs()
-                .iter()
-                .position(|t| t.layout.contains(pane))?;
-            Some(format!("tab {}, pane {}", tab + 1, pane.0))
+            let (tab, ws) = running.pane_tab_number(pane)?;
+            Some(match ws {
+                Some(ws) => tr!("reader.place_in", workspace = ws, tab = tab, pane = pane.0),
+                None => tr!("reader.place", tab = tab, pane = pane.0),
+            })
         });
         let lines = crate::panels::event_lines(n, place.as_deref(), Instant::now(), width);
         Some((lines, fterm_render::dock::reader_rows(&layout, cell)))
@@ -1328,14 +1354,7 @@ impl App {
         let Some(running) = &mut self.running else {
             return;
         };
-        if let Some(index) = running
-            .mux
-            .tabs()
-            .iter()
-            .position(|t| t.layout.contains(pane))
-        {
-            running.mux.select(index);
-            running.mux.focus(pane);
+        if running.mux.reveal(pane) {
             self.tab_changed();
         }
     }
@@ -2108,24 +2127,32 @@ impl App {
         let Some(running) = &self.running else {
             return WindowState::default();
         };
-        let titles = running.tab_titles();
         let mut state = WindowState {
-            tabs: running.mux.tabs().len(),
+            tabs: running.mux.all_tabs().count(),
             ..WindowState::default()
         };
-        for (i, tab) in running.mux.tabs().iter().enumerate() {
+        for tab in running.mux.all_tabs() {
+            let (number, ws) = running
+                .pane_tab_number(tab.active_pane)
+                .unwrap_or((0, None));
+            let named = |what: String| match &ws {
+                Some(ws) => format!("{ws}: {what}"),
+                None => what,
+            };
             for pane in tab.layout.panes() {
                 state.panes += 1;
                 for program in Self::pane_programs(running, pane) {
-                    if !state.running.contains(&(i + 1, program.clone())) {
-                        state.running.push((i + 1, program));
+                    let program = named(program);
+                    if !state.running.contains(&(number, program.clone())) {
+                        state.running.push((number, program));
                     }
                 }
                 if let Some(agent) = running.panes.get(&pane).and_then(|p| p.agent.as_ref()) {
-                    let name = titles.get(i).cloned().unwrap_or_default();
-                    state
-                        .agents
-                        .push((i + 1, name, agent.kind.name().to_owned()));
+                    state.agents.push((
+                        number,
+                        named(running.tab_title(tab)),
+                        agent.kind.name().to_owned(),
+                    ));
                 }
             }
         }
@@ -2189,7 +2216,7 @@ impl App {
             return;
         };
         // Closing the last tab (or its last pane) closes the window: the window rule asks.
-        let last_tab = running.mux.tabs().len() == 1;
+        let last_tab = running.mux.all_tabs().count() == 1;
         let last = match target {
             CloseTarget::Window => true,
             CloseTarget::Tab(_) => last_tab,
@@ -2200,7 +2227,7 @@ impl App {
         }
         let panes = match target {
             CloseTarget::Tab(tab) => {
-                let Some(tab_info) = running.mux.tabs().iter().find(|t| t.id == tab) else {
+                let Some(tab_info) = running.mux.all_tabs().find(|t| t.id == tab) else {
                     return;
                 };
                 tab_info.layout.panes()
@@ -2277,14 +2304,8 @@ impl App {
         };
         let active = running.mux.active_index();
         let titles = running.tab_titles();
-        let badges = running.tab_badges();
-        let others = || {
-            badges
-                .iter()
-                .enumerate()
-                .filter(move |(i, _)| *i != active)
-                .filter_map(|(_, b)| *b)
-        };
+        let badges = running.other_badges();
+        let others = || badges.iter().copied();
         let info = crate::title::TitleInfo {
             tab: active + 1,
             tabs: running.mux.tabs().len(),
