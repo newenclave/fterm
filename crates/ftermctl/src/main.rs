@@ -70,6 +70,7 @@ Events and messages:
 Other:
   call METHOD [JSON]                     any API call (see docs/API.md)
   mcp                                    an MCP server on stdin/stdout (see docs/MCP.md)
+  mux list | mux stop                    the panes of the mux server; stop = end them all and the server
   guide [--skill]                        how agents use fterm (recipes and rules); --skill = as a
                                          Claude Code skill (~/.claude/skills/fterm/SKILL.md)
 
@@ -101,6 +102,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Mcp => mcp::serve(cli.window).map(|()| ExitCode::SUCCESS),
+        Command::Mux { stop } => run_mux(*stop, cli.json),
         Command::Guide { skill } => {
             if *skill {
                 print!("{}", fterm_api::guide::skill_md());
@@ -327,4 +329,46 @@ fn print_answer(as_json: bool, method: &str, answer: &Value) {
             serde_json::to_string_pretty(answer).unwrap_or_default()
         ),
     }
+}
+
+/// `mux list` / `mux stop`: straight to the mux server of this user (`FTERM_MUX_SOCKET` for another one).
+fn run_mux(stop: bool, json: bool) -> Result<ExitCode, String> {
+    let name = fterm_server::socket_name();
+    let client = fterm_server::client::MuxClient::connect(&name, || {})
+        .map_err(|_| "no mux server runs".to_owned())?;
+    if stop {
+        let n = client.stop()?;
+        println!("the mux server stops; {n} pane(s) ended");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let panes = client.list()?;
+    if json {
+        let list: Vec<Value> = panes
+            .iter()
+            .map(|p| {
+                json!({ "pane": p.pane, "program": p.program, "attached": p.attached, "running": p.running })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&list).unwrap_or_default()
+        );
+    } else if panes.is_empty() {
+        println!("the mux server has no panes");
+    } else {
+        for p in &panes {
+            let shown = if p.attached {
+                "in a window"
+            } else {
+                "no window"
+            };
+            let running = if p.running.is_empty() {
+                String::new()
+            } else {
+                format!("  running: {}", p.running.join(", "))
+            };
+            println!("pane {}  {}  ({shown}){running}", p.pane, p.program);
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }

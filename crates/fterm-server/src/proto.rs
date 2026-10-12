@@ -56,6 +56,10 @@ pub enum Request {
     GetLayout {
         id: u64,
     },
+    /// Ends all panes and then the server. The answer says how many panes there were (`panes` has them).
+    Stop {
+        id: u64,
+    },
 }
 
 impl Request {
@@ -68,7 +72,8 @@ impl Request {
             | Self::Close { id, .. }
             | Self::List { id }
             | Self::SetLayout { id, .. }
-            | Self::GetLayout { id } => *id,
+            | Self::GetLayout { id }
+            | Self::Stop { id } => *id,
         }
     }
 }

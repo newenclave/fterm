@@ -40,6 +40,10 @@ pub enum Command {
         path: String,
     },
     Mcp,
+    /// `mux list|stop`: talks to the mux server itself (no window needed).
+    Mux {
+        stop: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -213,6 +217,11 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
     Ok(match word {
         "help" | "--help" | "-h" => Command::Help,
         "mcp" => Command::Mcp,
+        "mux" => match args.first().map(String::as_str) {
+            Some("list") => Command::Mux { stop: false },
+            Some("stop") => Command::Mux { stop: true },
+            _ => return Err("mux needs `list` or `stop`".to_owned()),
+        },
         "guide" => Command::Guide {
             skill: read(&[], &["skill"])?.flag("skill"),
         },
@@ -456,6 +465,20 @@ mod tests {
             Command::Call { method, params } => (method, params),
             other => panic!("{line}: {other:?}"),
         }
+    }
+
+    #[test]
+    fn mux_commands() {
+        assert_eq!(
+            cli("mux list").unwrap().command,
+            Command::Mux { stop: false }
+        );
+        assert_eq!(
+            cli("mux stop").unwrap().command,
+            Command::Mux { stop: true }
+        );
+        assert!(cli("mux").is_err());
+        assert!(cli("mux start").is_err());
     }
 
     #[test]

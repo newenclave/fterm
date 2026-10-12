@@ -233,6 +233,82 @@ impl App {
         }
     }
 
+    /// The window closes because the user closed its last tab: the mux panes of that tab end (the others go on).
+    pub(super) fn end_mux_panes_on_exit(&mut self) {
+        let ending = std::mem::take(&mut self.mux_end_on_exit);
+        let Some(client) = self.mux.clone() else {
+            return;
+        };
+        if ending.is_empty() {
+            return;
+        }
+        for rid in &ending {
+            client.close(*rid);
+        }
+        // An answer comes after the server did the closes before it: then the window may go.
+        let _ = client.list();
+        if let Some(running) = &mut self.running {
+            for p in running.panes.values_mut() {
+                if p.mux.is_some_and(|rid| ending.contains(&rid)) {
+                    p.mux = None;
+                }
+            }
+        }
+    }
+
+    /// `stop_mux`: asks first, with the number of panes that end.
+    pub(super) fn ask_stop_mux(&mut self) {
+        let Some(client) = self.mux_client(false) else {
+            return self.notify(None, &tr!("toast.no_mux"), "", Level::Info, Source::App);
+        };
+        let n = client.list().map_or(0, |p| p.len());
+        self.mux_stop_question = Some(vec![
+            tr!("box.mux_stop"),
+            trn!("box.mux_stop_panes", n),
+            String::new(),
+            tr!("box.mux_stop_keys"),
+        ]);
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// Keys of the stop question: Enter stops the server, Esc does nothing.
+    pub(super) fn mux_stop_key(&mut self, event: &KeyEvent) {
+        match &event.logical_key {
+            Key::Named(NamedKey::Enter) => {
+                self.mux_stop_question = None;
+                if let Some(client) = self.mux.clone() {
+                    match client.stop() {
+                        Ok(n) => {
+                            // The server goes on purpose: no "the server stopped" warning after it.
+                            self.mux = None;
+                            self.notify(
+                                None,
+                                &tr!("toast.mux_stopped"),
+                                &trn!("box.mux_stop_panes", n),
+                                Level::Info,
+                                Source::App,
+                            );
+                        }
+                        Err(err) => self.notify(
+                            None,
+                            &tr!("toast.mux_stop_error"),
+                            &err,
+                            Level::Error,
+                            Source::App,
+                        ),
+                    }
+                }
+            }
+            Key::Named(NamedKey::Escape) => self.mux_stop_question = None,
+            _ => return,
+        }
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
     /// The user closed a mux pane: its program ends in the server too.
     pub(super) fn close_mux_pane(&self, rid: Option<u64>) {
         if let (Some(rid), Some(client)) = (rid, &self.mux) {

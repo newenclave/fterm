@@ -128,7 +128,15 @@ impl MuxClient {
     }
 
     /// Sends a request and waits for its answer.
-    fn call(&self, make: impl FnOnce(u64) -> Request) -> Result<(Reply, Option<Vec<u8>>), String> {
+    fn call(&self, make: impl FnOnce(u64) -> Request) -> Result<Answer, String> {
+        self.call_within(TIMEOUT, make)
+    }
+
+    fn call_within(
+        &self,
+        timeout: Duration,
+        make: impl FnOnce(u64) -> Request,
+    ) -> Result<Answer, String> {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
         self.waiting.lock().unwrap().insert(id, tx);
@@ -137,7 +145,7 @@ impl MuxClient {
             return Err(format!("the mux server is not there: {err}"));
         }
         let (reply, snapshot) = rx
-            .recv_timeout(TIMEOUT)
+            .recv_timeout(timeout)
             .map_err(|_| "no answer from the mux server".to_owned())?;
         match reply.error {
             Some(err) => Err(err),
@@ -187,6 +195,23 @@ impl MuxClient {
     pub fn list(&self) -> Result<Vec<PaneInfo>, String> {
         let (reply, _) = self.call(|id| Request::List { id })?;
         Ok(reply.panes.unwrap_or_default())
+    }
+
+    /// Ends all panes of the server and the server. Gives how many panes ended. A server from before `Stop` gets
+    /// a `Close` for each pane instead (it ends by itself a minute later).
+    pub fn stop(&self) -> Result<usize, String> {
+        match self.call_within(Duration::from_secs(3), |id| Request::Stop { id }) {
+            Ok((reply, _)) => Ok(reply.panes.map_or(0, |p| p.len())),
+            Err(_) => {
+                let panes = self.list()?;
+                for p in &panes {
+                    self.close(p.pane);
+                }
+                // The answer comes after the closes.
+                self.list()?;
+                Ok(panes.len())
+            }
+        }
     }
 
     pub fn set_layout(&self, layout: serde_json::Value) {

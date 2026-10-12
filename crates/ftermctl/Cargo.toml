@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 fterm-api.workspace = true
+fterm-server.workspace = true
 serde_json.workspace = true
 
 [lints]

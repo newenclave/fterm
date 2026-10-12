@@ -157,6 +157,21 @@ fn the_layout_is_kept_for_the_next_window() {
 }
 
 #[test]
+fn stop_ends_all_panes_and_the_server() {
+    let (server, client) = start("stop");
+    for _ in 0..2 {
+        client.spawn(shell(), GridSize::new(40, 5)).expect("spawn");
+    }
+    assert_eq!(server.pane_count(), 2);
+    assert_eq!(client.stop(), Ok(2));
+    assert_eq!(server.pane_count(), 0);
+    // `run_until_idle` returns at once now, with no idle time.
+    let started = Instant::now();
+    server.run_until_idle(Duration::from_secs(60));
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
 fn a_server_with_nothing_to_do_ends() {
     let name = fterm_api::transport::named_socket(&format!("mux-test-{}-idle", std::process::id()));
     let server = Server::start(&name).expect("server");

@@ -228,11 +228,13 @@ pub enum BuiltinAction {
     MoveTabToWorkspace,
     /// A new name for the workspace in use.
     RenameWorkspace,
+    /// Ends all panes of the mux server and the server (after a question).
+    StopMux,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 61] = [
+    pub const ALL: [BuiltinAction; 62] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -294,6 +296,7 @@ impl BuiltinAction {
         Self::PrevWorkspace,
         Self::MoveTabToWorkspace,
         Self::RenameWorkspace,
+        Self::StopMux,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -360,6 +363,7 @@ impl BuiltinAction {
             Self::PrevWorkspace => "prev_workspace",
             Self::MoveTabToWorkspace => "move_tab_to_workspace",
             Self::RenameWorkspace => "rename_workspace",
+            Self::StopMux => "stop_mux",
         };
         name.to_owned()
     }
@@ -702,6 +706,14 @@ mod tests {
         assert_eq!(
             BuiltinAction::SelectTab(0).label_in(&strings),
             "Go to tab 1"
+        );
+    }
+
+    #[test]
+    fn stop_mux_action() {
+        assert_eq!(
+            BuiltinAction::from_name("stop_mux"),
+            Some(BuiltinAction::StopMux)
         );
     }
 

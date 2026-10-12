@@ -52,6 +52,8 @@ struct Inner {
     layout: Mutex<Option<serde_json::Value>>,
     /// When the last client or pane went (for the idle end).
     idle_since: Mutex<Option<Instant>>,
+    /// `Stop` came: the server ends now.
+    stopped: std::sync::atomic::AtomicBool,
 }
 
 /// A running server (the listener runs on its own thread).
@@ -84,7 +86,11 @@ impl Server {
     /// Runs until the server has no panes and no windows for `idle`.
     pub fn run_until_idle(&self, idle: Duration) {
         loop {
-            std::thread::sleep(Duration::from_millis(500));
+            if self.inner.stopped.load(Ordering::SeqCst) {
+                tracing::info!("mux server: stopped");
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
             let since = *self.inner.idle_since.lock().unwrap();
             if self.pane_count() == 0
                 && self.inner.clients.load(Ordering::SeqCst) == 0
@@ -234,6 +240,17 @@ impl Server {
                 layout: self.inner.layout.lock().unwrap().clone(),
                 ..Reply::ok(id)
             },
+            Request::Stop { .. } => {
+                let panes = self.list();
+                // The sessions go, so their programs end.
+                self.inner.panes.lock().unwrap().clear();
+                *self.inner.layout.lock().unwrap() = None;
+                self.inner.stopped.store(true, Ordering::SeqCst);
+                Reply {
+                    panes: Some(panes),
+                    ..Reply::ok(id)
+                }
+            }
         };
         if id != 0 {
             client.send(&ServerMsg::reply(reply));

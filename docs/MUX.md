@@ -25,8 +25,17 @@ Without `mux`, nothing changes: panes live in the window, as before.
 - When the window closes, the server keeps the layout of its tabs (tabs, splits, workspaces).
 - When fterm starts and the server has panes that no window shows, they come back in that layout, and a toast
   says how many. The other panes of that layout start again, as in a restored session.
-- Closing a mux pane (×, Ctrl+Shift+W, or the API) ends its program in the server.
-- When you close the window, fterm does not ask about programs in mux panes: they go on.
+- Closing a mux pane or its tab (×, Ctrl+Shift+W, or the API) ends its program in the server. This is also true
+  for the last tab: then the window closes, and the panes of that tab end.
+- When you close the window itself (its × or Alt+F4), the mux panes go on, and fterm does not ask about their
+  programs.
+
+## Stop the server
+- The palette: **Stop the mux server (its panes end)**. fterm asks first and says how many panes end.
+- `ftermctl mux stop` (no window needed). `ftermctl mux list` shows the panes of the server: their program, if a
+  window shows them, and what runs in them.
+
+Both end all panes of the server, also the ones that no window shows, and then the server.
 
 Only the current user can connect to the server (the same rule as for the API). `FTERM_MUX_SOCKET=<name>`
 starts and uses a second server with its own name (for tests).

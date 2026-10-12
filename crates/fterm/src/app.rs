@@ -496,6 +496,10 @@ pub struct App {
     mux: Option<std::sync::Arc<fterm_server::client::MuxClient>>,
     /// While mux panes come back at start: the server panes that no pane shows yet.
     mux_free: Vec<u64>,
+    /// Mux panes that end when the window closes now: the user closed their tab (the last one), not the window.
+    mux_end_on_exit: Vec<u64>,
+    /// "Stop the mux server?": the lines of the question.
+    mux_stop_question: Option<Vec<String>>,
     /// When the session was saved last.
     session_saved_at: Option<Instant>,
     command_next_id: u64,
@@ -593,6 +597,8 @@ impl App {
             spawn_workspace: None,
             mux: None,
             mux_free: Vec::new(),
+            mux_end_on_exit: Vec::new(),
+            mux_stop_question: None,
             session_saved_at: None,
             command_next_id: 0,
             center: Center::new(4, true),
@@ -2201,8 +2207,13 @@ impl App {
             };
             for pane in tab.layout.panes() {
                 state.panes += 1;
-                // A mux pane goes on after the window closes: nothing of it ends.
-                if running.panes.get(&pane).is_some_and(|p| p.mux.is_some()) {
+                // A mux pane goes on after the window closes: nothing of it ends (unless its tab is closed).
+                if running
+                    .panes
+                    .get(&pane)
+                    .and_then(|p| p.mux)
+                    .is_some_and(|rid| !self.mux_end_on_exit.contains(&rid))
+                {
                     continue;
                 }
                 for program in Self::pane_programs(running, pane) {
@@ -2263,6 +2274,7 @@ impl App {
                 }
             }
             CloseDecision::Stop => {
+                self.mux_end_on_exit.clear();
                 self.close_stopped_at = Some(Instant::now());
                 self.notify(
                     None,
@@ -2287,6 +2299,13 @@ impl App {
             CloseTarget::Pane(_) => last_tab && running.panes.len() == 1,
         };
         if last {
+            // The user closes this tab or pane, not only the window: its mux panes end too.
+            self.mux_end_on_exit = match target {
+                CloseTarget::Window => Vec::new(),
+                CloseTarget::Tab(_) | CloseTarget::Pane(_) => {
+                    running.panes.values().filter_map(|p| p.mux).collect()
+                }
+            };
             return self.close_window(event_loop);
         }
         let panes = match target {
@@ -2634,6 +2653,7 @@ impl App {
             A::NextWorkspace => return self.step_workspace(1),
             A::PrevWorkspace => return self.step_workspace(-1),
             A::RenameWorkspace => return self.start_workspace_prompt(),
+            A::StopMux => return self.ask_stop_mux(),
             A::ToggleOriginalColors => {
                 self.original_colors = !self.original_colors;
                 let (title, body) = if self.original_colors {
@@ -3376,7 +3396,10 @@ impl App {
                     event_loop.exit();
                 }
             }
-            Key::Named(NamedKey::Escape) => self.close_question = None,
+            Key::Named(NamedKey::Escape) => {
+                self.close_question = None;
+                self.mux_end_on_exit.clear();
+            }
             _ => return,
         }
         if let Some(running) = &self.running {
@@ -4128,6 +4151,7 @@ impl App {
             .or_else(|| self.access_question_lines())
             .or_else(|| self.close_question.as_ref().map(|q| q.lines.clone()))
             .or_else(|| self.link_question.as_ref().map(|q| q.lines.clone()))
+            .or_else(|| self.mux_stop_question.clone())
             .or_else(|| self.hooks_question.as_ref().map(|q| q.lines.clone()))
             .or_else(|| self.plan_question_lines())
             .or_else(|| self.message.clone());
@@ -4510,6 +4534,7 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.end_mux_panes_on_exit();
         self.save_mux_layout();
         self.save_or_forget_session();
     }
@@ -4854,6 +4879,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if self.link_question.is_some() {
                     self.link_question_key(&event);
+                    return;
+                }
+                if self.mux_stop_question.is_some() {
+                    self.mux_stop_key(&event);
                     return;
                 }
                 if self.hints.is_some() {

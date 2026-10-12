@@ -1111,6 +1111,7 @@ name = "ftermctl"
 version = "0.2.0"
 dependencies = [
  "fterm-api",
+ "fterm-server",
  "serde_json",
 ]
 

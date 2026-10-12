@@ -170,6 +170,7 @@ also work on other layouts (for example, Russian).
 | `toggle_original_colors` | The colors that programs chose as they are, or fitted to the theme (`harmonize`). |
 | `harmonize_more`, `harmonize_less` (Ctrl+Shift+], Ctrl+Shift+[) | Try a stronger or weaker `harmonize` (steps of 0.1) until the config changes. |
 | `choose_workspace` (Ctrl+Alt+W), `move_tab_to_workspace` | The list of workspaces: go to one or make one, or move the active tab there. |
+| `stop_mux` | Stop the mux server: all its panes end (after a question; see [MUX.md](MUX.md)). |
 | `next_workspace`, `prev_workspace`, `rename_workspace` | The next / the previous workspace, a new name for this one. |
 | `open_link_hints` (Ctrl+Shift+U) | Labels on the links of the screen: a label opens its link, Shift + label copies it. |
 | `plan_review_mode` | The next `plan_review` mode (ask → always → never), until the config changes. |
