@@ -1079,6 +1079,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fterm-server"
+version = "0.2.0"
+dependencies = [
+ "fterm-api",
+ "fterm-term",
+ "interprocess",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "fterm-term"
 version = "0.2.0"
 dependencies = [
@@ -1086,6 +1098,7 @@ dependencies = [
  "miow",
  "piper",
  "polling",
+ "serde",
  "serde_json",
  "sysinfo",
  "tracing",

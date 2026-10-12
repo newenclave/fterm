@@ -7,6 +7,12 @@ use interprocess::local_socket::{Listener, ListenerOptions, Stream, prelude::*};
 /// The socket name of the fterm window with this process id.
 /// Windows: a pipe name (`fterm-<user>-<pid>`); Linux and macOS: a file path in a private folder.
 pub fn socket_name(pid: u32) -> String {
+    named_socket(&pid.to_string())
+}
+
+/// The socket `name` of the current user (for example `mux`): a pipe `fterm-<user>-<name>` on Windows, a file
+/// `<name>.sock` in a private folder on Linux and macOS.
+pub fn named_socket(name: &str) -> String {
     #[cfg(windows)]
     {
         let user: String = std::env::var("USERNAME")
@@ -14,12 +20,12 @@ pub fn socket_name(pid: u32) -> String {
             .chars()
             .filter(|c| c.is_ascii_alphanumeric())
             .collect();
-        format!("fterm-{user}-{pid}")
+        format!("fterm-{user}-{name}")
     }
     #[cfg(not(windows))]
     {
         private_dir()
-            .join(format!("{pid}.sock"))
+            .join(format!("{name}.sock"))
             .display()
             .to_string()
     }

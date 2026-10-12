@@ -42,6 +42,7 @@ fterm-history = { path = "crates/fterm-history" }
 fterm-scene = { path = "crates/fterm-scene" }
 fterm-mux = { path = "crates/fterm-mux" }
 fterm-render = { path = "crates/fterm-render" }
+fterm-server = { path = "crates/fterm-server" }
 fterm-term = { path = "crates/fterm-term" }
 
 [workspace.lints.rust]

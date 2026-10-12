@@ -2,7 +2,7 @@
 
 use alacritty_terminal::grid::Dimensions;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GridSize {
     pub columns: usize,
     pub rows: usize,

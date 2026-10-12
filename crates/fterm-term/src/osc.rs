@@ -4,7 +4,7 @@
 /// The longest OSC payload we keep. Longer sequences are dropped.
 pub const MAX_OSC: usize = 8 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OscEvent {
     /// The current folder (OSC 7, or ConEmu OSC 9;9).
     Cwd(String),
@@ -26,7 +26,7 @@ pub enum OscEvent {
     OutputMark { line: usize, column: usize },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PromptMark {
     /// A: the prompt starts.
     PromptStart,

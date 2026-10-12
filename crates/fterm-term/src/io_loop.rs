@@ -58,7 +58,8 @@ pub enum Msg {
 /// Gets the OSC events that the scanner found (on the pty thread).
 pub type OscSink = Arc<dyn Fn(Vec<OscEvent>) + Send + Sync>;
 
-/// Gets every byte that the program writes (the mux server sends them on to the window).
+/// Gets every byte that the program writes, right after it is parsed into the Term (still locked). The mux server
+/// sends them on to the window.
 pub type OutputTap = Arc<dyn Fn(&[u8]) + Send + Sync>;
 
 /// Output bytes into a Term: our OSC sequences first (the scanner only reads), then the parser. At 133;B the parser
@@ -194,9 +195,6 @@ where
                 Ok(got) => {
                     let new = &buf[unprocessed..unprocessed + got];
                     crate::record::with(&self.recorder, |r| r.output(new, Instant::now()));
-                    if let Some(tap) = &self.tap {
-                        tap(new);
-                    }
                     unprocessed += got;
                 }
                 Err(err) => match err.kind() {
@@ -222,6 +220,11 @@ where
             state
                 .feeder
                 .feed(&mut **terminal, &buf[..unprocessed], &mut osc);
+            // The tap gets the bytes while the Term is still locked: a snapshot (taken with the lock) has a byte
+            // either in it or after it, never both and never none.
+            if let Some(tap) = &self.tap {
+                tap(&buf[..unprocessed]);
+            }
 
             processed += unprocessed;
             unprocessed = 0;

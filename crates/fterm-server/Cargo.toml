@@ -1,0 +1,18 @@
+[package]
+name = "fterm-server"
+description = "The fterm mux server: panes whose programs live on after the window closes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+fterm-api.workspace = true
+fterm-term.workspace = true
+interprocess.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
