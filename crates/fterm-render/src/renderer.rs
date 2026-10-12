@@ -10,7 +10,7 @@ use crate::atlas::{AtlasFull, AtlasGlyph, GlyphAtlas, GlyphKey};
 use crate::builtin::{BrailleStyle, builtin_glyph, is_builtin};
 use crate::color::{linear, text_alpha};
 use crate::font::{CellMetrics, Fonts, GlyphImage, ImageKind};
-use crate::frame::{FrameInput, Instance, Rect, build_frame};
+use crate::frame::{FrameInput, Instance, PaneStyle, Rect, build_frame};
 use crate::overlay::build_message_box;
 use crate::tabbar::{TabBarInput, build_tab_bar};
 use crate::theme::UiColors;
@@ -407,28 +407,24 @@ impl FrameParts<'_> {
         self.cell
     }
 
-    /// A terminal pane in `area` (window pixels). `harmonize` = the colors that programs choose fit the
-    /// theme (when the theme asks for it); `program_palette` = palette changes of the program count;
-    /// `braille` = how Braille chars look in it.
+    /// A terminal pane in `area` (window pixels), drawn as `style` says.
     pub fn pane<T: EventListener>(
         &mut self,
         term: &Term<T>,
         area: Rect,
-        focused: bool,
-        harmonize: bool,
-        program_palette: bool,
-        braille: BrailleStyle,
+        style: PaneStyle,
     ) -> Result<(), AtlasFull> {
         let input = FrameInput {
             cell: self.cell,
             padding: self.padding,
             palette: self.palette,
             ui: self.ui,
-            focused,
+            focused: style.focused,
             area,
-            harmonize,
-            program_palette,
-            braille,
+            harmonize: style.harmonize,
+            program_palette: style.program_palette,
+            braille: style.braille,
+            underline: style.underline,
         };
         let quads = build_frame(term, &input, &mut self.glyph)?;
         self.quads.extend(quads);
@@ -474,6 +470,19 @@ impl FrameParts<'_> {
         let max = columns.saturating_sub(column);
         let quads =
             crate::overlay::build_ghost(text, x, y, max, self.ui, self.cell, &mut *self.glyph)?;
+        self.quads.extend(quads);
+        Ok(())
+    }
+
+    /// Labels over the cells of a pane in `area`: `(text, column, row)` (the hints for links).
+    pub fn labels(
+        &mut self,
+        labels: &[(String, usize, usize)],
+        area: Rect,
+    ) -> Result<(), AtlasFull> {
+        let (x, y) = (area.x + self.padding, area.y + self.padding);
+        let quads =
+            crate::overlay::build_labels(labels, x, y, self.ui, self.cell, &mut *self.glyph)?;
         self.quads.extend(quads);
         Ok(())
     }

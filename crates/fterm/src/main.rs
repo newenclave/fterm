@@ -15,6 +15,7 @@ mod hints;
 mod history_popup;
 mod inbox;
 mod input;
+mod link_open;
 mod mouse;
 mod notify;
 mod palette;

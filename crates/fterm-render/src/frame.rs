@@ -4,6 +4,7 @@
 use bytemuck::{Pod, Zeroable};
 use fterm_term::alacritty_terminal::event::EventListener;
 use fterm_term::alacritty_terminal::grid::Dimensions;
+use fterm_term::alacritty_terminal::index::Point;
 use fterm_term::alacritty_terminal::term::cell::Flags;
 use fterm_term::alacritty_terminal::term::{Term, TermMode};
 use fterm_term::alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
@@ -52,6 +53,19 @@ pub struct FrameInput<'a> {
     pub program_palette: bool,
     /// How Braille chars look in this pane.
     pub braille: BrailleStyle,
+    /// Cells to underline (links under the mouse with Ctrl, or the links of the hint labels), as first and last
+    /// cell in history coordinates.
+    pub underline: &'a [(Point, Point)],
+}
+
+/// How a pane looks: everything of `FrameInput` that the app chooses for each pane.
+#[derive(Clone, Copy, Debug)]
+pub struct PaneStyle<'a> {
+    pub focused: bool,
+    pub harmonize: bool,
+    pub program_palette: bool,
+    pub braille: BrailleStyle,
+    pub underline: &'a [(Point, Point)],
 }
 
 /// Width of the scroll indicator in pixels.
@@ -176,7 +190,11 @@ pub fn build_frame<T: EventListener>(
             }
         }
 
-        if flags.intersects(Flags::ALL_UNDERLINES) {
+        let link = input
+            .underline
+            .iter()
+            .any(|(a, b)| *a <= indexed.point && indexed.point <= *b);
+        if link || flags.intersects(Flags::ALL_UNDERLINES) {
             let top = (cell.baseline + line).min(cell.height - line);
             lines.push(solid([x, y + top, width, line], linear(fg)));
         }
@@ -317,6 +335,7 @@ mod tests {
             harmonize: true,
             program_palette: true,
             braille: BrailleStyle::Pixels,
+            underline: &[],
         }
     }
 
@@ -412,6 +431,7 @@ mod tests {
                 harmonize: true,
                 program_palette,
                 braille: BrailleStyle::Pixels,
+                underline: &[],
             };
             let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
             solids(&quads)
@@ -521,6 +541,7 @@ mod tests {
             harmonize: true,
             program_palette: true,
             braille: BrailleStyle::Pixels,
+            underline: &[],
         };
         let quads = build_frame(&term, &input, &mut |key| {
             Ok(Some(AtlasGlyph {
@@ -548,6 +569,32 @@ mod tests {
             .expect("no underline");
         assert!(line.rect[1] > PADDING + CELL.baseline - 1.0);
         assert!(line.rect[1] + line.rect[3] <= PADDING + CELL.height);
+    }
+
+    #[test]
+    fn cells_of_an_underlined_link_get_an_underline() {
+        use fterm_term::alacritty_terminal::index::{Column, Line, Point};
+        let term = term_with(b"ab cd ef");
+        let palette = Palette::default();
+        let ui = UiColors::default();
+        let link = [(
+            Point::new(Line(0), Column(3)),
+            Point::new(Line(0), Column(4)),
+        )];
+        let input = FrameInput {
+            underline: &link,
+            ..input_for(&palette, &ui)
+        };
+        let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let lines: Vec<f32> = solids(&quads)
+            .into_iter()
+            .filter(|q| q.rect[2] == CELL.width && q.rect[3] < CELL.height / 4.0)
+            .map(|q| q.rect[0])
+            .collect();
+        assert_eq!(
+            lines,
+            [PADDING + 3.0 * CELL.width, PADDING + 4.0 * CELL.width]
+        );
     }
 
     #[test]
@@ -622,6 +669,7 @@ mod tests {
             harmonize: true,
             program_palette: true,
             braille: BrailleStyle::Pixels,
+            underline: &[],
         };
         let got = build_frame(&term, &input, &mut |_| Err(AtlasFull));
         assert_eq!(got, Err(AtlasFull));
@@ -639,6 +687,7 @@ mod tests {
             harmonize: true,
             program_palette: true,
             braille: BrailleStyle::Pixels,
+            underline: &[],
         };
         build_frame(term, &input, &mut |_| Ok(Some(GLYPH))).unwrap()
     }
@@ -752,6 +801,7 @@ mod tests {
             harmonize: true,
             program_palette: true,
             braille: BrailleStyle::Pixels,
+            underline: &[],
         };
         let moved = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         let at_origin = build(&term);
@@ -779,6 +829,7 @@ mod tests {
             harmonize: true,
             program_palette: true,
             braille: BrailleStyle::Pixels,
+            underline: &[],
         };
         let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         let rects = rects_with_color(&quads, UiColors::default().scrollbar);
@@ -829,6 +880,7 @@ mod tests {
             harmonize: true,
             program_palette: true,
             braille: BrailleStyle::Pixels,
+            underline: &[],
         };
         let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         assert_eq!(rects_with_color(&quads, ui.scrollbar).len(), 1);

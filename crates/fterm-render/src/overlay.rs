@@ -166,6 +166,35 @@ pub fn build_ghost(
     Ok(quads)
 }
 
+/// Labels over cells (the hints for links): `(text, column, row)`, from the top-left corner `x`, `y` of the grid.
+/// Each label is a box in the accent color with its letters on it.
+pub fn build_labels(
+    labels: &[(String, usize, usize)],
+    x: f32,
+    y: f32,
+    ui: &UiColors,
+    cell: CellMetrics,
+    glyph: &mut dyn FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
+) -> Result<Vec<Instance>, AtlasFull> {
+    let mut quads = Vec::new();
+    for (text, column, row) in labels {
+        let lx = x + *column as f32 * cell.width;
+        let ly = y + *row as f32 * cell.height;
+        let width = text.chars().map(char_cells).sum::<usize>() as f32 * cell.width;
+        quads.push(solid(
+            Rect {
+                x: lx,
+                y: ly,
+                width,
+                height: cell.height,
+            },
+            ui.accent,
+        ));
+        push_text(&mut quads, text, lx, ly, cell, ui.surface, glyph)?;
+    }
+    Ok(quads)
+}
+
 /// The quads of a message box with `lines` of text, in the middle of `view`.
 pub fn build_message_box(
     lines: &[String],
@@ -251,6 +280,18 @@ mod tests {
     fn build(lines: &[&str]) -> Vec<Instance> {
         let lines: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
         build_message_box(&lines, VIEW, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap()
+    }
+
+    #[test]
+    fn a_label_is_a_box_with_its_letters_at_its_cell() {
+        let labels = [("as".to_owned(), 2, 1)];
+        let quads =
+            build_labels(&labels, 100.0, 50.0, &ui(), CELL, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let boxes: Vec<&Instance> = quads.iter().filter(|q| q.kind == KIND_SOLID).collect();
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].rect, [120.0, 70.0, 20.0, 20.0]);
+        assert_eq!(boxes[0].color, linear(ui().accent));
+        assert_eq!(quads.iter().filter(|q| q.kind == KIND_GLYPH).count(), 2);
     }
 
     #[test]

@@ -216,11 +216,13 @@ pub enum BuiltinAction {
     HarmonizeLess,
     /// When a plan of Claude Code plan mode opens a Review tab: ask, always, never (round).
     PlanReviewMode,
+    /// Labels on the links of the screen: a label opens its link, Shift + label copies it.
+    OpenLinkHints,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 55] = [
+    pub const ALL: [BuiltinAction; 56] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -276,6 +278,7 @@ impl BuiltinAction {
         Self::HarmonizeMore,
         Self::HarmonizeLess,
         Self::PlanReviewMode,
+        Self::OpenLinkHints,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -336,6 +339,7 @@ impl BuiltinAction {
             Self::HarmonizeMore => "harmonize_more",
             Self::HarmonizeLess => "harmonize_less",
             Self::PlanReviewMode => "plan_review_mode",
+            Self::OpenLinkHints => "open_link_hints",
         };
         name.to_owned()
     }
@@ -448,6 +452,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("alt+enter", "toggle_fullscreen"),
     ("ctrl+shift+]", "harmonize_more"),
     ("ctrl+shift+[", "harmonize_less"),
+    ("ctrl+shift+u", "open_link_hints"),
 ];
 
 impl Keymap {
@@ -676,6 +681,19 @@ mod tests {
         assert_eq!(
             BuiltinAction::SelectTab(0).label_in(&strings),
             "Go to tab 1"
+        );
+    }
+
+    #[test]
+    fn open_link_hints_action() {
+        let keys = Keymap::with_defaults();
+        assert_eq!(
+            keys.get(&chord("ctrl+shift+u")),
+            Some(&Action::Builtin(BuiltinAction::OpenLinkHints))
+        );
+        assert_eq!(
+            BuiltinAction::from_name("open_link_hints"),
+            Some(BuiltinAction::OpenLinkHints)
         );
     }
 

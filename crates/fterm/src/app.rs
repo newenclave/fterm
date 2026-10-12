@@ -31,7 +31,6 @@ use fterm_term::alacritty_terminal::term::TermMode;
 use fterm_term::colors::Palette;
 use fterm_term::copy_mode::{self, CopyAction, CopyResult};
 use fterm_term::input::typed_input;
-use fterm_term::links::url_at;
 use fterm_term::osc::OscEvent;
 use fterm_term::process::{display_name, is_shell, running_children};
 use fterm_term::session::{Session, SessionOptions, TermEvent};
@@ -92,6 +91,7 @@ pub enum UserEvent {
 
 mod ai_calls;
 mod api_calls;
+mod link_calls;
 mod review_calls;
 mod session_calls;
 
@@ -310,6 +310,8 @@ struct MouseState {
     dragging_divider: Option<Vec<bool>>,
     /// The user drags the dock edge.
     dragging_dock: bool,
+    /// The link under the mouse while Ctrl is down (it is underlined).
+    link_hover: Option<(PaneId, fterm_term::links::Link)>,
 }
 
 /// What the close question is about.
@@ -361,6 +363,10 @@ pub struct App {
     /// The tab that is being renamed, and the text typed so far.
     renaming: Option<(TabId, String)>,
     close_question: Option<CloseQuestion>,
+    /// "Open this link?" for a link that may not be what it shows.
+    link_question: Option<link_calls::LinkQuestion>,
+    /// The labels on the links (`open_link_hints`).
+    hints: Option<link_calls::Hints>,
     hooks_question: Option<HooksQuestion>,
     config: LoadedConfig,
     config_path: std::path::PathBuf,
@@ -489,6 +495,8 @@ impl App {
             title_message_until: None,
             renaming: None,
             close_question: None,
+            link_question: None,
+            hints: None,
             hooks_question: None,
             config,
             config_path,
@@ -2535,6 +2543,7 @@ impl App {
             A::HarmonizeMore => return self.step_harmonize(1),
             A::HarmonizeLess => return self.step_harmonize(-1),
             A::PlanReviewMode => return self.step_plan_review(),
+            A::OpenLinkHints => return self.toggle_link_hints(),
             A::ToggleOriginalColors => {
                 self.original_colors = !self.original_colors;
                 let (title, body) = if self.original_colors {
@@ -3528,7 +3537,11 @@ impl App {
             }
             return;
         }
-        if self.close_question.is_some() || self.palette.is_some() || self.history_popup.is_some() {
+        if self.close_question.is_some()
+            || self.link_question.is_some()
+            || self.palette.is_some()
+            || self.history_popup.is_some()
+        {
             if state == ElementState::Pressed {
                 // A click closes the palette (and the history popup).
                 self.palette = None;
@@ -3629,25 +3642,6 @@ impl App {
         }
     }
 
-    /// Ctrl + click on a URL opens it. Returns true when there was a URL.
-    fn open_link_under_mouse(&self) -> bool {
-        let Some(running) = &self.running else {
-            return false;
-        };
-        let Some(session) = running.session() else {
-            return false;
-        };
-        let (point, _) = self.mouse_cell(running);
-        let Some(url) = session.with_term(|term| url_at(term, point)) else {
-            return false;
-        };
-        tracing::info!(%url, "open link");
-        if let Err(err) = open::that_detached(&url) {
-            tracing::warn!("cannot open {url}: {err}");
-        }
-        true
-    }
-
     fn mouse_moved(&mut self, x: f64, y: f64) {
         let old = self.mouse.position;
         self.mouse.position = (x, y);
@@ -3699,14 +3693,17 @@ impl App {
             }
             return;
         }
-        // The resize arrow over dividers.
-        if let Some(running) = &self.running {
-            let icon = match self.divider_under_mouse() {
-                Some((_, Direction::Right)) => CursorIcon::ColResize,
-                Some((_, Direction::Down)) => CursorIcon::RowResize,
-                None => CursorIcon::Default,
-            };
-            running.window.set_cursor(icon);
+        // The resize arrow over dividers, a hand over a link with Ctrl.
+        let divider = match self.divider_under_mouse() {
+            Some((_, Direction::Right)) => Some(CursorIcon::ColResize),
+            Some((_, Direction::Down)) => Some(CursorIcon::RowResize),
+            None => None,
+        };
+        let on_link = divider.is_none() && self.update_link_hover();
+        if !on_link && let Some(running) = &self.running {
+            running
+                .window
+                .set_cursor(divider.unwrap_or(CursorIcon::Default));
         }
 
         if self.app_wants_mouse() {
@@ -3999,12 +3996,14 @@ impl App {
             .as_ref()
             .map(|(tab, text)| (*tab, text.clone()));
         let hover = self.mouse.tab_hover;
+        let link_marks = self.link_marks();
         let question = self
             .restore_question_lines()
             .or_else(|| self.name_prompt_lines())
             .or_else(|| self.key_prompt_lines())
             .or_else(|| self.access_question_lines())
             .or_else(|| self.close_question.as_ref().map(|q| q.lines.clone()))
+            .or_else(|| self.link_question.as_ref().map(|q| q.lines.clone()))
             .or_else(|| self.hooks_question.as_ref().map(|q| q.lines.clone()))
             .or_else(|| self.plan_question_lines())
             .or_else(|| self.message.clone());
@@ -4157,9 +4156,19 @@ impl App {
                         } else {
                             braille
                         };
-                        pane.session.with_term(|term| {
-                            parts.pane(term, *rect, has_keys, harmonize, program_palette, braille)
-                        })?;
+                        let style = fterm_render::frame::PaneStyle {
+                            focused: has_keys,
+                            harmonize,
+                            program_palette,
+                            braille,
+                            underline: if link_marks.pane == Some(*id) {
+                                &link_marks.underline
+                            } else {
+                                &[]
+                            },
+                        };
+                        pane.session
+                            .with_term(|term| parts.pane(term, *rect, style))?;
                     }
                 }
                 if let Some((text, column, line)) = &hint
@@ -4169,6 +4178,12 @@ impl App {
                 {
                     let columns = pane.session.with_term(|term| term.grid().columns());
                     parts.ghost(text, *rect, *column, *line, columns)?;
+                }
+                if let Some((_, rect)) =
+                    pane_rects.iter().find(|(p, _)| link_marks.pane == Some(*p))
+                    && !link_marks.labels.is_empty()
+                {
+                    parts.labels(&link_marks.labels, *rect)?;
                 }
                 parts.pane_chrome(&dividers, active_frame);
                 if let Some(layout) = &dock_layout {
@@ -4663,7 +4678,10 @@ impl ApplicationHandler<UserEvent> for App {
                 running.window.request_redraw();
             }
             WindowEvent::Ime(Ime::Commit(text)) => self.ime_commit(&text),
-            WindowEvent::ModifiersChanged(mods) => self.mods = mods.state(),
+            WindowEvent::ModifiersChanged(mods) => {
+                self.mods = mods.state();
+                self.update_link_hover();
+            }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if self.restore_offer.is_some() {
                     self.restore_key(&event);
@@ -4697,6 +4715,14 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if self.hooks_question.is_some() {
                     self.hooks_question_key(&event);
+                    return;
+                }
+                if self.link_question.is_some() {
+                    self.link_question_key(&event);
+                    return;
+                }
+                if self.hints.is_some() {
+                    self.hints_key(&event);
                     return;
                 }
                 if !self.plan_questions.is_empty() {
