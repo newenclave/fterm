@@ -81,6 +81,9 @@ pub struct SavedPane {
     /// A Braille scene pane: it comes back as an empty scene (not as a shell).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scene: bool,
+    /// A mux pane: its id in the mux server (it comes back as it is when the server still has it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mux: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

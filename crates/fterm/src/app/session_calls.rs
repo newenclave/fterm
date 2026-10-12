@@ -22,7 +22,7 @@ pub(super) const AUTOSAVE: Duration = Duration::from_secs(30);
 
 impl App {
     /// What the window has now.
-    fn capture_session(&self) -> Option<SavedSession> {
+    pub(super) fn capture_session(&self) -> Option<SavedSession> {
         let running = self.running.as_ref()?;
         // No tabs: nothing to save.
         running.mux.all_tabs().next()?;
@@ -37,6 +37,7 @@ impl App {
                     program: display_name(p.session.program()).to_owned(),
                     ran: p.shell.running_command().map(str::to_owned),
                     scene: p.scene.is_some(),
+                    mux: p.mux,
                     text: if lines == 0 {
                         Vec::new()
                     } else {
@@ -153,6 +154,10 @@ impl App {
     /// At start: bring back the last closed session, or ask first (only when no other fterm window runs).
     pub(super) fn offer_restore(&mut self) {
         self.session_saved_at = Some(Instant::now());
+        // Mux panes that no window shows come back first (with the layout of their last window).
+        if self.reattach_mux() {
+            return;
+        }
         let Some(dir) = sessions_dir() else {
             return;
         };
@@ -397,7 +402,7 @@ impl App {
         }
     }
 
-    fn restore_session(&mut self, saved: SavedSession) {
+    pub(super) fn restore_session(&mut self, saved: SavedSession) {
         let Some(running) = &self.running else {
             return;
         };
@@ -428,6 +433,15 @@ impl App {
             let layout = restore_layout(&tab.layout, &mut |pane| {
                 if pane.scene {
                     return Some(self.spawn_scene(size));
+                }
+                // A mux pane that the server still has: it comes back as it is.
+                if let Some(rid) = pane.mux
+                    && let Some(at) = self.mux_free.iter().position(|r| *r == rid)
+                {
+                    self.mux_free.remove(at);
+                    if let Some(id) = self.attach_mux_pane(rid, pane.profile.clone()) {
+                        return Some(id);
+                    }
                 }
                 self.spawn_cwd = pane.cwd.clone();
                 self.spawn_intro = intro_bytes(&pane.text, &ago);

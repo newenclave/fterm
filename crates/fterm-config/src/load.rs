@@ -449,6 +449,8 @@ pub struct Config {
     pub plan_review: PlanReview,
     /// The language of the UI: a code (`ru`), `system`, or a path to a `.json`. `None` = English.
     pub language: Option<String>,
+    /// New panes live in the mux server: their programs go on when the window closes.
+    pub mux: bool,
     /// The profile for new tabs and splits. `None` = the first profile.
     pub default_profile: Option<String>,
     /// Profiles from the config. Empty = fterm finds them itself.
@@ -502,6 +504,7 @@ impl Default for Config {
             palette_changes: true,
             plan_review: PlanReview::default(),
             language: None,
+            mux: false,
             default_profile: None,
             profiles: Vec::new(),
             keys: Keymap::with_defaults(),
@@ -1102,6 +1105,9 @@ impl Reader {
             config.palette_changes = on;
         }
         config.language = string_field(root, "language", "language")?;
+        if let Some(on) = bool_field(root, "mux", "mux")? {
+            config.mux = on;
+        }
         if let Some(mode) = string_field(root, "plan_review", "plan_review")? {
             config.plan_review = match mode.as_str() {
                 "always" => PlanReview::Always,
@@ -1702,6 +1708,7 @@ fn profile(table: &Table, path: &str) -> Result<Profile, String> {
         tab_color,
         harmonize: bool_field(table, "harmonize", &format!("{path}.harmonize"))?.unwrap_or(true),
         palette_changes: bool_field(table, "palette_changes", &format!("{path}.palette_changes"))?,
+        mux: bool_field(table, "mux", &format!("{path}.mux"))?,
         workspace: string_field(table, "workspace", &format!("{path}.workspace"))?
             .map(|w| w.trim().to_owned())
             .filter(|w| !w.is_empty()),
@@ -2126,6 +2133,19 @@ mod tests {
         .config;
         assert_eq!(config.font_size, 20.0);
         assert_eq!(config.profiles.len(), 2);
+    }
+
+    #[test]
+    fn panes_can_live_in_the_mux_server() {
+        assert!(!load("return {}").config.mux, "off by default");
+        let loaded = load(
+            r#"return { mux = true, profiles = { { name = "a", command = "a", mux = false },
+                                                 { name = "b", command = "b" } } }"#,
+        );
+        assert!(loaded.config.mux);
+        assert_eq!(loaded.config.profiles[0].mux, Some(false));
+        assert_eq!(loaded.config.profiles[1].mux, None);
+        assert!(error("return { mux = 1 }").contains("mux"));
     }
 
     #[test]

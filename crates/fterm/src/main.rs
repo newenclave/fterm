@@ -39,6 +39,12 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| EnvFilter::new("info,wgpu_core=warn,wgpu_hal=warn"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
+    // The mux server: no window; it ends a minute after its last pane and window are gone.
+    if std::env::args().any(|a| a == "--mux-server") {
+        fterm_server::run()?;
+        return Ok(());
+    }
+
     let event_loop = EventLoop::<app::UserEvent>::with_user_event().build()?;
     // Sleep until the next event. We draw only when something changes.
     event_loop.set_control_flow(ControlFlow::Wait);

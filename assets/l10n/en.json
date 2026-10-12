@@ -254,6 +254,11 @@
     "toast.link_refused": "This link is not opened (fterm opens only http, https, ftp, mailto, and file links)",
     "toast.lua_error": "Lua error",
     "toast.message_for": "Message for {tab}",
+    "toast.mux_back": {
+      "one": "{n} pane of the mux server is back",
+      "other": "{n} panes of the mux server are back"
+    },
+    "toast.mux_gone": "The mux server stopped: its panes are gone",
     "toast.needs_shell_integration": "It needs shell integration (see CONFIG.md).",
     "toast.no_command_back": "No command came back",
     "toast.no_command_in_answer": "No command in the answer",

@@ -16,6 +16,7 @@ fterm-api.workspace = true
 fterm-config.workspace = true
 fterm-history.workspace = true
 fterm-scene.workspace = true
+fterm-server.workspace = true
 fterm-mux.workspace = true
 fterm-render.workspace = true
 fterm-term.workspace = true

@@ -89,11 +89,14 @@ pub enum UserEvent {
     Ai(u64, fterm_ai::Event),
     /// A piece of a "text to command" answer.
     AiCommand(u64, fterm_ai::Event),
+    /// The connection to the mux server ended.
+    MuxGone,
 }
 
 mod ai_calls;
 mod api_calls;
 mod link_calls;
+mod mux_calls;
 mod review_calls;
 mod session_calls;
 mod workspace_calls;
@@ -135,6 +138,8 @@ struct Pane {
     harmonize: bool,
     /// Its programs may change the palette (from its profile; `None` = the value of the config).
     palette_changes: Option<bool>,
+    /// A mux pane: its id in the mux server (its program lives there).
+    mux: Option<u64>,
 }
 
 /// Everything that exists only while the window is open.
@@ -487,6 +492,10 @@ pub struct App {
     workspace_prompt: Option<crate::ai_chat::InputBox>,
     /// The workspace of the next new tab (a new workspace from the list).
     spawn_workspace: Option<String>,
+    /// The connection to the mux server (made when a mux pane is needed).
+    mux: Option<std::sync::Arc<fterm_server::client::MuxClient>>,
+    /// While mux panes come back at start: the server panes that no pane shows yet.
+    mux_free: Vec<u64>,
     /// When the session was saved last.
     session_saved_at: Option<Instant>,
     command_next_id: u64,
@@ -582,6 +591,8 @@ impl App {
             name_prompt: None,
             workspace_prompt: None,
             spawn_workspace: None,
+            mux: None,
+            mux_free: Vec::new(),
             session_saved_at: None,
             command_next_id: 0,
             center: Center::new(4, true),
@@ -1842,6 +1853,7 @@ impl App {
                 review: None,
                 harmonize: true,
                 palette_changes: None,
+                mux: None,
             },
         );
         tracing::info!(
@@ -1996,11 +2008,29 @@ impl App {
             let path = crate::env::path_with(base.as_deref(), &dir, cfg!(windows));
             options.env.push(("PATH".to_owned(), path));
         }
+        let cell = cell_px(&running.renderer);
         let proxy = self.proxy.clone();
-        let session = Session::spawn(options, size, cell_px(&running.renderer), move |event| {
+        let on_event = move |event| {
             // The window may be closed already. Then nobody needs the event.
             let _ = proxy.send_event(UserEvent::Term(id, event));
-        })?;
+        };
+        // A mux pane runs its program in the mux server; when the server cannot start, a local pane.
+        let mut mux = None;
+        let session = if self.mux_wanted(profile_name.as_deref()) {
+            match self.spawn_mux_session(id, &options, size) {
+                Ok((session, rid)) => {
+                    mux = Some(rid);
+                    session
+                }
+                Err(err) => {
+                    tracing::warn!("a local pane instead of a mux pane: {err:#}");
+                    Session::spawn(options, size, cell, on_event)?
+                }
+            }
+        } else {
+            Session::spawn(options, size, cell, on_event)?
+        };
+        let running = self.running.as_mut().expect("the window is open");
         tracing::info!(
             pane = id.0,
             columns = size.columns,
@@ -2028,6 +2058,7 @@ impl App {
                 review: None,
                 harmonize,
                 palette_changes,
+                mux,
             },
         );
         Ok(id)
@@ -2086,8 +2117,12 @@ impl App {
         let Some(running) = &mut self.running else {
             return false;
         };
-        running.panes.remove(&pane);
+        let closed = running.panes.remove(&pane).and_then(|p| p.mux);
         let alive = running.mux.close_pane(pane) != Closed::LastTab;
+        self.close_mux_pane(closed);
+        let Some(running) = &mut self.running else {
+            return false;
+        };
         if alive {
             running.resize_all_panes();
             self.tab_changed();
@@ -2100,10 +2135,17 @@ impl App {
         let Some(running) = &mut self.running else {
             return false;
         };
+        let mut gone = Vec::new();
         for pane in running.mux.close_tab(tab) {
-            // Dropping the session stops its pty, so the shell ends.
-            running.panes.remove(&pane);
+            // Dropping the session stops its pty, so the shell ends (a mux pane ends in the server).
+            gone.push(running.panes.remove(&pane).and_then(|p| p.mux));
         }
+        for rid in gone {
+            self.close_mux_pane(rid);
+        }
+        let Some(running) = &mut self.running else {
+            return false;
+        };
         let alive = !running.mux.tabs().is_empty();
         if alive {
             self.tab_changed();
@@ -2159,6 +2201,10 @@ impl App {
             };
             for pane in tab.layout.panes() {
                 state.panes += 1;
+                // A mux pane goes on after the window closes: nothing of it ends.
+                if running.panes.get(&pane).is_some_and(|p| p.mux.is_some()) {
+                    continue;
+                }
                 for program in Self::pane_programs(running, pane) {
                     let program = named(program);
                     if !state.running.contains(&(number, program.clone())) {
@@ -4464,6 +4510,7 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.save_mux_layout();
         self.save_or_forget_session();
     }
 
@@ -4473,6 +4520,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::ApiGone(client) => return self.api_client_gone(client),
             UserEvent::Ai(id, event) => return self.ai_event(id, event),
             UserEvent::AiCommand(id, event) => return self.command_event(id, event),
+            UserEvent::MuxGone => return self.mux_gone(),
             other => other,
         };
         let Some(running) = &mut self.running else {
@@ -4491,7 +4539,8 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Api(_)
             | UserEvent::ApiGone(_)
             | UserEvent::Ai(..)
-            | UserEvent::AiCommand(..) => {
+            | UserEvent::AiCommand(..)
+            | UserEvent::MuxGone => {
                 return;
             }
         };

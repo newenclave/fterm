@@ -157,6 +157,15 @@ fn the_layout_is_kept_for_the_next_window() {
 }
 
 #[test]
+fn a_server_with_nothing_to_do_ends() {
+    let name = fterm_api::transport::named_socket(&format!("mux-test-{}-idle", std::process::id()));
+    let server = Server::start(&name).expect("server");
+    let started = Instant::now();
+    server.run_until_idle(Duration::from_millis(300));
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
 fn a_request_for_a_pane_that_is_not_there_fails() {
     let (_server, client) = start("missing");
     assert!(client.attach(12345).is_err());

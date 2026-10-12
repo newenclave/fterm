@@ -20,6 +20,8 @@ pub struct Profile {
     pub palette_changes: Option<bool>,
     /// The workspace of the tabs that it opens (`None` = the workspace in use).
     pub workspace: Option<String>,
+    /// Its panes live in the mux server (`None` = the value of the config).
+    pub mux: Option<bool>,
 }
 
 impl Profile {
@@ -35,6 +37,7 @@ impl Profile {
             harmonize: true,
             palette_changes: None,
             workspace: None,
+            mux: None,
         }
     }
 }

@@ -208,6 +208,7 @@ impl App {
                 }),
                 harmonize: false,
                 palette_changes: Some(false),
+                mux: None,
             },
         );
         running
