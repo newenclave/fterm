@@ -91,6 +91,11 @@ pub enum UserEvent {
     AiCommand(u64, fterm_ai::Event),
     /// The connection to a mux server ended (`""` = the local one, else the name of a remote).
     MuxGone(String),
+    /// A remote is connected (or why not), from the thread of `when_connected`.
+    MuxConnected(
+        String,
+        Result<std::sync::Arc<fterm_server::client::MuxClient>, String>,
+    ),
 }
 
 mod ai_calls;
@@ -500,6 +505,8 @@ pub struct App {
     spawn_remote: Option<String>,
     /// The `user@host` box of "Connect over SSH…".
     ssh_prompt: Option<crate::ai_chat::InputBox>,
+    /// A remote that connects now (its box).
+    connecting: Option<mux_calls::Connecting>,
     /// While mux panes come back at start: the server panes that no pane shows yet.
     mux_free: Vec<u64>,
     /// Mux panes that end when the window closes now: the user closed their tab (the last one), not the window.
@@ -605,6 +612,7 @@ impl App {
             adhoc_remotes: Vec::new(),
             spawn_remote: None,
             ssh_prompt: None,
+            connecting: None,
             mux_free: Vec::new(),
             mux_end_on_exit: Vec::new(),
             mux_stop_question: None,
@@ -2548,6 +2556,18 @@ impl App {
     }
 
     fn spawn(&mut self, profile: Option<&str>, place: SpawnWhere) {
+        // A profile of a remote that is not connected yet: first the connection (on its own thread).
+        if let Some(remote) = self.profile(profile).and_then(|p| p.remote.clone())
+            && !self.muxes.contains_key(&remote)
+        {
+            return self.when_connected(
+                &remote,
+                mux_calls::AfterConnect::Spawn {
+                    profile: profile.map(str::to_owned),
+                    place,
+                },
+            );
+        }
         let result = match place {
             SpawnWhere::Tab => self.new_tab(profile).map(|_| ()),
             SpawnWhere::SplitRight => self.split(Direction::Right, profile),
@@ -4204,6 +4224,7 @@ impl App {
             .or_else(|| self.name_prompt_lines())
             .or_else(|| self.workspace_prompt_lines())
             .or_else(|| self.ssh_prompt_lines())
+            .or_else(|| self.connecting_lines())
             .or_else(|| self.key_prompt_lines())
             .or_else(|| self.access_question_lines())
             .or_else(|| self.close_question.as_ref().map(|q| q.lines.clone()))
@@ -4603,6 +4624,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Ai(id, event) => return self.ai_event(id, event),
             UserEvent::AiCommand(id, event) => return self.command_event(id, event),
             UserEvent::MuxGone(remote) => return self.mux_gone(&remote),
+            UserEvent::MuxConnected(remote, result) => return self.mux_connected(&remote, result),
             other => other,
         };
         let Some(running) = &mut self.running else {
@@ -4622,7 +4644,8 @@ impl ApplicationHandler<UserEvent> for App {
             | UserEvent::ApiGone(_)
             | UserEvent::Ai(..)
             | UserEvent::AiCommand(..)
-            | UserEvent::MuxGone(_) => {
+            | UserEvent::MuxGone(_)
+            | UserEvent::MuxConnected(..) => {
                 return;
             }
         };
@@ -4898,6 +4921,10 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if self.restore_offer.is_some() {
                     self.restore_key(&event);
+                    return;
+                }
+                if self.connecting.is_some() {
+                    self.connecting_key(&event);
                     return;
                 }
                 if self.ssh_prompt.is_some() {

@@ -2,7 +2,7 @@
 //! (`fterm --mux-server`) or one on another machine (`remotes`, over `ssh ... ftermctl mux proxy`). The window
 //! keeps its own copy of each Term (`Session::remote`): on attach it gets a snapshot, then the output.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use fterm_config::load::Remote;
@@ -11,6 +11,26 @@ use fterm_term::session::{RemoteFeed, SessionOptions};
 
 use super::*;
 use crate::session_state::SavedSession;
+
+/// What to do when a remote is connected.
+#[derive(Debug)]
+pub(super) enum AfterConnect {
+    /// Its free panes come back ("Connect: …").
+    ShowPanes,
+    /// A new pane of a profile with `remote` opens there.
+    Spawn {
+        profile: Option<String>,
+        place: SpawnWhere,
+    },
+}
+
+/// A remote that connects now (the box "Connecting to …").
+pub(super) struct Connecting {
+    pub name: String,
+    /// The client, as soon as its command runs (Esc ends the command through it).
+    pub slot: Arc<Mutex<Option<Arc<MuxClient>>>>,
+    pub then: Vec<AfterConnect>,
+}
 
 /// The name of the local mux server in `App::muxes`.
 pub(super) const LOCAL: &str = "";
@@ -86,29 +106,11 @@ impl App {
         let gone = move || {
             let _ = proxy.send_event(UserEvent::MuxGone(gone_name.clone()));
         };
-        let client = if remote == LOCAL {
-            self.connect_local(start, gone)?
-        } else {
-            let r = self.remote_named(remote)?;
-            let command = r.connect_command();
-            tracing::info!(?command, "connecting to {remote}");
-            let connected = MuxClient::connect_command(&command, &[], gone)
-                .map_err(|err| err.to_string())
-                .and_then(|client| client.hello(HELLO).map(|_| client));
-            match connected {
-                Ok(client) => client,
-                Err(err) => {
-                    self.notify(
-                        None,
-                        &tr!("toast.remote_error", remote = remote),
-                        &err,
-                        Level::Error,
-                        Source::App,
-                    );
-                    return None;
-                }
-            }
-        };
+        // A remote is connected on its own thread (`when_connected`), never here: that can take long.
+        if remote != LOCAL {
+            return None;
+        }
+        let client = self.connect_local(start, gone)?;
         self.muxes.insert(remote.to_owned(), client.clone());
         Some(client)
     }
@@ -311,10 +313,147 @@ impl App {
         true
     }
 
-    /// "Connect: <remote>": connects, and its panes that no window shows come back in a workspace named like the
-    /// remote. With none, a new tab opens there.
+    /// "Connect: <remote>": connects (on its own thread, with a box "Connecting to …"), and then its panes that
+    /// no window shows come back in a workspace named like the remote. With none, a new tab opens there.
     pub(super) fn connect_remote(&mut self, name: &str) {
-        let Some(client) = self.mux_client(name, false) else {
+        self.when_connected(name, AfterConnect::ShowPanes);
+    }
+
+    /// Does `then` when remote `name` is connected: at once when it is, else after a connection on its own thread.
+    pub(super) fn when_connected(&mut self, name: &str, then: AfterConnect) {
+        if self.muxes.contains_key(name) {
+            return self.after_connect(name, then);
+        }
+        if let Some(c) = &mut self.connecting {
+            if c.name == name {
+                c.then.push(then);
+                return;
+            }
+            let busy = c.name.clone();
+            return self.notify(
+                None,
+                &tr!("toast.remote_busy", remote = busy),
+                "",
+                Level::Info,
+                Source::App,
+            );
+        }
+        let Some(remote) = self.remote_named(name) else {
+            return self.notify(
+                None,
+                &tr!("toast.remote_unknown", remote = name),
+                "",
+                Level::Error,
+                Source::App,
+            );
+        };
+        let command = remote.connect_command();
+        tracing::info!(?command, "connecting to {name}");
+        let slot: Arc<Mutex<Option<Arc<MuxClient>>>> = Arc::default();
+        let (thread_slot, proxy, thread_name) = (slot.clone(), self.proxy.clone(), name.to_owned());
+        let started = std::thread::Builder::new()
+            .name(format!("connect {name}"))
+            .spawn(move || {
+                let gone_proxy = proxy.clone();
+                let gone_name = thread_name.clone();
+                let gone = move || {
+                    let _ = gone_proxy.send_event(UserEvent::MuxGone(gone_name.clone()));
+                };
+                let result = match MuxClient::connect_command(&command, &[], gone) {
+                    Ok(client) => {
+                        *thread_slot.lock().unwrap() = Some(client.clone());
+                        client.hello(HELLO).map(|_| client)
+                    }
+                    Err(err) => Err(err.to_string()),
+                };
+                let _ = proxy.send_event(UserEvent::MuxConnected(thread_name, result));
+            });
+        if let Err(err) = started {
+            return self.notify(
+                None,
+                &tr!("toast.remote_error", remote = name),
+                &err.to_string(),
+                Level::Error,
+                Source::App,
+            );
+        }
+        self.connecting = Some(Connecting {
+            name: name.to_owned(),
+            slot,
+            then: vec![then],
+        });
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// The box while a remote connects.
+    pub(super) fn connecting_lines(&self) -> Option<Vec<String>> {
+        let c = self.connecting.as_ref()?;
+        Some(vec![
+            tr!("box.connecting", remote = c.name.clone()),
+            String::new(),
+            tr!("box.connecting_keys"),
+        ])
+    }
+
+    /// Esc while a remote connects: the connect command ends at once, and nothing happens after it.
+    pub(super) fn connecting_key(&mut self, event: &KeyEvent) {
+        if event.logical_key != Key::Named(NamedKey::Escape) {
+            return;
+        }
+        if let Some(c) = self.connecting.take() {
+            tracing::info!("connecting to {} cancelled", c.name);
+            if let Some(client) = c.slot.lock().unwrap().take() {
+                client.kill();
+            }
+        }
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// The thread of `when_connected` ended: the client, or why not.
+    pub(super) fn mux_connected(&mut self, name: &str, result: Result<Arc<MuxClient>, String>) {
+        // Cancelled (or an old answer): the client goes, so its command ends.
+        if self.connecting.as_ref().is_none_or(|c| c.name != name) {
+            return;
+        }
+        let Some(c) = self.connecting.take() else {
+            return;
+        };
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+        match result {
+            Ok(client) => {
+                self.muxes.insert(name.to_owned(), client);
+                for then in c.then {
+                    self.after_connect(name, then);
+                }
+            }
+            Err(err) => self.notify(
+                None,
+                &tr!("toast.remote_error", remote = name),
+                &err,
+                Level::Error,
+                Source::App,
+            ),
+        }
+    }
+
+    /// What comes after a connection.
+    fn after_connect(&mut self, name: &str, then: AfterConnect) {
+        match then {
+            AfterConnect::ShowPanes => self.show_remote_panes(name),
+            AfterConnect::Spawn { profile, place } => self.spawn(profile.as_deref(), place),
+        }
+    }
+
+    /// The panes of remote `name` that no window shows come back in a workspace named like it; with none, a new
+    /// tab opens there.
+    fn show_remote_panes(&mut self, name: &str) {
+        let Some(client) = self.muxes.get(name).cloned() else {
             return;
         };
         let free = Self::free_panes(&client);

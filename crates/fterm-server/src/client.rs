@@ -39,7 +39,7 @@ struct Panes {
 
 /// The process of a connect command (`ssh ... ftermctl mux proxy`), and the last lines of its stderr.
 struct Command {
-    child: std::process::Child,
+    child: Mutex<std::process::Child>,
     errors: Arc<Mutex<Vec<String>>>,
 }
 
@@ -108,10 +108,22 @@ impl MuxClient {
         let client = Self::over(
             Box::new(stdout),
             Box::new(stdin),
-            Some(Command { child, errors }),
+            Some(Command {
+                child: Mutex::new(child),
+                errors,
+            }),
             gone,
         )?;
         Ok(client)
+    }
+
+    /// Ends the connect command now (for example the user cancels the connection): a request that waits fails.
+    pub fn kill(&self) {
+        if let Some(command) = &self.command {
+            let mut child = command.child.lock().unwrap();
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 
     /// The last lines that the connect command wrote to its stderr.
@@ -352,10 +364,13 @@ impl MuxClient {
 impl Drop for MuxClient {
     fn drop(&mut self) {
         // The connect command ends with the connection (the panes live on in the server there).
-        if let Some(command) = &mut self.command {
-            let _ = command.child.kill();
-            let _ = command.child.wait();
-        }
+        self.kill();
+    }
+}
+
+impl std::fmt::Debug for MuxClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MuxClient")
     }
 }
 

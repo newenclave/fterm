@@ -71,6 +71,8 @@ a new tab opens there. **Connect over SSH…** asks for `user@host` for a machin
 - When the connection ends (the network goes, or you close the window), the panes there go on running. fterm
   says so, and **Connect: prod** brings them back.
 - Closing such a pane or its tab ends its program there. `ftermctl mux stop` on that machine stops its server.
+- While fterm connects, a box says "Connecting to prod…", and the window still works. Esc stops the connection.
+  ssh gives up on a host that does not answer after 10 seconds.
 - When something is wrong (no ftermctl there, ssh refused the key), the toast shows what ssh or the other side said.
 - Some Linux machines end all programs of a user when the user logs out (systemd `KillUserProcesses=yes`). Then
   the server there ends too when the connection ends. `loginctl enable-linger <user>` on that machine stops this

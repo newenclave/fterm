@@ -100,6 +100,8 @@
     "box.close_tab": "Close this tab?",
     "box.config_error": "Config error:",
     "box.config_error_end": "The old config is still used. Fix the file and save it. Any key closes this.",
+    "box.connecting": "Connecting to {remote}…",
+    "box.connecting_keys": "Esc = cancel",
     "box.hooks": "Add the fterm hooks to Claude Code?",
     "box.hooks_backup": "as settings.json.bak-fterm. New Claude Code sessions use them.",
     "box.hooks_for": "Hooks for: {list}",
@@ -304,6 +306,7 @@
       "one": "{remote}: {n} pane is back",
       "other": "{remote}: {n} panes are back"
     },
+    "toast.remote_busy": "fterm connects to {remote} now: wait for it, or press Esc",
     "toast.remote_error": "Cannot connect to {remote}",
     "toast.remote_gone": "The connection to {remote} ended",
     "toast.remote_gone_body": "Its panes live on there: \"Connect: {remote}\" brings them back.",
@@ -311,6 +314,7 @@
     "toast.remote_off_body": "No program can read or type into this pane.",
     "toast.remote_on": "Remote control is on",
     "toast.remote_on_body": "Programs can ask to read and type into this pane.",
+    "toast.remote_unknown": "No remote {remote} in the config",
     "toast.reruns": "Programs can run again",
     "toast.reruns_body": {
       "one": "A pane ran a program: its command is in the prompt again. Press Enter to run it.",

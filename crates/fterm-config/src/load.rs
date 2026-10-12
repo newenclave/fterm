@@ -326,9 +326,17 @@ impl Remote {
             return self.command.clone();
         }
         // BatchMode: no password question (there is no console for it); a key or the ssh agent must work.
-        let mut c: Vec<String> = ["ssh", "-T", "-o", "BatchMode=yes"]
-            .map(str::to_owned)
-            .to_vec();
+        // ConnectTimeout: a wrong host is an error after 10 s, not after the timeout of the network.
+        let mut c: Vec<String> = [
+            "ssh",
+            "-T",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+        ]
+        .map(str::to_owned)
+        .to_vec();
         c.extend(self.ssh_args.iter().cloned());
         c.push(self.host.clone().unwrap_or_default());
         c.push(
@@ -2258,6 +2266,8 @@ mod tests {
                 "-T",
                 "-o",
                 "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
                 "me@prod.example.com",
                 "ftermctl",
                 "mux",
@@ -2271,6 +2281,8 @@ mod tests {
                 "-T",
                 "-o",
                 "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
                 "-p",
                 "2222",
                 "build",
@@ -2291,6 +2303,8 @@ mod tests {
                 "-T",
                 "-o",
                 "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
                 "me@h",
                 "ftermctl",
                 "mux",

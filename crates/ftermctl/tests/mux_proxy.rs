@@ -80,3 +80,27 @@ fn a_command_that_is_not_a_proxy_gives_its_error() {
     let err = client.hello(Duration::from_secs(10)).unwrap_err();
     assert!(err.contains("ftermctl: not found"), "{err}");
 }
+
+#[test]
+fn a_connection_that_hangs_can_be_cancelled() {
+    // Like ssh to a wrong host: the command says nothing for a long time.
+    let command: Vec<String> = if cfg!(windows) {
+        ["powershell", "-NoProfile", "-Command", "Start-Sleep 60"]
+            .map(str::to_owned)
+            .to_vec()
+    } else {
+        ["sleep", "60"].map(str::to_owned).to_vec()
+    };
+    let client = MuxClient::connect_command(&command, &[], || {}).expect("it starts");
+    let waiting = std::sync::Arc::clone(&client);
+    let started = Instant::now();
+    let hello = std::thread::spawn(move || waiting.hello(Duration::from_secs(30)));
+    std::thread::sleep(Duration::from_millis(500));
+    client.kill();
+    assert!(hello.join().unwrap().is_err());
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the cancel ends the wait at once: {:?}",
+        started.elapsed()
+    );
+}
