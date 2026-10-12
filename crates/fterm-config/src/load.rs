@@ -1702,6 +1702,9 @@ fn profile(table: &Table, path: &str) -> Result<Profile, String> {
         tab_color,
         harmonize: bool_field(table, "harmonize", &format!("{path}.harmonize"))?.unwrap_or(true),
         palette_changes: bool_field(table, "palette_changes", &format!("{path}.palette_changes"))?,
+        workspace: string_field(table, "workspace", &format!("{path}.workspace"))?
+            .map(|w| w.trim().to_owned())
+            .filter(|w| !w.is_empty()),
     })
 }
 
@@ -2123,6 +2126,19 @@ mod tests {
         .config;
         assert_eq!(config.font_size, 20.0);
         assert_eq!(config.profiles.len(), 2);
+    }
+
+    #[test]
+    fn a_profile_can_open_its_tabs_in_a_workspace() {
+        let loaded = load(
+            r#"return { profiles = { { name = "Claude", command = "claude", workspace = "agents" },
+                                     { name = "sh", command = "sh" } } }"#,
+        );
+        assert_eq!(
+            loaded.config.profiles[0].workspace.as_deref(),
+            Some("agents")
+        );
+        assert_eq!(loaded.config.profiles[1].workspace, None);
     }
 
     #[test]

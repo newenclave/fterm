@@ -218,11 +218,21 @@ pub enum BuiltinAction {
     PlanReviewMode,
     /// Labels on the links of the screen: a label opens its link, Shift + label copies it.
     OpenLinkHints,
+    /// The list of workspaces: Enter goes to one; a new name makes a new workspace.
+    ChooseWorkspace,
+    /// The next workspace.
+    NextWorkspace,
+    /// The workspace before.
+    PrevWorkspace,
+    /// The list of workspaces: Enter moves the active tab there.
+    MoveTabToWorkspace,
+    /// A new name for the workspace in use.
+    RenameWorkspace,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 56] = [
+    pub const ALL: [BuiltinAction; 61] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -279,6 +289,11 @@ impl BuiltinAction {
         Self::HarmonizeLess,
         Self::PlanReviewMode,
         Self::OpenLinkHints,
+        Self::ChooseWorkspace,
+        Self::NextWorkspace,
+        Self::PrevWorkspace,
+        Self::MoveTabToWorkspace,
+        Self::RenameWorkspace,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -340,6 +355,11 @@ impl BuiltinAction {
             Self::HarmonizeLess => "harmonize_less",
             Self::PlanReviewMode => "plan_review_mode",
             Self::OpenLinkHints => "open_link_hints",
+            Self::ChooseWorkspace => "choose_workspace",
+            Self::NextWorkspace => "next_workspace",
+            Self::PrevWorkspace => "prev_workspace",
+            Self::MoveTabToWorkspace => "move_tab_to_workspace",
+            Self::RenameWorkspace => "rename_workspace",
         };
         name.to_owned()
     }
@@ -453,6 +473,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+shift+]", "harmonize_more"),
     ("ctrl+shift+[", "harmonize_less"),
     ("ctrl+shift+u", "open_link_hints"),
+    ("ctrl+alt+w", "choose_workspace"),
 ];
 
 impl Keymap {
@@ -682,6 +703,24 @@ mod tests {
             BuiltinAction::SelectTab(0).label_in(&strings),
             "Go to tab 1"
         );
+    }
+
+    #[test]
+    fn workspace_actions() {
+        let keys = Keymap::with_defaults();
+        assert_eq!(
+            keys.get(&chord("ctrl+alt+w")),
+            Some(&Action::Builtin(BuiltinAction::ChooseWorkspace))
+        );
+        for (name, action) in [
+            ("choose_workspace", BuiltinAction::ChooseWorkspace),
+            ("next_workspace", BuiltinAction::NextWorkspace),
+            ("prev_workspace", BuiltinAction::PrevWorkspace),
+            ("move_tab_to_workspace", BuiltinAction::MoveTabToWorkspace),
+            ("rename_workspace", BuiltinAction::RenameWorkspace),
+        ] {
+            assert_eq!(BuiltinAction::from_name(name), Some(action), "{name}");
+        }
     }
 
     #[test]

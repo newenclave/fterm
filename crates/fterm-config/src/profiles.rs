@@ -18,6 +18,8 @@ pub struct Profile {
     pub harmonize: bool,
     /// Its programs may change the palette (`None` = the value of the config).
     pub palette_changes: Option<bool>,
+    /// The workspace of the tabs that it opens (`None` = the workspace in use).
+    pub workspace: Option<String>,
 }
 
 impl Profile {
@@ -32,6 +34,7 @@ impl Profile {
             tab_color: None,
             harmonize: true,
             palette_changes: None,
+            workspace: None,
         }
     }
 }

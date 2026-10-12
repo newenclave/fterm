@@ -19,7 +19,9 @@ use fterm_render::builtin::BrailleStyle;
 use fterm_render::dock::{
     DockHit, DockLayout, DockRow, DockSide, DockView, dock_hit, layout_dock, split_area,
 };
-use fterm_render::tabbar::{Hit, TabBarInput, bar_height, corner_rect, hit, layout_tabs};
+use fterm_render::tabbar::{
+    Hit, TabBarInput, bar_height, corner_rect, hit, layout_tabs_after, workspace_chip_rect,
+};
 use fterm_render::theme::UiColors;
 use fterm_render::toasts::{
     Corner, ToastLevel, ToastView, avoid_cursor, close_rect, layout_toasts,
@@ -94,6 +96,7 @@ mod api_calls;
 mod link_calls;
 mod review_calls;
 mod session_calls;
+mod workspace_calls;
 
 /// The last command of a pane (for the API).
 struct LastCommand {
@@ -480,6 +483,10 @@ pub struct App {
     restore_offer: Option<crate::session_state::Entry>,
     /// The name box of "Save session as…".
     name_prompt: Option<crate::ai_chat::InputBox>,
+    /// The name box of `rename_workspace`.
+    workspace_prompt: Option<crate::ai_chat::InputBox>,
+    /// The workspace of the next new tab (a new workspace from the list).
+    spawn_workspace: Option<String>,
     /// When the session was saved last.
     session_saved_at: Option<Instant>,
     command_next_id: u64,
@@ -573,6 +580,8 @@ impl App {
             pending_command: None,
             restore_offer: None,
             name_prompt: None,
+            workspace_prompt: None,
+            spawn_workspace: None,
             session_saved_at: None,
             command_next_id: 0,
             center: Center::new(4, true),
@@ -2029,8 +2038,16 @@ impl App {
         let size = running.grid_for(running.tab_area());
         let id = self.spawn_pane(size, profile)?;
         let color = self.profile(profile).and_then(|p| p.tab_color);
+        // A new workspace from the list, else the workspace of the profile, else the one in use.
+        let workspace = self
+            .spawn_workspace
+            .take()
+            .or_else(|| self.profile(profile).and_then(|p| p.workspace.clone()));
         let running = self.running.as_mut().unwrap();
-        let tab = running.mux.new_tab(id);
+        let tab = match &workspace {
+            Some(ws) => running.mux.new_tab_in(ws, id),
+            None => running.mux.new_tab(id),
+        };
         running.mux.set_color(tab, color);
         self.tab_changed();
         Ok(id)
@@ -2565,6 +2582,11 @@ impl App {
             A::HarmonizeLess => return self.step_harmonize(-1),
             A::PlanReviewMode => return self.step_plan_review(),
             A::OpenLinkHints => return self.toggle_link_hints(),
+            A::ChooseWorkspace => return self.open_workspace_popup(false),
+            A::MoveTabToWorkspace => return self.open_workspace_popup(true),
+            A::NextWorkspace => return self.step_workspace(1),
+            A::PrevWorkspace => return self.step_workspace(-1),
+            A::RenameWorkspace => return self.start_workspace_prompt(),
             A::ToggleOriginalColors => {
                 self.original_colors = !self.original_colors;
                 let (title, body) = if self.original_colors {
@@ -2740,12 +2762,18 @@ impl App {
             let names = fterm_config::theme::list_themes(&self.theme_dirs());
             return crate::themes::theme_rows(&names, &self.theme.name);
         }
+        if matches!(kind, PopupKind::Workspaces | PopupKind::MoveTab) {
+            return self.workspace_popup_rows();
+        }
         let Some(history) = &self.history else {
             return Vec::new();
         };
         let now = now_ms();
         match kind {
-            PopupKind::Sessions | PopupKind::Themes => Vec::new(),
+            PopupKind::Sessions
+            | PopupKind::Themes
+            | PopupKind::Workspaces
+            | PopupKind::MoveTab => Vec::new(),
             PopupKind::Commands => {
                 let filter = CommandFilter {
                     cwd: if only_here {
@@ -2843,6 +2871,13 @@ impl App {
         let Some(popup) = self.history_popup.take() else {
             return;
         };
+        if matches!(popup.kind, PopupKind::Workspaces | PopupKind::MoveTab) {
+            // The chosen workspace, or the typed name for a new one.
+            let name = popup
+                .selected()
+                .map_or_else(|| popup.query().to_owned(), |row| row.key.clone());
+            return self.accept_workspace_popup(popup.kind, name);
+        }
         let Some(row) = popup.selected().cloned() else {
             return;
         };
@@ -2852,6 +2887,8 @@ impl App {
             .and_then(Running::active_pane)
             .is_some_and(|pane| pane.shell.is_running());
         match popup.kind {
+            // Handled above.
+            PopupKind::Workspaces | PopupKind::MoveTab => return,
             PopupKind::Sessions => return self.restore_entry(&row.key),
             PopupKind::Themes => {
                 // An error was shown as a toast.
@@ -2988,7 +3025,10 @@ impl App {
                     let result = match kind {
                         PopupKind::Commands => history.forget_command(&row.text),
                         PopupKind::Dirs => history.forget_dir(&row.text, now_ms()),
-                        PopupKind::Sessions | PopupKind::Themes => Ok(()),
+                        PopupKind::Sessions
+                        | PopupKind::Themes
+                        | PopupKind::Workspaces
+                        | PopupKind::MoveTab => Ok(()),
                     };
                     if let Err(err) = result {
                         tracing::warn!("cannot change the history: {err}");
@@ -3469,7 +3509,15 @@ impl App {
         };
         let width = running.window.inner_size().width as f32;
         let cell = running.renderer.cell();
-        let layout = layout_tabs(running.mux.tabs().len(), self.tabs_width(width, cell), cell);
+        let chip = self
+            .workspace_chip()
+            .map(|(name, _)| workspace_chip_rect(&name, cell));
+        let layout = layout_tabs_after(
+            running.mux.tabs().len(),
+            chip,
+            self.tabs_width(width, cell),
+            cell,
+        );
         let (x, y) = self.mouse.position;
         hit(&layout, x as f32, y as f32)
     }
@@ -3483,6 +3531,7 @@ impl App {
             _ => None,
         };
         match (button, hit) {
+            (MouseButton::Left, Hit::Workspace) => self.open_workspace_popup(false),
             (MouseButton::Left, Hit::Tab(i)) => {
                 running.mux.select(i);
                 let point = Point::new(fterm_term::alacritty_terminal::index::Line(0), i.into());
@@ -4018,9 +4067,11 @@ impl App {
             .map(|(tab, text)| (*tab, text.clone()));
         let hover = self.mouse.tab_hover;
         let link_marks = self.link_marks();
+        let chip = self.workspace_chip();
         let question = self
             .restore_question_lines()
             .or_else(|| self.name_prompt_lines())
+            .or_else(|| self.workspace_prompt_lines())
             .or_else(|| self.key_prompt_lines())
             .or_else(|| self.access_question_lines())
             .or_else(|| self.close_question.as_ref().map(|q| q.lines.clone()))
@@ -4139,7 +4190,10 @@ impl App {
                     .map(|(_, r)| *r)
             })
             .flatten();
-        let layout = layout_tabs(mux.tabs().len(), tabs_width, cell);
+        let chip_rect = chip
+            .as_ref()
+            .map(|(name, _)| workspace_chip_rect(name, cell));
+        let layout = layout_tabs_after(mux.tabs().len(), chip_rect, tabs_width, cell);
         let active = mux.active_index();
         let editing = renaming.as_ref().and_then(|(tab, text)| {
             let index = mux.tabs().iter().position(|t| t.id == *tab)?;
@@ -4153,6 +4207,7 @@ impl App {
                         size: (u32, u32)| {
             renderer.render(device, queue, target, size, |parts| {
                 parts.tab_bar(&TabBarInput {
+                    workspace: chip.as_ref().map(|(name, dot)| (name.as_str(), *dot)),
                     layout: &layout,
                     titles: &titles,
                     active,
@@ -4706,6 +4761,10 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if self.restore_offer.is_some() {
                     self.restore_key(&event);
+                    return;
+                }
+                if self.workspace_prompt.is_some() {
+                    self.workspace_prompt_key(&event);
                     return;
                 }
                 if self.name_prompt.is_some() {

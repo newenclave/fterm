@@ -33,6 +33,8 @@ pub struct TabRect {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TabBarLayout {
+    /// The name of the workspace at the left end (when there are several workspaces).
+    pub workspace: Option<Rect>,
     pub tabs: Vec<TabRect>,
     pub new_tab: Rect,
     pub height: f32,
@@ -41,6 +43,8 @@ pub struct TabBarLayout {
 /// What is under the mouse in the tab bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Hit {
+    /// The name of the workspace (a click opens the list of workspaces).
+    Workspace,
     Tab(usize),
     Close(usize),
     NewTab,
@@ -53,9 +57,26 @@ pub enum Hit {
 
 /// Places `count` tabs in a bar of `width` pixels.
 pub fn layout_tabs(count: usize, width: f32, cell: CellMetrics) -> TabBarLayout {
+    layout_tabs_after(count, None, width, cell)
+}
+
+/// The place of the workspace name at the left end: a space, a dot, the name, and a space.
+pub fn workspace_chip_rect(name: &str, cell: CellMetrics) -> Rect {
+    let cells: usize = name.chars().map(char_cells).sum();
+    Rect::new(0.0, 0.0, (cells + 3) as f32 * cell.width, bar_height(cell))
+}
+
+/// Places `count` tabs after the workspace name `chip` (from `workspace_chip_rect`).
+pub fn layout_tabs_after(
+    count: usize,
+    chip: Option<Rect>,
+    width: f32,
+    cell: CellMetrics,
+) -> TabBarLayout {
     let height = bar_height(cell);
+    let start = chip.map_or(0.0, |c| c.width);
     let new_tab_width = NEW_TAB_CELLS * cell.width;
-    let space = (width - new_tab_width).max(0.0);
+    let space = (width - start - new_tab_width).max(0.0);
     let per_tab = if count == 0 {
         0.0
     } else {
@@ -67,7 +88,7 @@ pub fn layout_tabs(count: usize, width: f32, cell: CellMetrics) -> TabBarLayout 
     let close_width = 2.0 * cell.width;
     let tabs = (0..count)
         .map(|i| {
-            let x = i as f32 * tab_width;
+            let x = start + i as f32 * tab_width;
             TabRect {
                 rect: Rect::new(x, 0.0, tab_width, height),
                 close: Rect::new(x + tab_width - close_width, 0.0, close_width, height),
@@ -75,8 +96,9 @@ pub fn layout_tabs(count: usize, width: f32, cell: CellMetrics) -> TabBarLayout 
         })
         .collect();
     TabBarLayout {
+        workspace: chip,
         tabs,
-        new_tab: Rect::new(count as f32 * tab_width, 0.0, new_tab_width, height),
+        new_tab: Rect::new(start + count as f32 * tab_width, 0.0, new_tab_width, height),
         height,
     }
 }
@@ -84,6 +106,9 @@ pub fn layout_tabs(count: usize, width: f32, cell: CellMetrics) -> TabBarLayout 
 pub fn hit(layout: &TabBarLayout, x: f32, y: f32) -> Hit {
     if y < 0.0 || y >= layout.height {
         return Hit::None;
+    }
+    if layout.workspace.is_some_and(|chip| chip.contains(x, y)) {
+        return Hit::Workspace;
     }
     for (i, tab) in layout.tabs.iter().enumerate() {
         if tab.close.contains(x, y) {
@@ -140,6 +165,8 @@ pub struct TabBarInput<'a> {
     /// A colored dot and a short text at the right end (for example, unread events). Give `layout_tabs`
     /// the width without `corner_rect`, so the tabs do not cover it.
     pub corner: Option<(&'a str, Rgb)>,
+    /// The name of the workspace (drawn in `layout.workspace`), and a dot when an agent waits in another one.
+    pub workspace: Option<(&'a str, Option<Rgb>)>,
     pub cell: CellMetrics,
     pub width: f32,
 }
@@ -158,6 +185,36 @@ pub fn build_tab_bar(
     )];
     let mut text = Vec::new();
     let text_y = BAR_PADDING;
+
+    if let (Some(chip), Some((name, dot))) = (layout.workspace, input.workspace) {
+        let bg = if input.hover == Hit::Workspace {
+            ui.overlay
+        } else {
+            ui.selected
+        };
+        quads.push(solid(chip, bg));
+        if let Some(dot) = dot {
+            let size = (cell.width * 0.5).round().max(3.0);
+            quads.push(solid(
+                Rect::new(
+                    chip.x + cell.width + (cell.width - size) / 2.0,
+                    text_y + (cell.height - size) / 2.0,
+                    size,
+                    size,
+                ),
+                dot,
+            ));
+        }
+        push_text(
+            &mut text,
+            name,
+            chip.x + 2.0 * cell.width,
+            text_y,
+            cell,
+            ui.text,
+            glyph,
+        )?;
+    }
 
     for (i, tab) in layout.tabs.iter().enumerate() {
         let rect = tab.rect;
@@ -355,6 +412,53 @@ mod tests {
     };
 
     #[test]
+    fn the_workspace_chip_comes_first_and_the_tabs_after_it() {
+        let chip = workspace_chip_rect("work", CELL);
+        assert_eq!(
+            chip,
+            Rect::new(0.0, 0.0, 7.0 * CELL.width, bar_height(CELL))
+        );
+        let layout = layout_tabs_after(2, Some(chip), 1000.0, CELL);
+        assert_eq!(layout.workspace, Some(chip));
+        assert_eq!(layout.tabs[0].rect.x, chip.width);
+        assert_eq!(hit(&layout, 5.0, 5.0), Hit::Workspace);
+        assert_eq!(hit(&layout, chip.width + 5.0, 5.0), Hit::Tab(0));
+        // No chip: the same as before.
+        assert_eq!(
+            layout_tabs_after(2, None, 1000.0, CELL),
+            layout_tabs(2, 1000.0, CELL)
+        );
+    }
+
+    #[test]
+    fn the_workspace_chip_shows_the_name() {
+        let chip = workspace_chip_rect("work", CELL);
+        let layout = layout_tabs_after(1, Some(chip), 1000.0, CELL);
+        let titles = ["a".to_owned()];
+        let input = TabBarInput {
+            layout: &layout,
+            titles: &titles,
+            active: 0,
+            hover: Hit::None,
+            editing: None,
+            badges: &[],
+            colors: &[],
+            corner: None,
+            workspace: Some(("work", None)),
+            cell: CELL,
+            width: 1000.0,
+        };
+        let mut drawn = Vec::new();
+        build_tab_bar(&input, &ui(), &mut |k| {
+            drawn.push(k.c);
+            Ok(Some(GLYPH))
+        })
+        .unwrap();
+        let text: String = drawn.into_iter().collect();
+        assert!(text.starts_with("work"), "{text}");
+    }
+
+    #[test]
     fn bar_is_one_cell_plus_padding() {
         assert_eq!(bar_height(CELL), 20.0 + 2.0 * BAR_PADDING);
     }
@@ -437,6 +541,7 @@ mod tests {
             badges: &[],
             colors: &[],
             corner: None,
+            workspace: None,
             cell: CELL,
             width: 1000.0,
         };
@@ -512,6 +617,7 @@ mod tests {
             badges: &badges,
             colors: &[],
             corner: None,
+            workspace: None,
             cell: CELL,
             width: 1000.0,
         };
@@ -556,6 +662,7 @@ mod tests {
             badges: &[],
             colors: &colors,
             corner: None,
+            workspace: None,
             cell: CELL,
             width: 1000.0,
         };
@@ -602,6 +709,7 @@ mod tests {
             badges: &[],
             colors: &[],
             corner: Some(("3", pink)),
+            workspace: None,
             cell: CELL,
             width: 1000.0,
         };
@@ -638,6 +746,7 @@ mod tests {
             badges: &[],
             colors: &[],
             corner: None,
+            workspace: None,
             cell: CELL,
             width: 1000.0,
         };

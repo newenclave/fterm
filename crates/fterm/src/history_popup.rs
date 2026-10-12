@@ -15,6 +15,10 @@ pub enum PopupKind {
     Sessions,
     /// The themes (built-in ones and files).
     Themes,
+    /// The workspaces: Enter goes to one (a new name makes one).
+    Workspaces,
+    /// The workspaces: Enter moves the active tab there.
+    MoveTab,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -120,6 +124,8 @@ impl HistoryPopup {
             PopupKind::Dirs => tr!("popup.folders"),
             PopupKind::Sessions => tr!("popup.sessions"),
             PopupKind::Themes => tr!("popup.themes"),
+            PopupKind::Workspaces => tr!("popup.workspaces"),
+            PopupKind::MoveTab => tr!("popup.move_tab"),
             PopupKind::Commands => {
                 let mut title = tr!("popup.commands");
                 if self.only_here {
@@ -145,6 +151,8 @@ impl HistoryPopup {
                 action = tr!("action.save_session_as")
             ),
             PopupKind::Themes => tr!("popup.themes_keys"),
+            PopupKind::Workspaces => tr!("popup.workspaces_keys"),
+            PopupKind::MoveTab => tr!("popup.move_tab_keys"),
         }
     }
 }
