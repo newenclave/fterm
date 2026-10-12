@@ -89,8 +89,8 @@ pub enum UserEvent {
     Ai(u64, fterm_ai::Event),
     /// A piece of a "text to command" answer.
     AiCommand(u64, fterm_ai::Event),
-    /// The connection to the mux server ended.
-    MuxGone,
+    /// The connection to a mux server ended (`""` = the local one, else the name of a remote).
+    MuxGone(String),
 }
 
 mod ai_calls;
@@ -138,8 +138,8 @@ struct Pane {
     harmonize: bool,
     /// Its programs may change the palette (from its profile; `None` = the value of the config).
     palette_changes: Option<bool>,
-    /// A mux pane: its id in the mux server (its program lives there).
-    mux: Option<u64>,
+    /// A mux pane: its server and its id there (its program lives there).
+    mux: Option<mux_calls::MuxPane>,
 }
 
 /// Everything that exists only while the window is open.
@@ -492,12 +492,18 @@ pub struct App {
     workspace_prompt: Option<crate::ai_chat::InputBox>,
     /// The workspace of the next new tab (a new workspace from the list).
     spawn_workspace: Option<String>,
-    /// The connection to the mux server (made when a mux pane is needed).
-    mux: Option<std::sync::Arc<fterm_server::client::MuxClient>>,
+    /// The connections to mux servers: `""` = the local one (made when a mux pane is needed), else remotes.
+    muxes: HashMap<String, std::sync::Arc<fterm_server::client::MuxClient>>,
+    /// Hosts of "Connect over SSH…" (not in the config).
+    adhoc_remotes: Vec<fterm_config::load::Remote>,
+    /// The remote of the next new pane ("Connect: …" with no free panes).
+    spawn_remote: Option<String>,
+    /// The `user@host` box of "Connect over SSH…".
+    ssh_prompt: Option<crate::ai_chat::InputBox>,
     /// While mux panes come back at start: the server panes that no pane shows yet.
     mux_free: Vec<u64>,
     /// Mux panes that end when the window closes now: the user closed their tab (the last one), not the window.
-    mux_end_on_exit: Vec<u64>,
+    mux_end_on_exit: Vec<mux_calls::MuxPane>,
     /// "Stop the mux server?": the lines of the question.
     mux_stop_question: Option<Vec<String>>,
     /// When the session was saved last.
@@ -595,7 +601,10 @@ impl App {
             name_prompt: None,
             workspace_prompt: None,
             spawn_workspace: None,
-            mux: None,
+            muxes: HashMap::new(),
+            adhoc_remotes: Vec::new(),
+            spawn_remote: None,
+            ssh_prompt: None,
             mux_free: Vec::new(),
             mux_end_on_exit: Vec::new(),
             mux_stop_question: None,
@@ -2020,12 +2029,47 @@ impl App {
             // The window may be closed already. Then nobody needs the event.
             let _ = proxy.send_event(UserEvent::Term(id, event));
         };
-        // A mux pane runs its program in the mux server; when the server cannot start, a local pane.
+        // A pane on a remote: from a profile with `remote`, from "Connect: …", or a new tab or split of a pane
+        // there (with no profile asked for).
+        let profile_remote = self
+            .profile(profile_name.as_deref())
+            .and_then(|p| p.remote.clone());
+        let active_remote = profile
+            .is_none()
+            .then(|| {
+                self.running
+                    .as_ref()
+                    .and_then(Running::active_pane)
+                    .and_then(|p| p.mux.as_ref())
+                    .filter(|m| !m.is_local())
+                    .map(|m| m.remote.clone())
+            })
+            .flatten();
+        let remote = self
+            .spawn_remote
+            .take()
+            .or_else(|| profile_remote.clone())
+            .or(active_remote);
+        // A mux pane runs its program in the mux server; when the local server cannot start, a local pane.
         let mut mux = None;
-        let session = if self.mux_wanted(profile_name.as_deref()) {
-            match self.spawn_mux_session(id, &options, size) {
-                Ok((session, rid)) => {
-                    mux = Some(rid);
+        let session = if let Some(remote) = remote {
+            // The shell of the user there, unless a profile of that remote says the program.
+            let remote_options = if profile_remote.is_some() {
+                options.clone()
+            } else {
+                SessionOptions {
+                    program: None,
+                    args: Vec::new(),
+                    ..options.clone()
+                }
+            };
+            let (session, m) = self.spawn_mux_session(&remote, id, &remote_options, size)?;
+            mux = Some(m);
+            session
+        } else if self.mux_wanted(profile_name.as_deref()) {
+            match self.spawn_mux_session(mux_calls::LOCAL, id, &options, size) {
+                Ok((session, m)) => {
+                    mux = Some(m);
                     session
                 }
                 Err(err) => {
@@ -2211,8 +2255,8 @@ impl App {
                 if running
                     .panes
                     .get(&pane)
-                    .and_then(|p| p.mux)
-                    .is_some_and(|rid| !self.mux_end_on_exit.contains(&rid))
+                    .and_then(|p| p.mux.as_ref())
+                    .is_some_and(|m| !self.mux_end_on_exit.contains(m))
                 {
                     continue;
                 }
@@ -2302,9 +2346,11 @@ impl App {
             // The user closes this tab or pane, not only the window: its mux panes end too.
             self.mux_end_on_exit = match target {
                 CloseTarget::Window => Vec::new(),
-                CloseTarget::Tab(_) | CloseTarget::Pane(_) => {
-                    running.panes.values().filter_map(|p| p.mux).collect()
-                }
+                CloseTarget::Tab(_) | CloseTarget::Pane(_) => running
+                    .panes
+                    .values()
+                    .filter_map(|p| p.mux.clone())
+                    .collect(),
             };
             return self.close_window(event_loop);
         }
@@ -2453,6 +2499,7 @@ impl App {
         match action {
             Action::Builtin(builtin) => self.run_builtin(event_loop, builtin),
             Action::Spawn { profile, place } => self.spawn(profile.as_deref(), place),
+            Action::Connect(remote) => self.connect_remote(&remote),
             Action::Lua(index) => match self.config.call(index) {
                 Ok(calls) => {
                     for call in calls {
@@ -2654,6 +2701,7 @@ impl App {
             A::PrevWorkspace => return self.step_workspace(-1),
             A::RenameWorkspace => return self.start_workspace_prompt(),
             A::StopMux => return self.ask_stop_mux(),
+            A::ConnectSsh => return self.start_ssh_prompt(),
             A::ToggleOriginalColors => {
                 self.original_colors = !self.original_colors;
                 let (title, body) = if self.original_colors {
@@ -2791,6 +2839,14 @@ impl App {
                     action,
                 });
             }
+        }
+        // The remote machines: their panes, or a new one there.
+        for remote in &self.config.config.remotes {
+            items.push(PaletteItem {
+                label: tr!("palette.connect", remote = remote.name),
+                key: String::new(),
+                action: Action::Connect(remote.name.clone()),
+            });
         }
         for command in &self.config.config.commands {
             items.push(PaletteItem {
@@ -4147,6 +4203,7 @@ impl App {
             .restore_question_lines()
             .or_else(|| self.name_prompt_lines())
             .or_else(|| self.workspace_prompt_lines())
+            .or_else(|| self.ssh_prompt_lines())
             .or_else(|| self.key_prompt_lines())
             .or_else(|| self.access_question_lines())
             .or_else(|| self.close_question.as_ref().map(|q| q.lines.clone()))
@@ -4545,7 +4602,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::ApiGone(client) => return self.api_client_gone(client),
             UserEvent::Ai(id, event) => return self.ai_event(id, event),
             UserEvent::AiCommand(id, event) => return self.command_event(id, event),
-            UserEvent::MuxGone => return self.mux_gone(),
+            UserEvent::MuxGone(remote) => return self.mux_gone(&remote),
             other => other,
         };
         let Some(running) = &mut self.running else {
@@ -4565,7 +4622,7 @@ impl ApplicationHandler<UserEvent> for App {
             | UserEvent::ApiGone(_)
             | UserEvent::Ai(..)
             | UserEvent::AiCommand(..)
-            | UserEvent::MuxGone => {
+            | UserEvent::MuxGone(_) => {
                 return;
             }
         };
@@ -4841,6 +4898,10 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if self.restore_offer.is_some() {
                     self.restore_key(&event);
+                    return;
+                }
+                if self.ssh_prompt.is_some() {
+                    self.ssh_prompt_key(&event);
                     return;
                 }
                 if self.workspace_prompt.is_some() {

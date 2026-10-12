@@ -37,7 +37,12 @@ impl App {
                     program: display_name(p.session.program()).to_owned(),
                     ran: p.shell.running_command().map(str::to_owned),
                     scene: p.scene.is_some(),
-                    mux: p.mux,
+                    mux: p.mux.as_ref().filter(|m| m.is_local()).map(|m| m.id),
+                    remote: p
+                        .mux
+                        .as_ref()
+                        .filter(|m| !m.is_local())
+                        .map(|m| m.remote.clone()),
                     text: if lines == 0 {
                         Vec::new()
                     } else {
@@ -434,12 +439,18 @@ impl App {
                 if pane.scene {
                     return Some(self.spawn_scene(size));
                 }
+                // A pane on a remote comes back when you connect to it again, not here.
+                if pane.remote.is_some() {
+                    return None;
+                }
                 // A mux pane that the server still has: it comes back as it is.
                 if let Some(rid) = pane.mux
                     && let Some(at) = self.mux_free.iter().position(|r| *r == rid)
                 {
                     self.mux_free.remove(at);
-                    if let Some(id) = self.attach_mux_pane(rid, pane.profile.clone()) {
+                    if let Some(id) =
+                        self.attach_mux_pane(super::mux_calls::LOCAL, rid, pane.profile.clone())
+                    {
                         return Some(id);
                     }
                 }

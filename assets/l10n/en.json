@@ -7,6 +7,7 @@
     "action.choose_workspace": "Workspace…",
     "action.close_pane": "Close pane",
     "action.command_palette": "Command palette",
+    "action.connect_ssh": "Connect over SSH…",
     "action.copy": "Copy",
     "action.copy_claude_hooks": "Copy Claude Code hooks (settings.json)",
     "action.copy_mode": "Copy mode",
@@ -126,6 +127,8 @@
     "box.running": "Running: {list}",
     "box.save_session": "Save this session as:",
     "box.save_session_keys": "Enter = save, Esc = cancel. A saved session stays in the list (Ctrl+Shift+S).",
+    "box.ssh": "Connect over SSH to (user@host):",
+    "box.ssh_keys": "Enter = connect, Esc = cancel. The key or the ssh agent must work: there is no password question.",
     "box.tabs_and_panes": "{tabs}, {panes}.",
     "count.lines": {
       "one": "{n} line",
@@ -154,6 +157,7 @@
     "level.info": "info",
     "level.success": "success",
     "level.warning": "warning",
+    "palette.connect": "Connect: {remote}",
     "palette.profile_down": "Split down: {profile}",
     "palette.profile_right": "Split right: {profile}",
     "palette.profile_tab": "New tab: {profile}",
@@ -296,6 +300,13 @@
     "toast.program_runs_body": "The text is copied. Paste it where you need it.",
     "toast.recording": "Recording the output of every pane",
     "toast.recording_body": "FTERM_RECORD: {folder}. It can have secrets; remove FTERM_RECORD when you are done.",
+    "toast.remote_back": {
+      "one": "{remote}: {n} pane is back",
+      "other": "{remote}: {n} panes are back"
+    },
+    "toast.remote_error": "Cannot connect to {remote}",
+    "toast.remote_gone": "The connection to {remote} ended",
+    "toast.remote_gone_body": "Its panes live on there: \"Connect: {remote}\" brings them back.",
     "toast.remote_off": "Remote control is off",
     "toast.remote_off_body": "No program can read or type into this pane.",
     "toast.remote_on": "Remote control is on",

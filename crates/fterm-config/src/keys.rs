@@ -230,11 +230,13 @@ pub enum BuiltinAction {
     RenameWorkspace,
     /// Ends all panes of the mux server and the server (after a question).
     StopMux,
+    /// "Connect over SSH…": a box for `user@host`, then its panes.
+    ConnectSsh,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 62] = [
+    pub const ALL: [BuiltinAction; 63] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -297,6 +299,7 @@ impl BuiltinAction {
         Self::MoveTabToWorkspace,
         Self::RenameWorkspace,
         Self::StopMux,
+        Self::ConnectSsh,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -364,6 +367,7 @@ impl BuiltinAction {
             Self::MoveTabToWorkspace => "move_tab_to_workspace",
             Self::RenameWorkspace => "rename_workspace",
             Self::StopMux => "stop_mux",
+            Self::ConnectSsh => "connect_ssh",
         };
         name.to_owned()
     }
@@ -410,6 +414,8 @@ pub enum Action {
     },
     /// A Lua function from the config (its number in the config).
     Lua(usize),
+    /// Connect to a remote machine of the config (`remotes`) and show its panes.
+    Connect(String),
 }
 
 /// Keys and their actions: the defaults, then the user's bindings.

@@ -84,6 +84,9 @@ pub struct SavedPane {
     /// A mux pane: its id in the mux server (it comes back as it is when the server still has it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mux: Option<u64>,
+    /// A pane on a remote (its name): it comes back when the window connects to the remote again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
