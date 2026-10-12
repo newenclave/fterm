@@ -33,6 +33,13 @@ pub enum TermEvent {
     Bell,
 }
 
+/// Lets the programs of the panes get Ctrl+C, also when this process was started by one that ignores it
+/// (Windows passes that on to child processes). Nothing to do on Linux and macOS.
+pub fn allow_ctrl_c() {
+    #[cfg(windows)]
+    crate::conpty::allow_ctrl_c();
+}
+
 /// What to run in the session.
 #[derive(Clone, Debug)]
 pub struct SessionOptions {

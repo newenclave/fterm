@@ -222,6 +222,20 @@ fn cmdline(config: &Options) -> String {
 
 /// Converts the string slice into a Windows-standard representation for "W"-
 /// suffixed function variants, which accept UTF-16 encoded string values.
+/// Lets this process (and so the programs that it starts) get Ctrl+C. Windows passes "ignore Ctrl+C" on to
+/// child processes, so a parent that ignores it (a launcher, a service, `CREATE_NEW_PROCESS_GROUP`) would leave
+/// Ctrl+C in a pane with no effect.
+pub fn allow_ctrl_c() {
+    // SAFETY: a plain call with no pointers; `None` + FALSE means "process Ctrl+C normally".
+    let ok = unsafe { windows_sys::Win32::System::Console::SetConsoleCtrlHandler(None, 0) };
+    if ok == 0 {
+        tracing::debug!(
+            "cannot turn Ctrl+C handling on: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
 pub fn win32_string<S: AsRef<OsStr> + ?Sized>(value: &S) -> Vec<u16> {
     OsStr::new(value).encode_wide().chain(once(0)).collect()
 }

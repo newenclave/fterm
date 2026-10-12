@@ -39,6 +39,9 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| EnvFilter::new("info,wgpu_core=warn,wgpu_hal=warn"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
+    // Ctrl+C must reach the programs of the panes, whatever started fterm.
+    fterm_term::session::allow_ctrl_c();
+
     // The mux server: no window; it ends a minute after its last pane and window are gone.
     if std::env::args().any(|a| a == "--mux-server") {
         fterm_server::run()?;

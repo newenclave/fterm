@@ -266,8 +266,9 @@ fn start_server() -> std::io::Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW: it does not end with this window.
-        command.creation_flags(0x0000_0008 | 0x0000_0200 | 0x0800_0000);
+        // DETACHED_PROCESS | CREATE_NO_WINDOW: no console, so it does not end with the console of this window. Not
+        // CREATE_NEW_PROCESS_GROUP: that turns Ctrl+C off for the server and every program in its panes.
+        command.creation_flags(0x0000_0008 | 0x0800_0000);
     }
     #[cfg(unix)]
     {
