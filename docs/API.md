@@ -69,7 +69,7 @@ A missing `pane` means: the pane of the client (from `hello`), else the active p
 | Method | Params | Answer |
 |---|---|---|
 | `hello` | `name`, `pane` (your `FTERM_PANE_ID`) | `api_version`, `fterm`, `pid`, `methods`, `events`, `pane` |
-| `list` | | `tabs`: each with `tab`, `title`, `active`, `zoomed`, `panes` |
+| `list` | | `workspace` (the one in use); `tabs` (of all workspaces): each with `tab` (its number in its workspace), `workspace`, `title`, `active`, `zoomed`, `panes` (each pane has `workspace` too) |
 | `spawn` | `place`: `"tab"` (default), `"right"`, `"down"`; `profile`; `cwd`; `pane` (split next to it) | `pane` |
 | `send_text` | `pane`, `text`, `enter` (true = press Enter after the text) | |
 | `get_text` | `pane`, `what`: `"screen"` (default), `"history"`, or `"last_output"`; `lines` (default 200, at most 10000); `styled` (default false) | `text`; for `last_output` also `command`, `exit`, `running`; with `styled` also `fg`, `bg`, `lines` (see below) |

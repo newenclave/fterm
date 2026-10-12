@@ -58,7 +58,7 @@ When FTERM_PANE_ID is set, you run in the fterm terminal: run `ftermctl guide` o
 
 | Tool | What it does |
 |---|---|
-| `list_panes` | All tabs and panes: ids, programs, folders, agent states, the last command and its exit code. |
+| `list_panes` | All tabs and panes (of all workspaces): ids, programs, folders, agent states, the last command and its exit code. |
 | `open_pane` | A new tab, or a split on the right or below (`place`, `profile`, `cwd`, `next_to`). Gives the new pane id. |
 | `run_command` | Types a command into a pane, waits for its end, and gives the exit code and the output. |
 | `send_text` | Types text into a pane (for example an answer to a program). |

@@ -13,6 +13,12 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   `"system"`). A text that the file does not have stays English, and plural forms follow the rules of the
   language. The archive has `l10n/en.json` to start a translation. See docs/L10N.md.
 
+- **Workspaces.** A workspace is a group of tabs: the tab bar shows the tabs of one workspace, and the programs in
+  the others go on running. Ctrl + Alt + W (or a click on the workspace name at the left of the tab bar) opens the
+  list: go to a workspace, or type a new name for a new one. The palette can move a tab to another workspace and
+  rename a workspace. A dot on the name shows an agent that waits in another workspace. A profile can open its tabs
+  in a workspace (`workspace = "agents"`), sessions keep the workspaces, and `list_panes` tells the workspace of
+  each tab. See docs/KEYS.md.
 - **Links with the keyboard, and OSC 8 links.** Ctrl + Shift + U puts a label on every link of the screen: press a
   label to open its link, or Shift + the label to copy it. Hold Ctrl and move the mouse: the link under it is
   underlined. OSC 8 links (a text with a hidden URL) work too. fterm opens only http, https, ftp, mailto, and file

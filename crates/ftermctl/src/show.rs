@@ -5,12 +5,17 @@ use serde_json::Value;
 /// `list` as a small table.
 pub fn list(answer: &Value) -> String {
     let mut out = String::new();
-    for tab in answer["tabs"].as_array().into_iter().flatten() {
-        let mut line = format!(
-            "tab {}  {}",
-            tab["tab"],
-            tab["title"].as_str().unwrap_or("")
-        );
+    let tabs: Vec<&Value> = answer["tabs"].as_array().into_iter().flatten().collect();
+    // With more than one workspace, each tab says its workspace.
+    let mut names: Vec<&str> = tabs.iter().filter_map(|t| t["workspace"].as_str()).collect();
+    names.dedup();
+    let named = names.len() > 1;
+    for tab in tabs {
+        let place = match tab["workspace"].as_str() {
+            Some(ws) if named => format!("{ws} · tab {}", tab["tab"]),
+            _ => format!("tab {}", tab["tab"]),
+        };
+        let mut line = format!("{place}  {}", tab["title"].as_str().unwrap_or(""));
         if tab["active"] == true {
             line.push_str("  (active)");
         }
@@ -144,6 +149,24 @@ mod tests {
         ]
         .join("\n");
         assert_eq!(list(&answer), expected);
+    }
+
+    #[test]
+    fn list_with_workspaces_says_where_each_tab_is() {
+        let answer = json!({
+            "workspace": "work",
+            "tabs": [
+                { "tab": 1, "workspace": "main", "title": "a", "active": false, "panes": [] },
+                { "tab": 1, "workspace": "work", "title": "b", "active": true, "panes": [] }
+            ]
+        });
+        assert_eq!(list(&answer), "main · tab 1  a
+work · tab 1  b  (active)
+");
+        // One workspace: no names.
+        let one = json!({ "tabs": [ { "tab": 1, "workspace": "main", "title": "a", "panes": [] } ] });
+        assert_eq!(list(&one), "tab 1  a
+");
     }
 
     #[test]

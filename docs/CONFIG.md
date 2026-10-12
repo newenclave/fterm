@@ -114,6 +114,7 @@ profiles = {
 | `env` | More environment variables. |
 | `wsl` | A WSL distro (for example `"Ubuntu"`). fterm starts `wsl.exe -d Ubuntu --cd ~` and knows that the pane has Linux folders. |
 | `palette_changes` | `true` / `false`: may its programs change the 16 colors (default: the value of the config). |
+| `workspace` | The workspace of the tabs that it opens, for example `"agents"` (made when it is not there; see [KEYS.md](KEYS.md#workspaces)). |
 | `harmonize` | `false`: the programs of this profile keep their exact colors (see [THEMES.md](THEMES.md#the-colors-of-programs-harmonize)). |
 | `tab_color` | A color (`#rrggbb`) for the tabs that this profile opens: a line at the top of the tab (see [Tab colors](#tab-colors)). |
 
@@ -166,6 +167,8 @@ also work on other layouts (for example, Russian).
 | `choose_theme` | The list of themes; Enter uses one until fterm closes (see [THEMES.md](THEMES.md)). |
 | `toggle_original_colors` | The colors that programs chose as they are, or fitted to the theme (`harmonize`). |
 | `harmonize_more`, `harmonize_less` (Ctrl+Shift+], Ctrl+Shift+[) | Try a stronger or weaker `harmonize` (steps of 0.1) until the config changes. |
+| `choose_workspace` (Ctrl+Alt+W), `move_tab_to_workspace` | The list of workspaces: go to one or make one, or move the active tab there. |
+| `next_workspace`, `prev_workspace`, `rename_workspace` | The next / the previous workspace, a new name for this one. |
 | `open_link_hints` (Ctrl+Shift+U) | Labels on the links of the screen: a label opens its link, Shift + label copies it. |
 | `plan_review_mode` | The next `plan_review` mode (ask → always → never), until the config changes. |
 

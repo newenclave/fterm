@@ -24,6 +24,23 @@ The key of each action is on the right.
 
 The tab title is your name for the tab, or the title from the program, or the program name.
 
+## Workspaces
+A workspace is a group of tabs, for example "fterm", "work", and "agents". The tab bar shows only the tabs of the
+workspace in use. The programs in the other workspaces go on running. The first workspace is `main`.
+
+| Key or mouse | What it does |
+|---|---|
+| Ctrl + Alt + W, click the name at the left of the tab bar | The list of workspaces. Enter goes to the chosen one. Type a new name and press Enter: a new workspace with a new tab. |
+| Palette → Move tab to workspace… | The same list: Enter moves the active tab there (or to a new workspace). |
+| Palette → Next workspace / Previous workspace | Go to the next / the previous workspace. |
+| Palette → Rename workspace | A new name for the workspace in use. |
+
+With more than one workspace, the name of the workspace in use is at the left end of the tab bar. A dot on it
+means that an agent in another workspace waits for you (yellow) or failed (red). The tab keys (next, previous,
+Ctrl + Shift + 1 … 8) work inside the workspace. When you go to a pane from a toast or the Agents panel, fterm goes
+to its workspace. When the last tab of a workspace closes, the workspace goes away. The session keeps the
+workspaces. To open the tabs of a profile in a workspace, give it `workspace = "agents"` (see CONFIG.md).
+
 ## The window
 | Key or mouse | What it does |
 |---|---|
