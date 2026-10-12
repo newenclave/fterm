@@ -49,6 +49,56 @@ pub struct SessionOptions {
     pub intro: Vec<u8>,
     /// Record what the program writes, and the sizes, to this file (asciinema v2; `FTERM_RECORD`).
     pub record: Option<std::path::PathBuf>,
+    /// Gets every byte that the program writes, too (the mux server).
+    pub tap: Option<Tap>,
+}
+
+/// A callback for the output bytes (`SessionOptions::tap`).
+#[derive(Clone)]
+pub struct Tap(pub crate::io_loop::OutputTap);
+
+impl std::fmt::Debug for Tap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Tap")
+    }
+}
+
+/// Where the keys and the sizes of a remote session go (the connection to the mux server).
+pub trait RemoteLink: Send + Sync {
+    fn write(&self, bytes: Vec<u8>);
+    fn resize(&self, size: GridSize);
+}
+
+/// The output side of a remote session: the bytes from the server go in here.
+pub struct RemoteFeed {
+    term: Arc<FairMutex<Term<Listener>>>,
+    feeder: Mutex<crate::io_loop::Feeder>,
+    listener: Listener,
+}
+
+impl RemoteFeed {
+    /// Output of the program, as the server got it from the pty.
+    pub fn output(&self, bytes: &[u8]) {
+        let mut osc = Vec::new();
+        {
+            let mut term = self.term.lock();
+            self.feeder
+                .lock()
+                .unwrap()
+                .feed(&mut *term, bytes, &mut osc);
+        }
+        for event in osc {
+            (self.listener.on_event)(TermEvent::Osc(event));
+        }
+        if !bytes.is_empty() {
+            (self.listener.on_event)(TermEvent::Redraw);
+        }
+    }
+
+    /// The program ended.
+    pub fn exit(&self) {
+        (self.listener.on_event)(TermEvent::Exit);
+    }
 }
 
 impl Default for SessionOptions {
@@ -61,6 +111,7 @@ impl Default for SessionOptions {
             scrollback: 10_000,
             intro: Vec::new(),
             record: None,
+            tap: None,
         }
     }
 }
@@ -109,8 +160,10 @@ impl EventListener for Listener {
 
 pub struct Session {
     term: Arc<FairMutex<Term<Listener>>>,
-    /// The pty loop. `None` for a scene (no pty).
+    /// The pty loop. `None` for a scene (no pty) and a remote session.
     notifier: Mutex<Option<Notifier>>,
+    /// The link to the mux server, for a remote session.
+    remote: Option<Arc<dyn RemoteLink>>,
     size: Mutex<GridSize>,
     /// The user's selection. It is kept here, so the terminal cannot remove it.
     selection: Mutex<StickySelection>,
@@ -211,6 +264,7 @@ impl Session {
             listener.clone(),
             pty,
             osc_sink,
+            options.tap.map(|t| t.0),
             recorder.clone(),
         )?;
         let sender = event_loop.channel();
@@ -219,6 +273,7 @@ impl Session {
 
         Ok(Self {
             term,
+            remote: None,
             notifier: Mutex::new(Some(Notifier(sender))),
             size: Mutex::new(size),
             selection: Mutex::new(StickySelection::default()),
@@ -228,8 +283,51 @@ impl Session {
         })
     }
 
+    /// A session whose program runs in the mux server. Its output goes into the returned `RemoteFeed`; keys and
+    /// sizes go to `link`. This Term does not answer terminal queries: the server's Term does.
+    pub fn remote(
+        options: &SessionOptions,
+        size: GridSize,
+        link: Arc<dyn RemoteLink>,
+        on_event: impl Fn(TermEvent) + Send + Sync + 'static,
+    ) -> (Self, RemoteFeed) {
+        let listener = Listener {
+            on_event: Arc::new(on_event),
+            // No pty here: `PtyWrite` answers go nowhere.
+            sender: Arc::new(OnceLock::new()),
+        };
+        let term = Arc::new(FairMutex::new(Term::new(
+            Config {
+                scrolling_history: options.scrollback,
+                ..term_config()
+            },
+            &size,
+            listener.clone(),
+        )));
+        let program = options.program.clone().unwrap_or_else(default_shell);
+        let feed = RemoteFeed {
+            term: term.clone(),
+            feeder: Mutex::new(crate::io_loop::Feeder::default()),
+            listener,
+        };
+        let session = Self {
+            term,
+            notifier: Mutex::new(None),
+            remote: Some(link),
+            size: Mutex::new(size),
+            selection: Mutex::new(StickySelection::default()),
+            pid: None,
+            program: program_name(&program),
+            recorder: Default::default(),
+        };
+        (session, feed)
+    }
+
     /// Sends bytes to the program (keys, paste).
     pub fn write(&self, bytes: Vec<u8>) {
+        if let Some(remote) = &self.remote {
+            return remote.write(bytes);
+        }
         if let Some(notifier) = &*self.notifier.lock().unwrap() {
             notifier.notify(bytes);
         }
@@ -247,6 +345,9 @@ impl Session {
         }
         if let Some(notifier) = &mut *self.notifier.lock().unwrap() {
             notifier.on_resize(window_size(size, cell));
+        }
+        if let Some(remote) = &self.remote {
+            remote.resize(size);
         }
     }
 
@@ -273,6 +374,7 @@ impl Session {
         Self {
             term: Arc::new(FairMutex::new(term)),
             notifier: Mutex::new(None),
+            remote: None,
             size: Mutex::new(size),
             selection: Mutex::new(StickySelection::default()),
             pid: None,

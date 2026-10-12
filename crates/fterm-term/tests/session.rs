@@ -62,6 +62,22 @@ fn output_of_a_command_is_in_the_grid() {
 }
 
 #[test]
+fn the_tap_gets_the_same_bytes_as_the_grid() {
+    let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = got.clone();
+    let options = SessionOptions {
+        tap: Some(fterm_term::session::Tap(std::sync::Arc::new(
+            move |bytes: &[u8]| into.lock().unwrap().extend_from_slice(bytes),
+        ))),
+        ..echo_command()
+    };
+    let (session, rx) = spawn(options);
+    wait_for_exit(&session, &rx);
+    let tapped = String::from_utf8_lossy(&got.lock().unwrap()).into_owned();
+    assert!(tapped.contains("fterm-ok"), "tapped: {tapped:?}");
+}
+
+#[test]
 fn shell_ends_after_exit_command() {
     let (session, rx) = spawn(SessionOptions::default());
     session.write(b"exit\r".to_vec());

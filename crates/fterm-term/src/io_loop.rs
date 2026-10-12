@@ -58,6 +58,66 @@ pub enum Msg {
 /// Gets the OSC events that the scanner found (on the pty thread).
 pub type OscSink = Arc<dyn Fn(Vec<OscEvent>) + Send + Sync>;
 
+/// Gets every byte that the program writes (the mux server sends them on to the window).
+pub type OutputTap = Arc<dyn Fn(&[u8]) + Send + Sync>;
+
+/// Output bytes into a Term: our OSC sequences first (the scanner only reads), then the parser. At 133;B the parser
+/// runs only up to the end of that sequence, so the cursor can be read where the typed text starts (and at 133;C
+/// and 133;D where the output starts and ends). Used by the pty loop and by a remote session.
+pub struct Feeder {
+    pub parser: ansi::Processor,
+    scanner: Scanner,
+    found: Vec<(usize, OscEvent)>,
+}
+
+impl Default for Feeder {
+    fn default() -> Self {
+        Self {
+            parser: ansi::Processor::new(),
+            scanner: Scanner::default(),
+            found: Vec::new(),
+        }
+    }
+}
+
+impl Feeder {
+    /// Parses `bytes` into `term`; the OSC events (and the cursor marks) go to `osc`.
+    pub fn feed<U: EventListener>(
+        &mut self,
+        term: &mut Term<U>,
+        bytes: &[u8],
+        osc: &mut Vec<OscEvent>,
+    ) {
+        self.found.clear();
+        self.scanner.feed_at(bytes, &mut self.found);
+        let mut from = 0;
+        for (end, event) in self.found.drain(..) {
+            let mark = match &event {
+                OscEvent::Prompt(PromptMark::CommandStart) => Some(true),
+                OscEvent::Prompt(PromptMark::CommandExecuted | PromptMark::CommandFinished(_)) => {
+                    Some(false)
+                }
+                _ => None,
+            };
+            osc.push(event);
+            if let Some(input) = mark {
+                self.parser.advance(term, &bytes[from..end]);
+                from = end;
+                let grid = term.grid();
+                let cursor = grid.cursor.point;
+                let line = (grid.history_size() as i32 + cursor.line.0).max(0) as usize;
+                let column = cursor.column.0;
+                osc.push(if input {
+                    OscEvent::InputStart { line, column }
+                } else {
+                    OscEvent::OutputMark { line, column }
+                });
+            }
+        }
+        self.parser.advance(term, &bytes[from..]);
+    }
+}
+
 pub struct IoLoop<T: tty::EventedPty, U: EventListener> {
     poll: Arc<Poller>,
     pty: T,
@@ -65,8 +125,8 @@ pub struct IoLoop<T: tty::EventedPty, U: EventListener> {
     tx: Sender<Msg>,
     terminal: Arc<FairMutex<Term<U>>>,
     event_proxy: U,
-    scanner: Scanner,
     osc_sink: OscSink,
+    tap: Option<OutputTap>,
     /// `FTERM_RECORD`: what the program writes goes here too.
     recorder: crate::record::Shared,
 }
@@ -81,6 +141,7 @@ where
         event_proxy: U,
         pty: T,
         osc_sink: OscSink,
+        tap: Option<OutputTap>,
         recorder: crate::record::Shared,
     ) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
@@ -91,8 +152,8 @@ where
             rx: PeekableReceiver::new(rx),
             terminal,
             event_proxy,
-            scanner: Scanner::default(),
             osc_sink,
+            tap,
             recorder,
         })
     }
@@ -121,7 +182,6 @@ where
         let mut unprocessed = 0;
         let mut processed = 0;
         let mut osc = Vec::new();
-        let mut found = Vec::new();
 
         // Reserve the next terminal lock for pty reading.
         let _terminal_lease = Some(self.terminal.lease());
@@ -134,6 +194,9 @@ where
                 Ok(got) => {
                     let new = &buf[unprocessed..unprocessed + got];
                     crate::record::with(&self.recorder, |r| r.output(new, Instant::now()));
+                    if let Some(tap) = &self.tap {
+                        tap(new);
+                    }
                     unprocessed += got;
                 }
                 Err(err) => match err.kind() {
@@ -156,38 +219,9 @@ where
                 }),
             };
 
-            // Our OSC sequences first (the scanner only reads), then the parser. At 133;B the parser
-            // runs only up to the end of that sequence, so we can read where the typed text starts.
-            found.clear();
-            self.scanner.feed_at(&buf[..unprocessed], &mut found);
-            let mut from = 0;
-            for (end, event) in found.drain(..) {
-                // At 133;B the typed text starts; at 133;C and 133;D the output starts and ends.
-                let mark = match &event {
-                    OscEvent::Prompt(PromptMark::CommandStart) => Some(true),
-                    OscEvent::Prompt(
-                        PromptMark::CommandExecuted | PromptMark::CommandFinished(_),
-                    ) => Some(false),
-                    _ => None,
-                };
-                osc.push(event);
-                if let Some(input) = mark {
-                    state.parser.advance(&mut **terminal, &buf[from..end]);
-                    from = end;
-                    let grid = terminal.grid();
-                    let cursor = grid.cursor.point;
-                    let line = (grid.history_size() as i32 + cursor.line.0).max(0) as usize;
-                    let column = cursor.column.0;
-                    osc.push(if input {
-                        OscEvent::InputStart { line, column }
-                    } else {
-                        OscEvent::OutputMark { line, column }
-                    });
-                }
-            }
             state
-                .parser
-                .advance(&mut **terminal, &buf[from..unprocessed]);
+                .feeder
+                .feed(&mut **terminal, &buf[..unprocessed], &mut osc);
 
             processed += unprocessed;
             unprocessed = 0;
@@ -199,7 +233,7 @@ where
         if !osc.is_empty() {
             (self.osc_sink)(osc);
         }
-        if state.parser.sync_bytes_count() < processed && processed > 0 {
+        if state.feeder.parser.sync_bytes_count() < processed && processed > 0 {
             self.event_proxy.send_event(Event::Wakeup);
         }
         Ok(processed)
@@ -285,7 +319,7 @@ where
 
                 'event_loop: loop {
                     // Wake up when a synchronized update times out.
-                    let handler = state.parser.sync_timeout();
+                    let handler = state.feeder.parser.sync_timeout();
                     let timeout = handler
                         .sync_timeout()
                         .map(|st| st.saturating_duration_since(Instant::now()))
@@ -310,7 +344,7 @@ where
 
                     if events.is_empty() && self.rx.peek().is_none() {
                         if handler.sync_timeout().is_some() {
-                            state.parser.stop_sync(&mut *self.terminal.lock());
+                            state.feeder.parser.stop_sync(&mut *self.terminal.lock());
                             self.event_proxy.send_event(Event::Wakeup);
                         }
                         continue;
@@ -440,7 +474,7 @@ impl Writing {
 struct State {
     write_list: VecDeque<Cow<'static, [u8]>>,
     writing: Option<Writing>,
-    parser: ansi::Processor,
+    feeder: Feeder,
 }
 
 impl State {

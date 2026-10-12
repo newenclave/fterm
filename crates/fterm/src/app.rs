@@ -1932,6 +1932,7 @@ impl App {
                     scrollback: self.config.config.scrollback,
                     intro: Vec::new(),
                     record: None,
+                    tap: None,
                 }
             }
             None => SessionOptions {
