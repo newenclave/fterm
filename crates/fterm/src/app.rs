@@ -38,7 +38,7 @@ use fterm_term::process::{display_name, is_shell, running_children};
 use fterm_term::session::{Session, SessionOptions, TermEvent};
 use fterm_term::shell::{
     ShellEvent, ShellState, bash_args, install_scripts, is_bash, is_powershell, is_zsh,
-    powershell_args, wsl_args, wsl_cwd, zsh_env,
+    powershell_args, start_folder, wsl_args, wsl_cwd, zsh_env,
 };
 use fterm_term::size::GridSize;
 use winit::application::ApplicationHandler;
@@ -2058,6 +2058,13 @@ impl App {
             .take()
             .or_else(|| profile_remote.clone())
             .or(active_remote);
+        // The folder it starts in, until the shell tells its own (and when it never does: no shell integration).
+        // A pane on a remote does not start in a folder of this machine.
+        let start_cwd = options
+            .cwd
+            .as_ref()
+            .filter(|_| remote.is_none())
+            .map(|dir| start_folder(&dir.display().to_string(), cfg!(windows)));
         // A mux pane runs its program in the mux server; when the local server cannot start, a local pane.
         let mut mux = None;
         let session = if let Some(remote) = remote {
@@ -2103,7 +2110,7 @@ impl App {
             Pane {
                 session,
                 app_title: None,
-                shell: ShellState::default(),
+                shell: ShellState::starting_in(start_cwd),
                 agent: None,
                 agent_hooks: false,
                 last_command: None,

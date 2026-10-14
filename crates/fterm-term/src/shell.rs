@@ -41,6 +41,15 @@ enum OutputMarkKind {
 }
 
 impl ShellState {
+    /// The state of a new pane that starts in `cwd`: the folder is known (for a new pane next to it and for the
+    /// session) before the shell tells its own, also when it never does (no shell integration).
+    pub fn starting_in(cwd: Option<String>) -> Self {
+        Self {
+            cwd,
+            ..Self::default()
+        }
+    }
+
     /// Takes one OSC event. Returns an event when a command ended.
     pub fn apply(&mut self, event: &OscEvent, now: Instant) -> Option<ShellEvent> {
         match event {
@@ -129,6 +138,15 @@ impl ShellState {
     /// True while a command runs (between OSC 133 C and D).
     pub fn is_running(&self) -> bool {
         self.running_since.is_some()
+    }
+}
+
+/// The start folder of a pane, written as the shell writes its folder (OSC 7): `/` on Windows.
+pub fn start_folder(dir: &str, windows: bool) -> String {
+    if windows {
+        dir.replace('\\', "/")
+    } else {
+        dir.to_owned()
     }
 }
 
@@ -341,6 +359,27 @@ mod tests {
         // A second call works too.
         assert_eq!(install_scripts(&dir).unwrap(), path);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_start_folder_looks_like_the_folder_of_osc_7() {
+        // PowerShell sends `C:/work`: the start folder of a pane is written the same way.
+        assert_eq!(start_folder(r"C:\work\fterm", true), "C:/work/fterm");
+        assert_eq!(start_folder(r"\\server\share\a", true), "//server/share/a");
+        // On Linux and macOS a `\` is a part of a name.
+        assert_eq!(start_folder(r"/home/me/a\b", false), r"/home/me/a\b");
+    }
+
+    #[test]
+    fn the_shell_tells_its_own_folder_after_the_start_folder() {
+        let mut shell = ShellState::starting_in(Some("C:/start".into()));
+        assert_eq!(shell.cwd.as_deref(), Some("C:/start"));
+        shell.apply(&OscEvent::Cwd("C:/work".into()), Instant::now());
+        assert_eq!(shell.cwd.as_deref(), Some("C:/work"));
+        assert!(
+            !shell.at_prompt(),
+            "a start folder says nothing of the prompt"
+        );
     }
 
     #[test]

@@ -44,6 +44,12 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   or `"never"` in the config changes this, and the palette action `plan_review_mode` changes it while fterm runs.
   An agent or a script that asks for a review itself (`review_plan`, `ftermctl review`) still gets the tab.
 
+### Fixed
+- **A restored pane comes back in its folder also when its shell never told fterm the folder.** Before, such a
+  pane (no shell integration, or a shell that something else started, for example a fterm started from ConEmu)
+  was saved with no folder and came back in the folder of the fterm process. Now fterm keeps the folder that the
+  pane started in, until the shell tells its own one. A new pane next to it starts there too.
+
 ## [0.2.0] - 2026-10-08
 
 More for agents (plan reviews, screenshots, colored text, the AI panel), themes for the whole window,
