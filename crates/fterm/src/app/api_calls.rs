@@ -512,6 +512,7 @@ impl App {
             "list" => Ok(self.api_list()),
             "spawn" => self.api_spawn(client, params),
             "scene_open" => self.api_scene_open(client, params),
+            "show_image" => self.api_show_image(client, params),
             "scene_draw" => self.api_scene_draw(client, params),
             "send_text" => self.api_send_text(client, params),
             "get_text" => self.api_get_text(client, params),
@@ -695,6 +696,8 @@ impl App {
                 "review"
             } else if p.scene.is_some() {
                 "scene"
+            } else if p.picture_pane.is_some() {
+                "picture"
             } else {
                 "terminal"
             },
@@ -801,6 +804,31 @@ impl App {
             p.opened_by = Some(client);
         }
         Ok(self.scene_size(pane))
+    }
+
+    /// `show_image`: a picture pane next to a pane. The picture is `data` (base64) or a `file` on this machine.
+    fn api_show_image(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
+        let direction = crate::api::scene_place(params)?;
+        let next_to = pane_param(params, "pane")?.map(PaneId);
+        if let Some(next_to) = next_to
+            && !self
+                .running
+                .as_ref()
+                .is_some_and(|r| r.panes.contains_key(&next_to))
+        {
+            return Err(not_found(&format!("pane {}", next_to.0)));
+        }
+        let bytes = crate::api::picture_param(params)?;
+        let picture = fterm_term::picture::decode(&bytes, fterm_term::picture::MAX_SIDE)
+            .map_err(RpcError::invalid_params)?;
+        let (width, height) = (picture.width, picture.height);
+        let pane = self
+            .open_picture(picture, direction, next_to)
+            .map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
+        if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {
+            p.opened_by = Some(client);
+        }
+        Ok(json!({ "pane": pane.0, "width": width, "height": height }))
     }
 
     /// `scene_draw`: drawing commands for a scene pane (see `fterm_scene::Op`).

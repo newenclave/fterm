@@ -6,6 +6,7 @@
 
 mod cli;
 mod mcp;
+mod picture;
 mod review;
 mod run;
 mod show;
@@ -50,6 +51,10 @@ Text:
                                          --styled = with colors and styles, as JSON
   screenshot [--pane N] [FILE.png]       a PNG of a pane, as you see it; prints the file
                                          (no FILE = a file in the temp folder)
+  image [--height N] FILE                show a picture (PNG, JPEG, BMP) here in the output, N rows high
+                                         (default 12); works in WSL and over SSH too
+  show-image [--right|--down] [--pane N] FILE
+                                         a picture pane next to a pane (the picture fills the pane)
 
 The AI panel:
   ai read [--last N]                     the chat: questions and answers
@@ -115,6 +120,31 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         })
         .map(|()| ExitCode::SUCCESS)
         .map_err(|err| format!("mux proxy: {err}")),
+        Command::Image { path, height } => {
+            let file = read_picture(path)?;
+            let name = std::path::Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let mut out = std::io::stdout().lock();
+            std::io::Write::write_all(&mut out, &picture::sequence(&name, &file, *height))
+                .and_then(|()| std::io::Write::flush(&mut out))
+                .map_err(|err| format!("cannot write the picture: {err}"))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::ShowImage { path, place, pane } => {
+            let file = read_picture(path)?;
+            let mut params = json!({ "data": mcp::base64(&file), "place": place });
+            if let Some(pane) = pane {
+                params["pane"] = json!(pane);
+            }
+            let mut client = connect(cli.window)?;
+            let answer = client
+                .call("show_image", params)
+                .map_err(|err| err.to_string())?;
+            print_answer(cli.json, "show_image", &answer);
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Guide { skill } => {
             if *skill {
                 print!("{}", fterm_api::guide::skill_md());
@@ -383,4 +413,17 @@ fn run_mux(stop: bool, json: bool) -> Result<ExitCode, String> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// A picture file for `image` and `show-image`, not bigger than fterm takes.
+fn read_picture(path: &str) -> Result<Vec<u8>, String> {
+    let file = std::fs::read(path).map_err(|err| format!("cannot read {path}: {err}"))?;
+    if file.len() > picture::MAX_FILE {
+        return Err(format!(
+            "{path} is too big: {} MiB (at most {} MiB)",
+            file.len() / 1024 / 1024,
+            picture::MAX_FILE / 1024 / 1024
+        ));
+    }
+    Ok(file)
 }

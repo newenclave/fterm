@@ -113,6 +113,19 @@ fn without_room_the_cursor_stays_and_with_room_it_goes_below() {
 }
 
 #[test]
+fn a_program_that_makes_room_itself_keeps_the_cursor() {
+    // `ftermctl image` makes room with new lines (it works the same with and without ConPTY), and says so.
+    let mut term = term(40, 10, 100);
+    let mut bytes = sequence(50, 60);
+    let at = bytes.iter().position(|&b| b == b':').unwrap();
+    bytes.splice(at..at, b";ftermRoom=1".iter().copied());
+    let osc = feed(&mut feeder(true), &mut term, &bytes);
+    assert_eq!(osc.len(), 1, "{osc:?}");
+    let cursor = term.grid().cursor.point;
+    assert_eq!((cursor.line.0, cursor.column.0), (0, 0));
+}
+
+#[test]
 fn the_mark_moves_with_its_line() {
     let mut term = term(40, 5, 100);
     let mut feeder = feeder(false);

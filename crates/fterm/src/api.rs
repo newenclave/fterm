@@ -30,6 +30,7 @@ pub const METHODS: &[&str] = &[
     "send_message",
     "read_messages",
     "scene_open",
+    "show_image",
     "scene_draw",
     "screenshot",
     "set_tab_color",
@@ -342,11 +343,49 @@ pub fn scene_place(params: &Value) -> Result<fterm_mux::Direction, RpcError> {
     }
 }
 
+/// The picture of `show_image`: `data` (base64) or `file` (a path on this machine).
+pub fn picture_param(params: &Value) -> Result<Vec<u8>, RpcError> {
+    if let Some(data) = str_param(params, "data")? {
+        if data.len() > fterm_term::picture::MAX_PAYLOAD {
+            return Err(RpcError::invalid_params(format!(
+                "`data` is too big: {} MiB of base64 (at most {} MiB)",
+                data.len() / 1024 / 1024,
+                fterm_term::picture::MAX_PAYLOAD / 1024 / 1024
+            )));
+        }
+        return fterm_term::picture::base64_decode(data.as_bytes())
+            .ok_or_else(|| RpcError::invalid_params("`data` is not base64"));
+    }
+    if let Some(file) = str_param(params, "file")? {
+        return std::fs::read(&file)
+            .map_err(|err| RpcError::invalid_params(format!("cannot read {file}: {err}")));
+    }
+    Err(RpcError::invalid_params(
+        "show_image needs `data` (a picture in base64) or `file` (its path)",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn the_picture_of_show_image() {
+        assert_eq!(picture_param(&json!({"data": "QUJD"})).unwrap(), b"ABC");
+        assert!(picture_param(&json!({"data": "Q*"})).is_err());
+        assert!(picture_param(&json!({})).is_err());
+        let file =
+            std::env::temp_dir().join(format!("fterm-show-image-{}.bin", std::process::id()));
+        std::fs::write(&file, b"xyz").unwrap();
+        assert_eq!(
+            picture_param(&json!({"file": file.display().to_string()})).unwrap(),
+            b"xyz"
+        );
+        let _ = std::fs::remove_file(&file);
+        assert!(picture_param(&json!({"file": file.display().to_string()})).is_err());
+    }
 
     #[test]
     fn a_review_request() {

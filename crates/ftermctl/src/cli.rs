@@ -51,6 +51,18 @@ pub enum Command {
     },
     /// `mux proxy`: stdin/stdout to the mux server of this machine (the command that SSH runs).
     MuxProxy,
+    /// `image FILE [--height N]`: writes the picture into the output (OSC 1337) and makes room for it. No window
+    /// is asked, so it works in WSL and over SSH too.
+    Image {
+        path: String,
+        height: u64,
+    },
+    /// `show-image FILE [--right|--down] [--pane N]`: a picture pane next to a pane.
+    ShowImage {
+        path: String,
+        place: String,
+        pane: Option<u64>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -239,6 +251,33 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             Some("proxy") => Command::MuxProxy,
             _ => return Err("mux needs `list`, `stop`, `serve`, or `proxy`".to_owned()),
         },
+        "image" => {
+            let w = read(&["height"], &[])?;
+            let path = w.text();
+            if path.trim().is_empty() {
+                return Err("image needs a file".to_owned());
+            }
+            let height = w.number("height")?.unwrap_or(12);
+            if height == 0 {
+                return Err("--height must be 1 or more".to_owned());
+            }
+            Command::Image {
+                path: path.trim().to_owned(),
+                height,
+            }
+        }
+        "show-image" => {
+            let w = read(&["pane"], &["right", "down"])?;
+            let path = w.text();
+            if path.trim().is_empty() {
+                return Err("show-image needs a file".to_owned());
+            }
+            Command::ShowImage {
+                path: path.trim().to_owned(),
+                place: if w.flag("down") { "down" } else { "right" }.to_owned(),
+                pane: w.number("pane")?,
+            }
+        }
         "guide" => Command::Guide {
             skill: read(&[], &["skill"])?.flag("skill"),
         },
@@ -514,6 +553,43 @@ mod tests {
         assert_eq!(cli("mux proxy").unwrap().command, Command::MuxProxy);
         assert!(cli("mux").is_err());
         assert!(cli("mux start").is_err());
+    }
+
+    #[test]
+    fn pictures() {
+        assert_eq!(
+            cli("image cat.png").unwrap().command,
+            Command::Image {
+                path: "cat.png".into(),
+                height: 12
+            }
+        );
+        assert_eq!(
+            cli("image --height 5 cat.png").unwrap().command,
+            Command::Image {
+                path: "cat.png".into(),
+                height: 5
+            }
+        );
+        assert!(cli("image").is_err(), "no file");
+        assert!(cli("image --height 0 a.png").is_err());
+        assert_eq!(
+            cli("show-image --down --pane 3 cat.png").unwrap().command,
+            Command::ShowImage {
+                path: "cat.png".into(),
+                place: "down".into(),
+                pane: Some(3)
+            }
+        );
+        assert_eq!(
+            cli("show-image cat.png").unwrap().command,
+            Command::ShowImage {
+                path: "cat.png".into(),
+                place: "right".into(),
+                pane: None
+            }
+        );
+        assert!(cli("show-image").is_err());
     }
 
     #[test]

@@ -147,6 +147,8 @@ struct Pane {
     mux: Option<mux_calls::MuxPane>,
     /// The pictures in its output (OSC 1337), by the id of their mark.
     pictures: crate::pictures::PictureStore,
+    /// A picture pane: its picture fills the pane (no program).
+    picture_pane: Option<fterm_term::picture::Picture>,
 }
 
 /// Everything that exists only while the window is open.
@@ -251,6 +253,9 @@ impl Running {
                     && pane.session.grid_size() != size
                 {
                     pane.session.resize(size, cell);
+                    if pane.picture_pane.is_some() {
+                        mark_picture_pane(&pane.session);
+                    }
                     if let Some(scene) = &pane.scene {
                         // The picture is drawn again for the new size (zoom, a split, the window).
                         let mut scene = scene.lock().unwrap();
@@ -1869,6 +1874,7 @@ impl App {
                 agent: None,
                 agent_hooks: false,
                 pictures: Default::default(),
+                picture_pane: None,
                 last_command: None,
                 remote: true,
                 opened_by: None,
@@ -1889,6 +1895,63 @@ impl App {
             "new scene"
         );
         id
+    }
+
+    /// A picture pane with this grid size: no program, the picture fills the pane (as much as its shape lets it).
+    fn spawn_picture(&mut self, size: GridSize, picture: fterm_term::picture::Picture) -> PaneId {
+        let running = self.running.as_mut().expect("the window is open");
+        let id = running.mux.new_pane_id();
+        let session = Session::scene(size);
+        mark_picture_pane(&session);
+        tracing::info!(
+            pane = id.0,
+            width = picture.width,
+            height = picture.height,
+            "new picture pane"
+        );
+        running.panes.insert(
+            id,
+            Pane {
+                session,
+                app_title: Some("picture".to_owned()),
+                shell: ShellState::default(),
+                agent: None,
+                agent_hooks: false,
+                pictures: Default::default(),
+                picture_pane: Some(picture),
+                last_command: None,
+                remote: true,
+                opened_by: None,
+                profile: None,
+                rerun: None,
+                intro_lines: 0,
+                scene: None,
+                review: None,
+                harmonize: true,
+                palette_changes: None,
+                mux: None,
+            },
+        );
+        id
+    }
+
+    /// Opens a picture pane next to `next_to` (or the active pane). Gives its id.
+    pub(crate) fn open_picture(
+        &mut self,
+        picture: fterm_term::picture::Picture,
+        direction: Direction,
+        next_to: Option<PaneId>,
+    ) -> anyhow::Result<PaneId> {
+        if let Some(next_to) = next_to
+            && let Some(running) = &mut self.running
+        {
+            running.mux.focus(next_to);
+        }
+        self.split_with(direction, |app, size| Ok(app.spawn_picture(size, picture)))?;
+        self.running
+            .as_ref()
+            .and_then(|r| r.mux.active_pane())
+            .ok_or_else(|| anyhow::anyhow!("no pane"))
     }
 
     /// Starts a profile (or the default profile) for a new pane with this grid size.
@@ -2117,6 +2180,7 @@ impl App {
                 agent: None,
                 agent_hooks: false,
                 pictures: Default::default(),
+                picture_pane: None,
                 last_command: None,
                 remote: true,
                 opened_by: None,
@@ -4415,6 +4479,22 @@ impl App {
                         };
                         pane.session.with_term(|term| {
                             parts.pane(term, *rect, style)?;
+                            if let Some(picture) = &pane.picture_pane {
+                                // It fills the pane, for its size now.
+                                let (columns, rows) = fterm_term::picture::fit(
+                                    (picture.width, picture.height),
+                                    (cell.width, cell.height),
+                                    (term.grid().columns(), term.grid().screen_lines()),
+                                );
+                                return parts.pictures(term, *rect, pictures, rows, |_| {
+                                    Some(fterm_render::PanePicture {
+                                        key: id.0 << 32,
+                                        picture,
+                                        columns,
+                                        rows,
+                                    })
+                                });
+                            }
                             if pane.pictures.is_empty() {
                                 return Ok(());
                             }
@@ -5158,6 +5238,17 @@ fn shell_script_path() -> Option<std::path::PathBuf> {
 /// The height of a Braille dot / its width on the screen: a cell is 2 dots wide and 4 dots tall.
 fn dot_aspect(cell: fterm_render::font::CellMetrics) -> f32 {
     (cell.height / 4.0) / (cell.width / 2.0)
+}
+
+/// Puts the mark of the picture of a picture pane on its top-left cell (again after a resize).
+fn mark_picture_pane(session: &Session) {
+    use fterm_term::alacritty_terminal::index::{Column, Line, Point};
+    use fterm_term::alacritty_terminal::term::cell::Hyperlink;
+    let uri = fterm_term::osc::picture_uri(1);
+    session.with_term_mut(|term, _| {
+        term.grid_mut()[Point::new(Line(0), Column(0))]
+            .set_hyperlink(Some(Hyperlink::new(Some(uri.clone()), uri)));
+    });
 }
 
 /// bash that reads Windows paths. On Windows `bash.exe` from PATH can be `System32\bash.exe`

@@ -31,6 +31,8 @@ pub struct FileArgs {
     pub height: Dim,
     /// `preserveAspectRatio` (default yes).
     pub keep_aspect: bool,
+    /// `ftermRoom=1` (ours): the program makes room for the picture itself (new lines), so the cursor stays.
+    pub own_room: bool,
 }
 
 /// A decoded picture: RGBA8, `width * height * 4` bytes.
@@ -52,6 +54,7 @@ pub fn parse_file(text: &[u8]) -> Option<(FileArgs, &[u8])> {
         width: Dim::Auto,
         height: Dim::Auto,
         keep_aspect: true,
+        own_room: false,
     };
     for arg in String::from_utf8_lossy(args).split(';') {
         let Some((key, value)) = arg.split_once('=') else {
@@ -66,6 +69,7 @@ pub fn parse_file(text: &[u8]) -> Option<(FileArgs, &[u8])> {
             "width" => out.width = dim(value),
             "height" => out.height = dim(value),
             "preserveAspectRatio" => out.keep_aspect = value != "0",
+            "ftermRoom" => out.own_room = value == "1",
             _ => {}
         }
     }
@@ -182,6 +186,19 @@ pub fn cells(
         ((w / cw).ceil() as usize).clamp(1, pane.0.max(1)),
         ((h / ch).ceil() as usize).max(1),
     )
+}
+
+/// The cells of a picture that fills a pane of `pane` cells as much as it can, with its shape (a picture pane).
+pub fn fit(picture: (u32, u32), cell: (f32, f32), pane: (usize, usize)) -> (usize, usize) {
+    let args = FileArgs {
+        name: None,
+        inline: true,
+        width: Dim::Percent(100),
+        height: Dim::Percent(100),
+        keep_aspect: true,
+        own_room: false,
+    };
+    cells(&args, picture, cell, pane)
 }
 
 /// The pictures whose top-left cell is on the grid lines `lines` (screen lines: negative = the history):
@@ -339,6 +356,7 @@ mod tests {
             width,
             height,
             keep_aspect: true,
+            own_room: false,
         }
     }
 
@@ -380,6 +398,17 @@ mod tests {
         let mut stretch = args(Dim::Cells(40), Dim::Cells(5));
         stretch.keep_aspect = false;
         assert_eq!(cells(&stretch, (100, 100), cell, pane), (40, 5));
+    }
+
+    #[test]
+    fn a_picture_fits_a_pane() {
+        let cell = (10.0, 20.0);
+        // A wide picture: the pane width (80 cols = 800 px) -> 400 px high = 20 rows.
+        assert_eq!(fit((2000, 1000), cell, (80, 24)), (80, 20));
+        // A high picture: the pane height (24 rows = 480 px) -> 480 px wide = 48 cols.
+        assert_eq!(fit((1000, 1000), cell, (80, 24)), (48, 24));
+        // A small picture grows to the pane too.
+        assert_eq!(fit((10, 10), cell, (80, 24)), (48, 24));
     }
 
     #[test]

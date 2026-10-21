@@ -215,7 +215,7 @@ impl Feeder {
         let point = term.grid().cursor.point;
         let uri = picture_uri(id);
         term.grid_mut()[point].set_hyperlink(Some(Hyperlink::new(Some(uri.clone()), uri)));
-        if self.make_room {
+        if self.make_room && !args.own_room {
             // Down to the last row of the picture, right of it.
             let mut room = b"\n".repeat(rows.saturating_sub(1));
             let column = (point.column.0 + columns).min(term.columns().saturating_sub(1));

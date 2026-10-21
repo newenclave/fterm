@@ -238,6 +238,7 @@ impl App {
                 agent: None,
                 agent_hooks: false,
                 pictures: Default::default(),
+                picture_pane: None,
                 last_command: None,
                 remote: true,
                 opened_by: None,
