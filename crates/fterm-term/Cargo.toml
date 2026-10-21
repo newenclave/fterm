@@ -12,6 +12,8 @@ polling = "3"
 serde.workspace = true
 serde_json.workspace = true
 sysinfo.workspace = true
+# Pictures in the output (OSC 1337): only the decoders, no GIF yet (it needs two more crates).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
 tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]

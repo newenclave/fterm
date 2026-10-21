@@ -10,6 +10,7 @@ pub mod input;
 pub mod io_loop;
 pub mod links;
 pub mod osc;
+pub mod picture;
 pub mod process;
 pub mod record;
 pub mod select;
