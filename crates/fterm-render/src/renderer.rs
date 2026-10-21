@@ -8,7 +8,7 @@ use wgpu::util::DeviceExt;
 
 use crate::atlas::{AtlasFull, AtlasGlyph, GlyphAtlas, GlyphKey};
 use crate::builtin::{BrailleStyle, builtin_glyph, is_builtin};
-use crate::color::{linear, text_alpha};
+use crate::color::{linear, srgb_to_linear, text_alpha};
 use crate::font::{CellMetrics, Fonts, GlyphImage, ImageKind};
 use crate::frame::{FrameInput, Instance, PaneStyle, Rect, build_frame};
 use crate::overlay::build_message_box;
@@ -642,6 +642,8 @@ impl FrameParts<'_> {
                 wide: false,
                 dots: true,
             };
+            // The color comes from the picture, not from the theme.
+            let [red, green, blue] = c.color.map(srgb_to_linear);
             if let Some(g) = (self.glyph)(&key)? {
                 self.quads.push(Instance {
                     rect: [
@@ -651,11 +653,7 @@ impl FrameParts<'_> {
                         g.height as f32,
                     ],
                     uv: [g.x as f32, g.y as f32, g.width as f32, g.height as f32],
-                    color: linear(fterm_term::alacritty_terminal::vte::ansi::Rgb {
-                        r: c.color[0],
-                        g: c.color[1],
-                        b: c.color[2],
-                    }),
+                    color: [red, green, blue, 1.0],
                     kind: crate::frame::KIND_GLYPH,
                     _pad: [0; 3],
                 });
