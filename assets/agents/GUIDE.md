@@ -57,6 +57,12 @@ The user sees the command run. This is better than a hidden command when the use
    `x`, `y` are dots from the top left; `text` uses cells (`col`, `row`). All commands of one call are drawn
    at once.
 
+**Show a picture file**
+- `show_image` with `path` (or `data` in base64) opens a picture pane next to a pane (`place`, `next_to`):
+  the picture (PNG, JPEG, BMP) fills it. `ftermctl show-image FILE` does the same.
+- `ftermctl image FILE --height N` puts a picture in the output of the pane where it runs, N rows high
+  (also in WSL and over SSH). It is for a shell; your own output (a TUI) draws over it, so use `show_image`.
+
 **See a pane**
 - `screenshot_pane` (`ftermctl screenshot --pane N`) gives a PNG picture of a pane, as the user sees it:
   the colors, a scene, a program with a UI. Use it to check what you drew. `read_pane` is better for text.

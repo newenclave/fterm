@@ -218,6 +218,16 @@ pub fn tools() -> Value {
             }}
         },
         {
+            "name": "show_image",
+            "description": "Show the user a picture (PNG, JPEG, or BMP) in a pane next to a pane: a picture pane, the picture fills it. For example a chart that you made, a screenshot, a diagram. Give the path of the file (on this machine) or its data in base64.",
+            "inputSchema": { "type": "object", "properties": {
+                "path": { "type": "string", "description": "The picture file (a full path)." },
+                "data": { "type": "string", "description": "The picture file in base64 (when there is no file)." },
+                "place": { "type": "string", "enum": ["right", "down"], "description": "A split on the right (default) or below." },
+                "next_to": { "type": "integer", "description": "Split next to this pane." }
+            }}
+        },
+        {
             "name": "draw_scene",
             "description": "Draw into a scene. Commands (x, y in dots from the top left; text in cells): {op:clear}, {op:color, color:'#rrggbb'} (no color = normal), {op:dot|undot, x, y}, {op:line, x0, y0, x1, y1}, {op:rect, x, y, w, h, fill}, {op:circle, x, y, r, fill}, {op:text, col, row, text}, {op:plot, values, min, max, bars, x, y, w, h}. All commands of one call are drawn at once.",
             "inputSchema": { "type": "object", "properties": {
@@ -526,6 +536,23 @@ self.backend.call("review", params).map(|v| {
                         v["pane"], v["width"], v["height"], v["aspect"]
                     )
                 }),
+            "show_image" => {
+                let data = match (args.get("data").and_then(Value::as_str), args.get("path").and_then(Value::as_str)) {
+                    (Some(data), _) => Ok(data.to_owned()),
+                    (None, Some(path)) => crate::read_picture(path).map(|file| base64(&file)),
+                    (None, None) => Err("give `path` (a picture file) or `data` (base64)".to_owned()),
+                };
+                data.and_then(|data| {
+                    let mut params = pick(&[("place", "place"), ("next_to", "pane")]);
+                    params["data"] = json!(data);
+                    self.backend.call("show_image", params).map(|v| {
+                        format!(
+                            "Opened picture pane {} ({}x{} px).",
+                            v["pane"], v["width"], v["height"]
+                        )
+                    })
+                })
+            }
             "draw_scene" => need("pane")
                 .and_then(|_| need("commands"))
                 .and_then(|commands| {
@@ -722,6 +749,7 @@ mod tests {
                 "scene_open" | "scene_draw" => {
                     json!({ "pane": 7, "cols": 66, "rows": 21, "width": 132, "height": 84, "aspect": 1.1875 })
                 }
+                "show_image" => json!({ "pane": 9, "width": 64, "height": 48 }),
                 _ => json!({}),
             })
         }
@@ -1103,6 +1131,37 @@ mod tests {
             result["content"][0]["text"],
             json!("Message 3 is in the inbox of pane 2.")
         );
+    }
+
+    #[test]
+    fn a_picture_for_the_user() {
+        let mut s = server();
+        let file = std::env::temp_dir().join(format!("ftermctl-mcp-{}.png", std::process::id()));
+        std::fs::write(&file, b"ABC").unwrap();
+        let result = tool(
+            &mut s,
+            "show_image",
+            json!({ "path": file.display().to_string(), "place": "down", "next_to": 2 }),
+        );
+        let _ = std::fs::remove_file(&file);
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("pane 9") && text.contains("64x48"), "{text}");
+        // ftermctl reads the file (it is on the machine of the agent) and sends its bytes.
+        assert_eq!(
+            s.backend.calls[0],
+            (
+                "show_image".into(),
+                json!({ "data": "QUJD", "place": "down", "pane": 2 })
+            )
+        );
+        // Data in base64 goes as it is; no picture is an error.
+        tool(&mut s, "show_image", json!({ "data": "QUJD" }));
+        assert_eq!(
+            s.backend.calls[1],
+            ("show_image".into(), json!({ "data": "QUJD" }))
+        );
+        let result = tool(&mut s, "show_image", json!({}));
+        assert_eq!(result["isError"], json!(true));
     }
 
     #[test]

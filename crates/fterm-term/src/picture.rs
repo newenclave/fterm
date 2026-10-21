@@ -148,6 +148,27 @@ pub fn decode(bytes: &[u8], max_side: u32) -> Result<Picture, String> {
     })
 }
 
+/// A picture from raw RGBA8 pixels (the clipboard, a screenshot), scaled down when a side is longer than `max_side`.
+pub fn from_rgba(width: u32, height: u32, rgba: Vec<u8>, max_side: u32) -> Result<Picture, String> {
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_PIXELS {
+        return Err(format!("a bad size: {width}×{height} pixels"));
+    }
+    let image = image::RgbaImage::from_raw(width, height, rgba)
+        .ok_or_else(|| format!("the pixels do not fit {width}×{height}"))?;
+    let image = if width.max(height) > max_side {
+        image::DynamicImage::ImageRgba8(image)
+            .resize(max_side, max_side, image::imageops::FilterType::Triangle)
+            .into_rgba8()
+    } else {
+        image
+    };
+    Ok(Picture {
+        width: image.width(),
+        height: image.height(),
+        rgba: Arc::new(image.into_raw()),
+    })
+}
+
 /// How many cells (columns, rows) the picture takes. `cell` is the cell size in pixels, `pane` the pane size in
 /// cells. A picture is never wider than the pane; its height may be more than the pane (it scrolls).
 pub fn cells(
@@ -309,6 +330,19 @@ mod tests {
             assert_eq!(picture.rgba.len(), 7 * 3 * 4);
             assert_eq!(picture.rgba[3], 255, "alpha");
         }
+    }
+
+    #[test]
+    fn raw_pixels_become_a_picture() {
+        let picture = from_rgba(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8], MAX_SIDE).unwrap();
+        assert_eq!((picture.width, picture.height), (2, 1));
+        assert_eq!(*picture.rgba, [1, 2, 3, 4, 5, 6, 7, 8]);
+        // Too big a side: scaled down with its shape.
+        let picture = from_rgba(400, 100, vec![255; 400 * 100 * 4], 200).unwrap();
+        assert_eq!((picture.width, picture.height), (200, 50));
+        // The bytes must fit the size.
+        assert!(from_rgba(2, 2, vec![0; 3], MAX_SIDE).is_err());
+        assert!(from_rgba(0, 2, Vec::new(), MAX_SIDE).is_err());
     }
 
     #[test]

@@ -484,6 +484,9 @@ pub struct App {
     waits: Vec<api_calls::Wait>,
     /// Screenshots that wait for the next frame.
     shots: Vec<api_calls::PendingShot>,
+    /// Screenshots of panes that open as picture panes when they are taken ("Show a screenshot of this pane").
+    shot_pictures:
+        Vec<std::sync::mpsc::Receiver<Result<serde_json::Value, fterm_api::protocol::RpcError>>>,
     /// `ai_ask` calls that wait for the end of the answer.
     ai_waits: Vec<api_calls::AiWait>,
     /// `review` calls that wait for the user.
@@ -604,6 +607,7 @@ impl App {
             api_questions: std::collections::VecDeque::new(),
             waits: Vec::new(),
             shots: Vec::new(),
+            shot_pictures: Vec::new(),
             ai_waits: Vec::new(),
             reviews: Vec::new(),
             inbox: crate::inbox::Inbox::default(),
@@ -1935,6 +1939,61 @@ impl App {
         id
     }
 
+    /// Takes a screenshot of the active pane after the next frame; `shot_pictures` opens it as a picture pane.
+    fn screenshot_as_picture(&mut self) {
+        let Some(pane) = self.running.as_ref().and_then(|r| r.mux.active_pane()) else {
+            return;
+        };
+        let path = std::env::temp_dir().join(format!("fterm-shot-{}-{}.png", pane.0, now_ms()));
+        let (reply, answer) = std::sync::mpsc::channel();
+        self.shots
+            .push(api_calls::PendingShot { pane, path, reply });
+        self.shot_pictures.push(answer);
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
+    }
+
+    /// The screenshots of `screenshot_as_picture` that are taken: each opens as a picture pane (its file goes).
+    fn shot_pictures(&mut self) {
+        let mut done = Vec::new();
+        self.shot_pictures.retain(|answer| match answer.try_recv() {
+            Ok(result) => {
+                done.push(result);
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+        });
+        for result in done {
+            let picture = result
+                .map_err(|err| err.message)
+                .and_then(|shot| {
+                    let path = std::path::PathBuf::from(shot["path"].as_str().unwrap_or_default());
+                    let bytes = std::fs::read(&path).map_err(|err| err.to_string());
+                    let _ = std::fs::remove_file(&path);
+                    bytes
+                })
+                .and_then(|bytes| {
+                    fterm_term::picture::decode(&bytes, fterm_term::picture::MAX_SIDE)
+                });
+            match picture {
+                Ok(picture) => {
+                    if let Err(err) = self.open_picture(picture, Direction::Right, None) {
+                        tracing::error!("cannot open a picture pane: {err:#}");
+                    }
+                }
+                Err(err) => self.notify(
+                    None,
+                    &tr!("toast.picture_failed"),
+                    &err,
+                    Level::Error,
+                    Source::App,
+                ),
+            }
+        }
+    }
+
     /// Opens a picture pane next to `next_to` (or the active pane). Gives its id.
     pub(crate) fn open_picture(
         &mut self,
@@ -2683,6 +2742,25 @@ impl App {
         if action == A::Sessions {
             return self.open_sessions_popup();
         }
+        if action == A::ShowClipboardPicture {
+            return match self.clipboard.picture() {
+                Some(picture) => {
+                    if let Err(err) = self.open_picture(picture, Direction::Right, None) {
+                        tracing::error!("cannot open a picture pane: {err:#}");
+                    }
+                }
+                None => self.notify(
+                    None,
+                    &tr!("toast.no_clipboard_picture"),
+                    "",
+                    Level::Info,
+                    Source::App,
+                ),
+            };
+        }
+        if action == A::ShowPaneScreenshot {
+            return self.screenshot_as_picture();
+        }
         if action == A::NewScene {
             if let Err(err) =
                 self.split_with(Direction::Right, |app, size| Ok(app.spawn_scene(size)))
@@ -2873,6 +2951,8 @@ impl App {
             | A::SaveSessionAs
             | A::ChooseTheme
             | A::InstallClaudeHooks
+            | A::ShowClipboardPicture
+            | A::ShowPaneScreenshot
             | A::NewScene => {}
             A::ToggleRemoteControl => {
                 let Some(pane) = running.mux.active_pane() else {
@@ -4933,6 +5013,7 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.scene_events();
+        self.shot_pictures();
         let now = Instant::now();
         let mut wake_at = None;
         match self.reload_at {

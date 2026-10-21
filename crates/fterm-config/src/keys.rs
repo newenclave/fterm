@@ -230,13 +230,17 @@ pub enum BuiltinAction {
     RenameWorkspace,
     /// Ends all panes of the mux server and the server (after a question).
     StopMux,
+    /// A picture pane with the picture in the clipboard.
+    ShowClipboardPicture,
+    /// A picture pane with a screenshot of the active pane (to look at it next to the pane).
+    ShowPaneScreenshot,
     /// "Connect over SSH…": a box for `user@host`, then its panes.
     ConnectSsh,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 63] = [
+    pub const ALL: [BuiltinAction; 65] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -300,6 +304,8 @@ impl BuiltinAction {
         Self::RenameWorkspace,
         Self::StopMux,
         Self::ConnectSsh,
+        Self::ShowClipboardPicture,
+        Self::ShowPaneScreenshot,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -367,6 +373,8 @@ impl BuiltinAction {
             Self::MoveTabToWorkspace => "move_tab_to_workspace",
             Self::RenameWorkspace => "rename_workspace",
             Self::StopMux => "stop_mux",
+            Self::ShowClipboardPicture => "show_clipboard_picture",
+            Self::ShowPaneScreenshot => "show_pane_screenshot",
             Self::ConnectSsh => "connect_ssh",
         };
         name.to_owned()
@@ -752,6 +760,18 @@ mod tests {
             BuiltinAction::from_name("open_link_hints"),
             Some(BuiltinAction::OpenLinkHints)
         );
+    }
+
+    #[test]
+    fn picture_actions() {
+        let action = BuiltinAction::from_name("show_clipboard_picture").unwrap();
+        assert_eq!(action, BuiltinAction::ShowClipboardPicture);
+        assert_eq!(action.label(), "Show the picture in the clipboard");
+        assert!(BuiltinAction::ALL.contains(&action));
+        let action = BuiltinAction::from_name("show_pane_screenshot").unwrap();
+        assert_eq!(action, BuiltinAction::ShowPaneScreenshot);
+        assert_eq!(action.label(), "Show a screenshot of this pane");
+        assert!(BuiltinAction::ALL.contains(&action));
     }
 
     #[test]

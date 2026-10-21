@@ -37,6 +37,23 @@ impl Clipboard {
         }
     }
 
+    /// The picture in the clipboard (a screenshot, a copied image), as a picture for a picture pane.
+    pub fn picture(&mut self) -> Option<fterm_term::picture::Picture> {
+        let clipboard = self.inner.as_mut()?;
+        let image = clipboard
+            .get_image()
+            .inspect_err(|err| tracing::debug!("no picture in the clipboard: {err}"))
+            .ok()?;
+        fterm_term::picture::from_rgba(
+            image.width as u32,
+            image.height as u32,
+            image.bytes.into_owned(),
+            fterm_term::picture::MAX_SIDE,
+        )
+        .inspect_err(|err| tracing::warn!("the clipboard picture: {err}"))
+        .ok()
+    }
+
     pub fn paste(&mut self) -> Option<String> {
         let clipboard = self.inner.as_mut()?;
         clipboard
