@@ -270,6 +270,16 @@ impl Fonts {
         Some(image)
     }
 
+    /// Draws a line of text at `size_px` into one image, not fitted into a cell (text on a picture). `None` when
+    /// there is nothing to draw. Only the first line of `text` is drawn.
+    pub fn rasterize_line(&mut self, text: &str, size_px: f32) -> Option<GlyphImage> {
+        if text.trim().is_empty() {
+            return None;
+        }
+        let glyphs = self.shape(text, false, false, size_px.clamp(4.0, 400.0));
+        self.compose(&glyphs)
+    }
+
     /// Draws all glyphs of a run into one image.
     fn compose(&mut self, glyphs: &[LayoutGlyph]) -> Option<GlyphImage> {
         struct Part {
@@ -422,6 +432,22 @@ mod tests {
             ImageKind::Mask => image.data.iter().filter(|&&a| a > 200).count(),
             ImageKind::Color => image.data.chunks(4).filter(|px| px[3] > 200).count(),
         }
+    }
+
+    #[test]
+    fn a_line_of_text_is_one_mask() {
+        // For text on a picture: any size, not fitted into a cell.
+        let mut fonts = embedded(14.0);
+        let line = fonts.rasterize_line("Hello there", 40.0).unwrap();
+        assert_eq!(line.kind, ImageKind::Mask);
+        assert!(line.width > 150 && line.width < 300, "{}", line.width);
+        assert!(line.height > 20 && line.height < 50, "{}", line.height);
+        assert!(solid_pixels(&line) > 100);
+        // A bigger size makes a bigger mask.
+        let big = fonts.rasterize_line("Hello there", 80.0).unwrap();
+        assert!(big.width > line.width * 3 / 2);
+        assert!(fonts.rasterize_line("   ", 40.0).is_none());
+        assert!(fonts.rasterize_line("", 40.0).is_none());
     }
 
     #[test]
