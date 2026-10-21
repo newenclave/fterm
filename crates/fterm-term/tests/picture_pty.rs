@@ -71,7 +71,6 @@ fn the_mark_of_a_picture_survives_the_pty() {
     assert_eq!((mark.columns, mark.rows), (10, 3));
     let found = session.with_term(|t| marks(t, i32::MIN..i32::MAX));
     let screen = session.screen_text();
-    eprintln!("marks: {found:?}\nscreen:\n{screen}");
     assert_eq!(found.len(), 1, "the mark is still there:\n{screen}");
     assert_eq!(found[0].0, mark.id);
     assert!(

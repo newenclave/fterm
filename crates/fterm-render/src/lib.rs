@@ -9,9 +9,10 @@ pub mod frame;
 pub mod icon;
 pub mod overlay;
 pub mod panes;
+pub mod picture;
 mod renderer;
 pub mod tabbar;
 pub mod theme;
 pub mod toasts;
 
-pub use renderer::{FrameParts, Renderer};
+pub use renderer::{FrameParts, PanePicture, Renderer};

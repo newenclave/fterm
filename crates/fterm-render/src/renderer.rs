@@ -12,12 +12,44 @@ use crate::color::{linear, text_alpha};
 use crate::font::{CellMetrics, Fonts, GlyphImage, ImageKind};
 use crate::frame::{FrameInput, Instance, PaneStyle, Rect, build_frame};
 use crate::overlay::build_message_box;
+use crate::picture::{BrailleCell, PictureMode, braille, place, scissor, visible_marks};
 use crate::tabbar::{TabBarInput, build_tab_bar};
 use crate::theme::UiColors;
 
 const ATLAS_START_SIZE: u32 = 1024;
 /// Color emoji are rare, so this atlas starts small.
 const COLOR_ATLAS_START_SIZE: u32 = 512;
+/// A picture texture (or a Braille form) that was not drawn for this long is freed.
+const PICTURE_KEEP: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A picture to draw in a pane: from the app's store, by the id of its mark.
+pub struct PanePicture<'a> {
+    /// The key of its texture (unique in the window, for example the pane and the id).
+    pub key: u64,
+    pub picture: &'a fterm_term::picture::Picture,
+    pub columns: usize,
+    pub rows: usize,
+}
+
+/// A picture of this frame: its texture and where it goes.
+struct PictureDraw {
+    key: u64,
+    picture: fterm_term::picture::Picture,
+    rect: Rect,
+    clip: Rect,
+}
+
+/// The texture of one picture.
+struct PictureTexture {
+    bind_group: wgpu::BindGroup,
+    used: std::time::Instant,
+}
+
+/// The Braille form of a picture on its cells, made once.
+struct BrailleForm {
+    cells: Vec<BrailleCell>,
+    used: std::time::Instant,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -77,6 +109,12 @@ pub struct Renderer {
     uniforms: wgpu::Buffer,
     instances: wgpu::Buffer,
     instance_capacity: usize,
+    /// Pictures: their own pipeline (one texture each), a linear sampler, the textures, and the Braille forms.
+    picture_pipeline: wgpu::RenderPipeline,
+    picture_layout: wgpu::BindGroupLayout,
+    picture_sampler: wgpu::Sampler,
+    picture_textures: std::collections::HashMap<u64, PictureTexture>,
+    braille_forms: std::collections::HashMap<(u64, usize, usize), BrailleForm>,
 }
 
 impl Renderer {
@@ -198,6 +236,14 @@ impl Renderer {
         );
         let instance_capacity = 1024;
         let instances = create_instance_buffer(device, instance_capacity);
+        let (picture_pipeline, picture_layout) = create_picture_pipeline(device, format);
+        // Pictures are scaled to their cells, so they need a linear filter.
+        let picture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("picture"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
         Ok(Self {
             fonts,
@@ -215,6 +261,11 @@ impl Renderer {
             uniforms,
             instances,
             instance_capacity,
+            picture_pipeline,
+            picture_layout,
+            picture_sampler,
+            picture_textures: std::collections::HashMap::new(),
+            braille_forms: std::collections::HashMap::new(),
         })
     }
 
@@ -267,7 +318,8 @@ impl Renderer {
         size: (u32, u32),
         mut build: impl FnMut(&mut FrameParts) -> Result<(), AtlasFull>,
     ) {
-        let quads = self.build(device, queue, &mut build);
+        let (quads, split, pictures) = self.build(device, queue, &mut build);
+        let pictures = self.picture_textures(device, queue, pictures);
         let background = linear(self.palette.get(
             NamedColor::Background as usize,
             &fterm_term::alacritty_terminal::term::color::Colors::default(),
@@ -310,14 +362,83 @@ impl Renderer {
                 })],
                 ..Default::default()
             });
-            if !quads.is_empty() {
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.bind_group, &[]);
-                pass.set_vertex_buffer(0, self.instances.slice(..));
-                pass.draw(0..4, 0..quads.len() as u32);
+            // The panes, then their pictures, then all that is above the panes (hints, dock, toasts, boxes).
+            let grid = |pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>| {
+                if !range.is_empty() {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_vertex_buffer(0, self.instances.slice(..));
+                    pass.draw(0..4, range);
+                }
+            };
+            let split = split as u32;
+            grid(&mut pass, 0..split);
+            if let Some(buffer) = &pictures.1 {
+                pass.set_pipeline(&self.picture_pipeline);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                for (i, (key, clip)) in pictures.0.iter().enumerate() {
+                    let (Some(texture), Some([x, y, w, h])) =
+                        (self.picture_textures.get(key), scissor(*clip, size))
+                    else {
+                        continue;
+                    };
+                    pass.set_scissor_rect(x, y, w, h);
+                    pass.set_bind_group(0, &texture.bind_group, &[]);
+                    pass.draw(0..4, i as u32..i as u32 + 1);
+                }
+                pass.set_scissor_rect(0, 0, size.0.max(1), size.1.max(1));
             }
+            grid(&mut pass, split..quads.len() as u32);
         }
         queue.submit([encoder.finish()]);
+    }
+
+    /// Makes the textures of the pictures of this frame (a new picture is uploaded once), frees the ones not drawn
+    /// for a while, and gives the pictures to draw (their keys and clips) with their quads.
+    #[allow(clippy::type_complexity)]
+    fn picture_textures(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pictures: Vec<PictureDraw>,
+    ) -> (Vec<(u64, Rect)>, Option<wgpu::Buffer>) {
+        let now = std::time::Instant::now();
+        self.picture_textures
+            .retain(|_, t| now.duration_since(t.used) < PICTURE_KEEP);
+        self.braille_forms
+            .retain(|_, b| now.duration_since(b.used) < PICTURE_KEEP);
+        if pictures.is_empty() {
+            return (Vec::new(), None);
+        }
+        let mut draws = Vec::new();
+        let mut instances = Vec::new();
+        for draw in pictures {
+            let texture = self.picture_textures.entry(draw.key).or_insert_with(|| {
+                create_picture_texture(
+                    device,
+                    queue,
+                    &self.picture_layout,
+                    &self.uniforms,
+                    &self.picture_sampler,
+                    &draw.picture,
+                )
+            });
+            texture.used = now;
+            draws.push((draw.key, draw.clip));
+            instances.push(Instance {
+                rect: [draw.rect.x, draw.rect.y, draw.rect.width, draw.rect.height],
+                uv: [0.0, 0.0, 1.0, 1.0],
+                color: [1.0; 4],
+                kind: 0,
+                _pad: [0; 3],
+            });
+        }
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("pictures"),
+            contents: bytemuck::cast_slice(&instances),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        (draws, Some(buffer))
     }
 
     /// Builds the quads. When an atlas is full, it grows and we try again.
@@ -326,7 +447,8 @@ impl Renderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         build: &mut impl FnMut(&mut FrameParts) -> Result<(), AtlasFull>,
-    ) -> Vec<Instance> {
+    ) -> (Vec<Instance>, usize, Vec<PictureDraw>) {
+        let max_texture = self.max_atlas_size;
         for _ in 0..4 {
             let (cell, padding) = (self.fonts.cell(), self.padding);
             let (mask, color, fonts) = (&mut self.mask, &mut self.color, &mut self.fonts);
@@ -354,11 +476,16 @@ impl Renderer {
                 padding,
                 palette,
                 ui,
+                pictures: Vec::new(),
+                overlays_at: None,
+                braille_forms: &mut self.braille_forms,
+                max_texture,
             };
             let result = build(&mut parts);
-            let quads = parts.quads;
+            let split = parts.overlays_at.unwrap_or(parts.quads.len());
+            let (quads, pictures) = (parts.quads, parts.pictures);
             match result {
-                Ok(()) => return quads,
+                Ok(()) => return (quads, split, pictures),
                 Err(AtlasFull) => {
                     let atlas = if full_color {
                         &mut self.color
@@ -377,7 +504,7 @@ impl Renderer {
             }
         }
         tracing::warn!("too many glyphs for the atlas, skipping this frame");
-        Vec::new()
+        (Vec::new(), 0, Vec::new())
     }
 
     fn update_bind_group(&mut self, device: &wgpu::Device) {
@@ -400,6 +527,11 @@ pub struct FrameParts<'a> {
     padding: f32,
     palette: &'a Palette,
     ui: &'a UiColors,
+    /// The pictures of the panes (drawn after the quads before `overlays_at`).
+    pictures: Vec<PictureDraw>,
+    overlays_at: Option<usize>,
+    braille_forms: &'a mut std::collections::HashMap<(u64, usize, usize), BrailleForm>,
+    max_texture: u32,
 }
 
 impl FrameParts<'_> {
@@ -429,6 +561,112 @@ impl FrameParts<'_> {
         let quads = build_frame(term, &input, &mut self.glyph)?;
         self.quads.extend(quads);
         Ok(())
+    }
+
+    /// The pictures in the output of a pane drawn in `area` (after `pane`). `lookup` gives a picture by the id of
+    /// its mark; `max_rows` is the height of its highest picture (so a picture whose top is scrolled away is found).
+    pub fn pictures<'p, T: EventListener>(
+        &mut self,
+        term: &Term<T>,
+        area: Rect,
+        mode: PictureMode,
+        max_rows: usize,
+        lookup: impl Fn(u32) -> Option<PanePicture<'p>>,
+    ) -> Result<(), AtlasFull> {
+        if mode == PictureMode::Off {
+            return Ok(());
+        }
+        use fterm_term::alacritty_terminal::grid::Dimensions;
+        let screen = (term.columns(), term.screen_lines());
+        for (id, row, column) in visible_marks(term, max_rows) {
+            let Some(p) = lookup(id) else {
+                continue;
+            };
+            let Some((rect, clip)) = place(
+                row,
+                column,
+                (p.columns, p.rows),
+                self.cell,
+                area,
+                self.padding,
+                screen,
+            ) else {
+                continue;
+            };
+            let too_big = p.picture.width.max(p.picture.height) > self.max_texture;
+            if mode == PictureMode::Pixels && !too_big {
+                self.pictures.push(PictureDraw {
+                    key: p.key,
+                    picture: p.picture.clone(),
+                    rect,
+                    clip,
+                });
+            } else {
+                self.braille(&p, rect, clip)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The Braille form of a picture: Braille glyphs on its cells, only the cells inside `clip`.
+    fn braille(&mut self, p: &PanePicture<'_>, rect: Rect, clip: Rect) -> Result<(), AtlasFull> {
+        let form = self
+            .braille_forms
+            .entry((p.key, p.columns, p.rows))
+            .or_insert_with(|| BrailleForm {
+                cells: braille(
+                    &p.picture.rgba,
+                    (p.picture.width, p.picture.height),
+                    (p.columns, p.rows),
+                ),
+                used: std::time::Instant::now(),
+            });
+        form.used = std::time::Instant::now();
+        let cells = form.cells.clone();
+        let cell = self.cell;
+        for c in cells {
+            let x = rect.x + c.column as f32 * cell.width;
+            let y = rect.y + c.row as f32 * cell.height;
+            if x < clip.x
+                || y < clip.y
+                || x + cell.width > clip.x + clip.width + 0.5
+                || y + cell.height > clip.y + clip.height + 0.5
+            {
+                continue;
+            }
+            let key = GlyphKey {
+                c: c.c,
+                extra: None,
+                bold: false,
+                italic: false,
+                wide: false,
+                dots: true,
+            };
+            if let Some(g) = (self.glyph)(&key)? {
+                self.quads.push(Instance {
+                    rect: [
+                        x + g.left as f32,
+                        y + cell.baseline - g.top as f32,
+                        g.width as f32,
+                        g.height as f32,
+                    ],
+                    uv: [g.x as f32, g.y as f32, g.width as f32, g.height as f32],
+                    color: linear(fterm_term::alacritty_terminal::vte::ansi::Rgb {
+                        r: c.color[0],
+                        g: c.color[1],
+                        b: c.color[2],
+                    }),
+                    kind: crate::frame::KIND_GLYPH,
+                    _pad: [0; 3],
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Everything added after this is drawn above the pictures of the panes (call it after the panes).
+    pub fn overlays(&mut self) {
+        self.overlays_at = Some(self.quads.len());
     }
 
     pub fn tab_bar(&mut self, input: &TabBarInput) -> Result<(), AtlasFull> {
@@ -645,4 +883,149 @@ fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffe
         contents: &vec![0u8; capacity * size_of::<Instance>()],
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
     })
+}
+
+/// The pipeline for pictures: the same quads, one texture per picture.
+fn create_picture_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("picture.wgsl"));
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("picture"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("picture"),
+        bind_group_layouts: &[Some(&layout)],
+        ..Default::default()
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("picture"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<Instance>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &wgpu::vertex_attr_array![
+                    0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Uint32
+                ],
+            })],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: Default::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+    (pipeline, layout)
+}
+
+/// Uploads a picture into its own texture (sRGB, as the file has it).
+fn create_picture_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    uniforms: &wgpu::Buffer,
+    sampler: &wgpu::Sampler,
+    picture: &fterm_term::picture::Picture,
+) -> PictureTexture {
+    let size = wgpu::Extent3d {
+        width: picture.width.max(1),
+        height: picture.height.max(1),
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("picture"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    if picture.rgba.len() as u64 >= u64::from(size.width) * u64::from(size.height) * 4 {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &picture.rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size.width * 4),
+                rows_per_image: None,
+            },
+            size,
+        );
+    }
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("picture"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniforms.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    });
+    PictureTexture {
+        bind_group,
+        used: std::time::Instant::now(),
+    }
 }
