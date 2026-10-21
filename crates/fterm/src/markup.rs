@@ -137,12 +137,6 @@ impl Markup {
         (x0, y0, x1, y1)
     }
 
-    /// The size of the picture as it is shown (after the crops).
-    pub fn size(&self) -> (u32, u32) {
-        let (x0, y0, x1, y1) = self.view();
-        (x1 - x0, y1 - y0)
-    }
-
     /// A point of the shown picture in pixels of the first picture.
     fn to_base(&self, p: Point) -> Point {
         let (x0, y0, _, _) = self.view();
@@ -173,7 +167,7 @@ impl Markup {
             }),
             Tool::Hide => Some(Op::Hide { a: p, b: p }),
             Tool::Crop => Some(Op::Crop { a: p, b: p }),
-            // Text starts with a click and the keys (the app adds it with `add_text`).
+            // Text starts with a click and the keys (the app shows it with `text_draft`, Enter makes it a mark).
             Tool::Text => None,
         };
         self.version += 1;
@@ -221,19 +215,32 @@ impl Markup {
         had
     }
 
-    /// A text mark at `at` (pixels of the shown picture), drawn by the app as `mask`.
-    pub fn add_text(&mut self, at: Point, text: String, mask: TextMask) {
-        if text.trim().is_empty() {
-            return;
-        }
+    /// The text that is typed now at `at` (pixels of the shown picture): it is drawn, but it is not a mark until
+    /// `commit_draft`.
+    pub fn text_draft(&mut self, at: Point, text: String, mask: TextMask) {
         let at = self.to_base(at);
-        self.commit(Op::Text {
+        self.draft = Some(Op::Text {
             at,
             text,
             mask: Arc::new(mask),
             color: self.color,
         });
         self.version += 1;
+    }
+
+    /// Makes the text that is typed a mark. `false` when there is none.
+    pub fn commit_draft(&mut self) -> bool {
+        match self.draft.take() {
+            Some(op @ Op::Text { .. }) => {
+                self.commit(op);
+                self.version += 1;
+                true
+            }
+            other => {
+                self.draft = other;
+                false
+            }
+        }
     }
 
     fn commit(&mut self, op: Op) {
@@ -274,11 +281,6 @@ impl Markup {
         }
         self.cache = Arc::new(rgba);
         self.version += 1;
-    }
-
-    /// There are marks (something to save).
-    pub fn changed(&self) -> bool {
-        !self.ops.is_empty()
     }
 
     /// The picture as it is shown now: with the marks and the draft, cut to the crops. The draft of a crop shows
@@ -515,6 +517,21 @@ mod tests {
 
     const GREY: [u8; 3] = [100, 100, 100];
 
+    fn size(m: &Markup) -> (u32, u32) {
+        let p = m.render();
+        (p.width, p.height)
+    }
+
+    /// A text mark, as the app puts one: typed (the draft), then Enter.
+    fn add_text(m: &mut Markup, at: Point, text: &str, mask: TextMask) {
+        m.text_draft(at, text.into(), mask);
+        if text.trim().is_empty() {
+            m.cancel();
+        } else {
+            m.commit_draft();
+        }
+    }
+
     fn mark(m: &mut Markup, tool: Tool, a: Point, b: Point) {
         m.tool = tool;
         m.press(a);
@@ -529,7 +546,7 @@ mod tests {
         let p = m.render();
         assert_eq!(at(&p, 50, 50), COLORS[0], "on the line");
         assert_eq!(at(&p, 50, 10), GREY, "far from it");
-        assert!(m.changed());
+        assert!(!m.ops.is_empty());
     }
 
     #[test]
@@ -577,7 +594,7 @@ mod tests {
     fn a_crop_keeps_a_part_and_later_marks_go_to_the_right_place() {
         let mut m = Markup::new(grey(200, 100));
         mark(&mut m, Tool::Crop, (50.0, 20.0), (150.0, 80.0));
-        assert_eq!(m.size(), (100, 60));
+        assert_eq!(size(&m), (100, 60));
         let p = m.render();
         assert_eq!((p.width, p.height), (100, 60));
         // A box in the cropped picture is drawn there (and in the right place of the first picture).
@@ -587,7 +604,7 @@ mod tests {
         assert_eq!(at(&p, 50, 30), GREY);
         // A second crop cuts more.
         mark(&mut m, Tool::Crop, (0.0, 0.0), (50.0, 30.0));
-        assert_eq!(m.size(), (50, 30));
+        assert_eq!(size(&m), (50, 30));
     }
 
     #[test]
@@ -601,7 +618,7 @@ mod tests {
         assert_ne!(at(&p, 35, 10), GREY, "its frame");
         assert!(m.cancel());
         assert_eq!(m.render().width, 100);
-        assert!(!m.changed());
+        assert!(m.ops.is_empty());
     }
 
     #[test]
@@ -610,7 +627,7 @@ mod tests {
         mark(&mut m, Tool::Rect, (20.0, 20.0), (80.0, 80.0));
         mark(&mut m, Tool::Crop, (0.0, 0.0), (50.0, 50.0));
         assert!(m.undo());
-        assert_eq!(m.size(), (100, 100), "the crop is gone");
+        assert_eq!(size(&m), (100, 100), "the crop is gone");
         assert_eq!(at(&m.render(), 50, 20), COLORS[0], "the box stays");
         assert!(m.undo());
         assert_eq!(
@@ -631,7 +648,7 @@ mod tests {
         let mut m = Markup::new(grey(100, 100));
         mark(&mut m, Tool::Rect, (50.0, 50.0), (51.0, 50.0));
         mark(&mut m, Tool::Crop, (50.0, 50.0), (50.0, 51.0));
-        assert!(!m.changed());
+        assert!(m.ops.is_empty());
         // A click of the pen is a dot.
         m.tool = Tool::Pen;
         m.press((30.0, 30.0));
@@ -648,14 +665,35 @@ mod tests {
             height: 2,
             alpha: vec![255, 0, 255, 0, 255, 0],
         };
-        m.add_text((10.0, 20.0), "x".into(), mask.clone());
+        add_text(&mut m, (10.0, 20.0), "x", mask.clone());
         let p = m.render();
         assert_eq!(at(&p, 10, 20), COLORS[2]);
         assert_eq!(at(&p, 11, 20), GREY);
         assert_eq!(at(&p, 11, 21), COLORS[2]);
         // Empty text adds nothing.
-        m.add_text((0.0, 0.0), "  ".into(), mask);
+        add_text(&mut m, (0.0, 0.0), "  ", mask);
         assert!(m.undo() && !m.undo());
+    }
+
+    #[test]
+    fn text_is_seen_while_it_is_typed() {
+        let mut m = Markup::new(grey(100, 100));
+        let mask = TextMask {
+            width: 2,
+            height: 1,
+            alpha: vec![255, 255],
+        };
+        m.text_draft((10.0, 10.0), "ab".into(), mask.clone());
+        assert_eq!(at(&m.render(), 10, 10), COLORS[0], "it is drawn");
+        assert!(m.ops.is_empty(), "but not a mark yet");
+        assert!(m.commit_draft());
+        assert!(!m.ops.is_empty());
+        assert_eq!(at(&m.render(), 11, 10), COLORS[0]);
+        // Esc drops a text that is typed.
+        m.text_draft((50.0, 50.0), "c".into(), mask);
+        assert!(m.cancel());
+        assert_eq!(at(&m.render(), 50, 50), GREY);
+        assert!(!m.commit_draft(), "nothing to commit");
     }
 
     #[test]

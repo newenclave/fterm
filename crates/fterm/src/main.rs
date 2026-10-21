@@ -16,8 +16,6 @@ mod history_popup;
 mod inbox;
 mod input;
 mod link_open;
-// Wired into picture panes in the next commit.
-#[allow(dead_code)]
 mod markup;
 mod mouse;
 mod notify;

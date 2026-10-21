@@ -101,6 +101,7 @@ pub enum UserEvent {
 mod ai_calls;
 mod api_calls;
 mod link_calls;
+mod markup_calls;
 mod mux_calls;
 mod review_calls;
 mod session_calls;
@@ -147,8 +148,8 @@ struct Pane {
     mux: Option<mux_calls::MuxPane>,
     /// The pictures in its output (OSC 1337), by the id of their mark.
     pictures: crate::pictures::PictureStore,
-    /// A picture pane: its picture fills the pane (no program).
-    picture_pane: Option<fterm_term::picture::Picture>,
+    /// A picture pane: its picture (with its marks) fills the pane; there is no program.
+    picture_pane: Option<Box<markup_calls::PicturePane>>,
 }
 
 /// Everything that exists only while the window is open.
@@ -487,6 +488,8 @@ pub struct App {
     /// Screenshots of panes that open as picture panes when they are taken ("Show a screenshot of this pane").
     shot_pictures:
         Vec<std::sync::mpsc::Receiver<Result<serde_json::Value, fterm_api::protocol::RpcError>>>,
+    /// The fonts for text on pictures (mark-up), loaded the first time.
+    markup_fonts: Option<fterm_render::font::Fonts>,
     /// `ai_ask` calls that wait for the end of the answer.
     ai_waits: Vec<api_calls::AiWait>,
     /// `review` calls that wait for the user.
@@ -608,6 +611,7 @@ impl App {
             waits: Vec::new(),
             shots: Vec::new(),
             shot_pictures: Vec::new(),
+            markup_fonts: None,
             ai_waits: Vec::new(),
             reviews: Vec::new(),
             inbox: crate::inbox::Inbox::default(),
@@ -1902,7 +1906,12 @@ impl App {
     }
 
     /// A picture pane with this grid size: no program, the picture fills the pane (as much as its shape lets it).
-    fn spawn_picture(&mut self, size: GridSize, picture: fterm_term::picture::Picture) -> PaneId {
+    fn spawn_picture(
+        &mut self,
+        size: GridSize,
+        picture: fterm_term::picture::Picture,
+        origin: Option<PaneId>,
+    ) -> PaneId {
         let running = self.running.as_mut().expect("the window is open");
         let id = running.mux.new_pane_id();
         let session = Session::scene(size);
@@ -1922,7 +1931,7 @@ impl App {
                 agent: None,
                 agent_hooks: false,
                 pictures: Default::default(),
-                picture_pane: Some(picture),
+                picture_pane: Some(Box::new(markup_calls::PicturePane::new(picture, origin))),
                 last_command: None,
                 remote: true,
                 opened_by: None,
@@ -2006,7 +2015,11 @@ impl App {
         {
             running.mux.focus(next_to);
         }
-        self.split_with(direction, |app, size| Ok(app.spawn_picture(size, picture)))?;
+        // The path of the marked-up picture is pasted into this pane.
+        let origin = self.running.as_ref().and_then(|r| r.mux.active_pane());
+        self.split_with(direction, |app, size| {
+            Ok(app.spawn_picture(size, picture, origin))
+        })?;
         self.running
             .as_ref()
             .and_then(|r| r.mux.active_pane())
@@ -3913,6 +3926,14 @@ impl App {
             }
             return;
         }
+        // A mark that the mouse draws ends where the button goes up (also out of the pane).
+        if button == MouseButton::Left
+            && state == ElementState::Released
+            && self.drawing_picture().is_some()
+        {
+            self.markup_mouse(state);
+            return;
+        }
         if self.close_question.is_some()
             || self.link_question.is_some()
             || self.palette.is_some()
@@ -3984,6 +4005,11 @@ impl App {
             running.mux.focus(pane);
             self.tab_changed();
         }
+        // A picture pane: the mouse draws marks.
+        if button == MouseButton::Left && state == ElementState::Pressed && self.markup_mouse(state)
+        {
+            return;
+        }
         let report_button = match button {
             MouseButton::Left => Some(ReportButton::Left),
             MouseButton::Middle => Some(ReportButton::Middle),
@@ -4034,6 +4060,9 @@ impl App {
             return;
         }
 
+        if self.markup_drag() {
+            return;
+        }
         if !self.mouse.selecting
             && self.mouse.dragging_divider.is_none()
             && self.dock_mouse_moved(x as f32, y as f32)
@@ -4077,9 +4106,12 @@ impl App {
         };
         let on_link = divider.is_none() && self.update_link_hover();
         if !on_link && let Some(running) = &self.running {
-            running
-                .window
-                .set_cursor(divider.unwrap_or(CursorIcon::Default));
+            let picture = divider.is_none() && self.over_picture();
+            running.window.set_cursor(divider.unwrap_or(if picture {
+                CursorIcon::Crosshair
+            } else {
+                CursorIcon::Default
+            }));
         }
 
         if self.app_wants_mouse() {
@@ -4293,6 +4325,7 @@ impl App {
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
         self.draw_reviews();
+        self.refresh_pictures();
         let focused = self.focused;
         // The events count as read when the Events panel goes away (or fterm goes to the back).
         let events_seen = self
@@ -4535,6 +4568,8 @@ impl App {
                     cell,
                     width,
                 })?;
+                // The tool bars of picture panes: drawn above the pictures.
+                let mut picture_bars = Vec::new();
                 for (id, rect) in &pane_rects {
                     if let Some(pane) = panes.get(id) {
                         let is_active = Some(*id) == active_pane;
@@ -4559,16 +4594,29 @@ impl App {
                         };
                         pane.session.with_term(|term| {
                             parts.pane(term, *rect, style)?;
-                            if let Some(picture) = &pane.picture_pane {
-                                // It fills the pane, for its size now.
-                                let (columns, rows) = fterm_term::picture::fit(
+                            if let Some(pp) = &pane.picture_pane {
+                                // It fills the pane (but the tool bar row), for its size now.
+                                let (version, picture) = &pp.shown;
+                                let (columns, rows) = markup_calls::picture_cells(
                                     (picture.width, picture.height),
                                     (cell.width, cell.height),
                                     (term.grid().columns(), term.grid().screen_lines()),
                                 );
+                                picture_bars.push((
+                                    markup_calls::bar_text(
+                                        pp.markup.tool,
+                                        pp.markup.color,
+                                        pp.text.is_some(),
+                                    ),
+                                    *rect,
+                                    term.grid().screen_lines().saturating_sub(1),
+                                    term.grid().columns(),
+                                ));
+                                // A new texture for each change of the marks.
+                                let key = (id.0 << 32) | (*version & 0xffff_ffff);
                                 return parts.pictures(term, *rect, pictures, rows, |_| {
                                     Some(fterm_render::PanePicture {
-                                        key: id.0 << 32,
+                                        key,
                                         picture,
                                         columns,
                                         rows,
@@ -4593,6 +4641,9 @@ impl App {
                 }
                 // Hints, labels, the dock, and boxes are above the pictures of the panes.
                 parts.overlays();
+                for (text, rect, line, columns) in &picture_bars {
+                    parts.ghost(text, *rect, 0, *line, *columns)?;
+                }
                 if let Some((text, column, line)) = &hint
                     && let Some((_, rect)) =
                         pane_rects.iter().find(|(p, _)| Some(*p) == active_pane)
@@ -5130,7 +5181,11 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 running.window.request_redraw();
             }
-            WindowEvent::Ime(Ime::Commit(text)) => self.ime_commit(&text),
+            WindowEvent::Ime(Ime::Commit(text)) => {
+                if !self.markup_ime(&text) {
+                    self.ime_commit(&text);
+                }
+            }
             WindowEvent::ModifiersChanged(mods) => {
                 self.mods = mods.state();
                 self.update_link_hover();
@@ -5239,6 +5294,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if self.active_review().is_some() {
                     self.review_key(&event);
+                    return;
+                }
+                if self.active_picture().is_some() {
+                    self.markup_key(&event);
                     return;
                 }
                 if event.logical_key == Key::Named(NamedKey::Escape) && self.stop_command() {

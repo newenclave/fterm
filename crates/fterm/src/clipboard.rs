@@ -54,6 +54,21 @@ impl Clipboard {
         .ok()
     }
 
+    /// Puts a picture into the clipboard. `false` when it cannot.
+    pub fn set_picture(&mut self, picture: &fterm_term::picture::Picture) -> bool {
+        let Some(clipboard) = &mut self.inner else {
+            return false;
+        };
+        clipboard
+            .set_image(arboard::ImageData {
+                width: picture.width as usize,
+                height: picture.height as usize,
+                bytes: std::borrow::Cow::Borrowed(&picture.rgba),
+            })
+            .inspect_err(|err| tracing::warn!("cannot copy the picture: {err}"))
+            .is_ok()
+    }
+
     pub fn paste(&mut self) -> Option<String> {
         let clipboard = self.inner.as_mut()?;
         clipboard
