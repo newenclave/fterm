@@ -86,8 +86,8 @@ pub struct BrailleCell {
 const DOTS: [[u32; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
 
 /// The Braille form of an RGBA picture on `columns`×`rows` cells. In each cell a dot is on when its part of the
-/// picture is brighter than the mean of the cell (and not too dark or too clear); the cell gets the mean color of
-/// its dots that are on. Empty cells are left out.
+/// picture is brighter than the mean of the cell, or when the cell has little contrast (and the dot is not too dark
+/// or too clear); the cell gets the mean color of its dots that are on. Empty cells are left out.
 pub fn braille(
     rgba: &[u8],
     (width, height): (u32, u32),
@@ -132,19 +132,24 @@ pub fn braille(
     for row in 0..rows {
         for column in 0..columns {
             let mut cell = [[[0f32; 4]; 4]; 2];
-            let mut mean = 0.0;
+            let (mut mean, mut low, mut high) = (0.0, f32::MAX, f32::MIN);
             for (x, col) in cell.iter_mut().enumerate() {
                 for (y, d) in col.iter_mut().enumerate() {
                     *d = dot(column * 2 + x, row * 4 + y);
-                    mean += luma(*d);
+                    let l = luma(*d);
+                    mean += l;
+                    low = low.min(l);
+                    high = high.max(l);
                 }
             }
             mean /= 8.0;
+            // Little contrast (a flat part or a soft gradient): all dots, so there are no stripes.
+            let flat = high - low < 0.15;
             let (mut bits, mut color, mut lit) = (0u32, [0f32; 3], 0f32);
             for (x, col) in cell.iter().enumerate() {
                 for (y, d) in col.iter().enumerate() {
                     let l = luma(*d);
-                    if l >= mean && l > 0.06 && d[3] > 0.25 {
+                    if (flat || l >= mean) && l > 0.06 && d[3] > 0.25 {
                         bits |= DOTS[x][y];
                         for (c, v) in color.iter_mut().enumerate() {
                             *v += d[c];
@@ -267,6 +272,14 @@ mod tests {
             [255, 0, 0],
             "the color of the dots that are on"
         );
+    }
+
+    #[test]
+    fn a_soft_gradient_fills_its_cells() {
+        // A cell with little contrast (a smooth gradient) is full, not half: no stripes.
+        let rgba = picture(2, 4, |_, y| [100 + y as u8 * 8, 100, 200, 255]);
+        let cells = braille(&rgba, (2, 4), (1, 1));
+        assert_eq!(cells[0].c, '⣿');
     }
 
     #[test]

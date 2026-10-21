@@ -145,6 +145,8 @@ struct Pane {
     palette_changes: Option<bool>,
     /// A mux pane: its server and its id there (its program lives there).
     mux: Option<mux_calls::MuxPane>,
+    /// The pictures in its output (OSC 1337), by the id of their mark.
+    pictures: crate::pictures::PictureStore,
 }
 
 /// Everything that exists only while the window is open.
@@ -1866,6 +1868,7 @@ impl App {
                 shell: ShellState::default(),
                 agent: None,
                 agent_hooks: false,
+                pictures: Default::default(),
                 last_command: None,
                 remote: true,
                 opened_by: None,
@@ -2113,6 +2116,7 @@ impl App {
                 shell: ShellState::starting_in(start_cwd),
                 agent: None,
                 agent_hooks: false,
+                pictures: Default::default(),
                 last_command: None,
                 remote: true,
                 opened_by: None,
@@ -4290,6 +4294,11 @@ impl App {
         let original_colors = self.original_colors;
         let palette_changes = self.config.config.palette_changes;
         // Braille in panes with programs as the config says; scenes are pictures, so always pixels.
+        let pictures = match self.config.config.pictures {
+            fterm_config::load::Pictures::Pixels => fterm_render::picture::PictureMode::Pixels,
+            fterm_config::load::Pictures::Braille => fterm_render::picture::PictureMode::Braille,
+            fterm_config::load::Pictures::Off => fterm_render::picture::PictureMode::Off,
+        };
         let braille = match self.config.config.braille_style {
             fterm_config::load::BrailleStyle::Pixels => BrailleStyle::Pixels,
             fterm_config::load::BrailleStyle::Dots => BrailleStyle::Dots,
@@ -4404,10 +4413,26 @@ impl App {
                                 &[]
                             },
                         };
-                        pane.session
-                            .with_term(|term| parts.pane(term, *rect, style))?;
+                        pane.session.with_term(|term| {
+                            parts.pane(term, *rect, style)?;
+                            if pane.pictures.is_empty() {
+                                return Ok(());
+                            }
+                            let store = &pane.pictures;
+                            parts.pictures(term, *rect, pictures, store.max_rows(), |pid| {
+                                let mark = store.get(pid)?;
+                                Some(fterm_render::PanePicture {
+                                    key: (id.0 << 32) | u64::from(pid),
+                                    picture: &mark.picture,
+                                    columns: mark.columns,
+                                    rows: mark.rows,
+                                })
+                            })
+                        })?;
                     }
                 }
+                // Hints, labels, the dock, and boxes are above the pictures of the panes.
+                parts.overlays();
                 if let Some((text, column, line)) = &hint
                     && let Some((_, rect)) =
                         pane_rects.iter().find(|(p, _)| Some(*p) == active_pane)
@@ -4676,6 +4701,30 @@ impl ApplicationHandler<UserEvent> for App {
                 running.window.request_redraw();
                 self.update_window_title();
                 self.detect_agent(event_loop, pane);
+            }
+            TermEvent::Osc(OscEvent::Picture(mark)) => {
+                tracing::debug!(
+                    pane = pane.0,
+                    id = mark.id,
+                    columns = mark.columns,
+                    rows = mark.rows,
+                    "a picture in the output"
+                );
+                let Some(p) = running.panes.get_mut(&pane) else {
+                    return;
+                };
+                // The pictures whose marks are gone (scrolled out of the history, cleared, written over) go too.
+                if !p.pictures.is_empty() {
+                    let alive = p.session.with_term(|term| {
+                        fterm_term::picture::marks(term, i32::MIN..i32::MAX)
+                            .into_iter()
+                            .map(|(id, _, _)| id)
+                            .collect()
+                    });
+                    p.pictures.retain(&alive);
+                }
+                p.pictures.insert(mark);
+                running.window.request_redraw();
             }
             TermEvent::Osc(osc) => {
                 tracing::debug!(pane = pane.0, ?osc, "osc event");

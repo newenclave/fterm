@@ -20,6 +20,18 @@ pub enum BrailleStyle {
     Dots,
 }
 
+/// How pictures in the output (OSC 1337) are drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pictures {
+    /// Real pixels.
+    #[default]
+    Pixels,
+    /// Braille dots in the cells of the picture.
+    Braille,
+    /// Not drawn.
+    Off,
+}
+
 /// Where toasts show in the window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ToastPosition {
@@ -494,6 +506,8 @@ pub struct Config {
     pub padding: f32,
     pub scrollback: usize,
     pub braille_style: BrailleStyle,
+    /// How pictures in the output are drawn.
+    pub pictures: Pictures,
     pub colors: ColorConfig,
     /// The theme: the colors of the terminal and the UI. `colors` changes it.
     pub theme: crate::theme::ThemeChoice,
@@ -556,6 +570,7 @@ impl Default for Config {
             padding: 6.0,
             scrollback: 10_000,
             braille_style: BrailleStyle::Dots,
+            pictures: Pictures::Pixels,
             colors: ColorConfig::default(),
             theme: crate::theme::ThemeChoice::Default,
             harmonize: HarmonizeConfig::default(),
@@ -1152,6 +1167,18 @@ impl Reader {
                 other => {
                     return Err(format!(
                         "braille_style: must be \"pixels\" or \"dots\", got `{other}`"
+                    ));
+                }
+            };
+        }
+        if let Some(mode) = string_field(root, "pictures", "pictures")? {
+            config.pictures = match mode.as_str() {
+                "pixels" => Pictures::Pixels,
+                "braille" => Pictures::Braille,
+                "off" => Pictures::Off,
+                other => {
+                    return Err(format!(
+                        "pictures: must be \"pixels\", \"braille\", or \"off\", got `{other}`"
                     ));
                 }
             };
@@ -2348,6 +2375,20 @@ mod tests {
                 .braille_style,
             BrailleStyle::Pixels
         );
+    }
+
+    #[test]
+    fn pictures_are_pixels_by_default() {
+        assert_eq!(load("return {}").config.pictures, Pictures::Pixels);
+        for (text, want) in [
+            ("braille", Pictures::Braille),
+            ("off", Pictures::Off),
+            ("pixels", Pictures::Pixels),
+        ] {
+            let loaded = load(&format!("return {{ pictures = \"{text}\" }}"));
+            assert_eq!(loaded.config.pictures, want, "{text}");
+        }
+        assert!(error(r#"return { pictures = "sixel" }"#).contains("pictures"));
     }
 
     #[test]

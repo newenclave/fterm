@@ -21,6 +21,7 @@ mod notify;
 mod palette;
 mod panels;
 mod paths;
+mod pictures;
 mod review;
 mod screenshot;
 mod session_state;
