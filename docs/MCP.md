@@ -77,7 +77,7 @@ When FTERM_PANE_ID is set, you run in the fterm terminal: run `ftermctl guide` o
 | `open_scene` | Opens a Braille scene (a pane to draw into) on the right or below. Gives its id, its size in dots, and the aspect of the dots. |
 | `draw_scene` | Draws commands into a scene: dots, lines, rects, circles, text, colors, charts (see [SCENE.md](SCENE.md)). |
 | `plot` | A chart of numbers in a scene, as a line or bars, with a title and a color. Call it again with new values for a live chart. |
-| `show_image` | Shows you a picture (PNG, JPEG, BMP) in a picture pane next to a pane: `path` (a file on the agent's machine) or `data` (base64), `place`, `next_to`. See [PICTURES.md](PICTURES.md). |
+| `show_image` | Shows you a picture (PNG, JPEG, BMP) in a picture pane next to a pane: `path` (a file on the agent's machine) or `data` (base64), `place`, `next_to`. With `question` and `wait: true` the agent waits until you mark it up and press Enter, and gets the picture with your marks (`timeout_seconds`, default one hour). See [PICTURES.md](PICTURES.md). |
 | `screenshot_pane` | A picture (PNG) of a pane, as you see it. The agent gets the image, so it can check a scene or a program with a UI. The pane must be in the active tab. |
 | `ai_read` | The chat of the AI panel: questions, answers, and the text in its input (`last`: only the last turns). |
 | `ai_ask` | Asks a question in the AI panel (`text`; `pane` sends the last command and output of a pane too) and waits for the answer. Only with `ai = { api_access = true }` in the config. |

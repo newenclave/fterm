@@ -164,7 +164,9 @@ Ideas (we pick the order in the Phase 3 plan):
   - With ConPTY the program makes room (new lines); `ftermctl image` does it and says so (`ftermRoom=1`), so it
     works the same in WSL and over SSH. Without ConPTY fterm moves the cursor, as iTerm2 does.
   - Picture panes: `show_image` (API, MCP, `ftermctl show-image`), the clipboard picture, a screenshot of a pane.
-- **Step 2: mark up a picture** (a pen, a rectangle, an arrow, text, Ctrl+Z), see "Mark up a picture" in the ideas.
+- **Step 2 ✅ (done, 2026-10-21): mark up a picture** in a picture pane: pen, box, arrow, text, hide (big pixels),
+  crop, 4 colors, Ctrl+Z / Ctrl+Y. Enter: a PNG in `data_dir/shots`, the clipboard, and its path pasted into the
+  pane next to it. An agent can ask with `show_image` (`question`, `wait`) and gets the marked-up picture.
 - Later: GIF and WebP; pictures in the snapshot of the mux server (today a mux pane shows a picture only while it
   is attached); picture panes in saved sessions; Sixel and Kitty on Linux and macOS.
 - **Check:** `yazi` shows image previews, `chafa`/`imgcat` work. ✅ An agent shows a picture (`show_image`).
@@ -378,6 +380,7 @@ Still to do:
 Ideas from the user. We think about them before we plan them.
 
 ### Mark up a picture (annotate)
+**Done** (Phase 3b step 2, see [PICTURES.md](PICTURES.md#mark-up-a-picture)). The first idea was:
 Sometimes you paste a picture for an agent, but first you want to mark something on it. Today you open another
 program (the Windows screenshot tool) and draw with a pen there. fterm could do this itself:
 - **What to mark up:** a picture from the clipboard, or a screenshot of a pane (`screenshot` already exists), for

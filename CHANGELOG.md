@@ -15,6 +15,11 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   screenshot of this pane". `pictures = "pixels" | "braille" | "off"` in `fterm.lua`. On Windows a program must
   make room for its picture with new lines (ConPTY does not know about pictures); `ftermctl image` does it. See
   [docs/PICTURES.md](docs/PICTURES.md).
+- **Mark up a picture.** In a picture pane you can draw on the picture: a pen (`P`), boxes (`R`), arrows (`A`), text
+  (`T`), hidden parts with big pixels (`H`, for secrets), and a crop (`C`); `1`–`4` pick the color, Ctrl+Z / Ctrl+Y
+  undo and redo. Enter saves the picture as PNG in `data_dir/shots`, puts it into the clipboard, and pastes its
+  path into the pane next to it (for example the prompt of an agent). An agent can ask you to mark up a picture
+  and wait for it: `show_image` with `question` and `wait` (also `ftermctl show-image --wait`).
 - **Panes that live on (a mux server).** With `mux = true` in `fterm.lua` (or in a profile), the programs of new
   panes run in a small background server (`fterm --mux-server`). Close the window, and they go on running; open
   fterm again, and the panes come back in the same tabs, with their screen, their history, and the programs

@@ -60,6 +60,9 @@ The user sees the command run. This is better than a hidden command when the use
 **Show a picture file**
 - `show_image` with `path` (or `data` in base64) opens a picture pane next to a pane (`place`, `next_to`):
   the picture (PNG, JPEG, BMP) fills it. `ftermctl show-image FILE` does the same.
+- To ask the user about a picture: `show_image` with `question` (for example "Mark what looks wrong") and
+  `wait: true`. The user draws on it (boxes, arrows, text) and presses Enter; you get the marked-up picture.
+  If the user closes it, you get no picture. `ftermctl show-image --wait --question TEXT FILE` prints its path.
 - `ftermctl image FILE --height N` puts a picture in the output of the pane where it runs, N rows high
   (also in WSL and over SSH). It is for a shell; your own output (a TUI) draws over it, so use `show_image`.
 

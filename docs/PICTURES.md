@@ -51,6 +51,40 @@ that writes only `OSC 1337` has no such mark: with the ConPTY of Windows its pic
 
 A picture pane is not saved in a session: it does not come back after a restart.
 
+## Mark up a picture
+In a picture pane you can draw on the picture, for example to show an agent what is wrong. The last row of the
+pane is the tool bar: it shows the tool, the color, and the keys.
+
+| Key | What it does |
+|---|---|
+| `P` | Pen: draw with the mouse. |
+| `R` | Box: drag from one corner to the other. |
+| `A` | Arrow: drag from its start to its tip. |
+| `T` | Text: click where the text goes, type it, then Enter. |
+| `H` | Hide: drag over a secret. It gets big pixels (a blur can sometimes be undone, big pixels cannot). |
+| `C` | Crop: drag over the part to keep. Crop again to cut more. |
+| `1`–`4` | The color: red, yellow, green, blue. |
+| `Ctrl+Z`, `Ctrl+Y` | Undo, redo. |
+| `Esc` | Drop the mark that you draw now, or the text that you type. |
+| `Enter` | Done (see below). |
+
+The cursor is a cross over the picture. Lines and text are bigger on a big picture, so you see them on a big
+screenshot too.
+
+**Enter** saves the picture with its marks as a PNG in `data_dir/shots` (or in the temp folder), puts it into the
+clipboard, pastes its **path** into the pane that the picture was opened next to, and closes the picture pane. An
+agent like Claude Code reads a picture from a path in your prompt, so you only add your words.
+
+A typical way: take a screenshot (Win+Shift+S), run **Show the picture in the clipboard** in the palette next to the
+pane of the agent, mark it, press Enter, and write your question after the path.
+
+### An agent asks you to mark up a picture
+An agent can show you a picture with a question and wait for your marks: `show_image` with `question` and
+`wait: true` (see [API.md](API.md) and [MCP.md](MCP.md)). The question is on the tool bar. When you press Enter,
+the agent gets the picture with your marks (it does not go to the clipboard, and nothing is pasted). When you close
+the picture pane, the agent gets no picture. From a script: `ftermctl show-image --wait --question "Mark it" FILE`
+prints the path of the marked-up picture.
+
 ## Pixels or Braille
 `pictures` in `fterm.lua` (see [CONFIG.md](CONFIG.md)):
 
