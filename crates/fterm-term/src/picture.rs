@@ -7,6 +7,8 @@ use std::sync::Arc;
 pub const MAX_PAYLOAD: usize = 32 * 1024 * 1024;
 /// The most pixels of a picture before it is decoded (a bad header can say 100000×100000).
 pub const MAX_PIXELS: u64 = 40_000_000;
+/// The most rows of a picture: a program may ask for any height, and the rows become new lines.
+pub const MAX_ROWS: usize = 1000;
 /// The longest side after decoding: a bigger picture is scaled down (the GPU limit is often 8192).
 pub const MAX_SIDE: u32 = 4096;
 
@@ -205,7 +207,7 @@ pub fn cells(
     };
     (
         ((w / cw).ceil() as usize).clamp(1, pane.0.max(1)),
-        ((h / ch).ceil() as usize).max(1),
+        ((h / ch).ceil() as usize).clamp(1, MAX_ROWS),
     )
 }
 
@@ -432,6 +434,31 @@ mod tests {
         let mut stretch = args(Dim::Cells(40), Dim::Cells(5));
         stretch.keep_aspect = false;
         assert_eq!(cells(&stretch, (100, 100), cell, pane), (40, 5));
+    }
+
+    #[test]
+    fn a_huge_height_from_a_program_is_cut() {
+        // The rows make new lines (the room), so a bad height must not make billions of them.
+        let cell = (10.0, 20.0);
+        // With its shape the pane width cuts it already; with preserveAspectRatio=0 only the limit does.
+        assert_eq!(
+            cells(
+                &args(Dim::Auto, Dim::Cells(u32::MAX)),
+                (100, 100),
+                cell,
+                (80, 24)
+            )
+            .1,
+            40
+        );
+        let rows = |height| {
+            let mut stretch = args(Dim::Auto, height);
+            stretch.keep_aspect = false;
+            cells(&stretch, (100, 100), cell, (80, 24)).1
+        };
+        assert_eq!(rows(Dim::Cells(u32::MAX)), MAX_ROWS);
+        assert_eq!(rows(Dim::Px(u32::MAX)), MAX_ROWS);
+        assert_eq!(rows(Dim::Cells(50)), 50);
     }
 
     #[test]
