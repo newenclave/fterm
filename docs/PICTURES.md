@@ -34,6 +34,10 @@ A picture goes away with its cells:
 
 When the pane gets a new width, the picture stays on its line.
 
+`ftermctl image` also puts a small mark on the first cell of the picture (an OSC 8 link on a space). ConPTY keeps
+such links, so the picture stays when ConPTY paints the screen again (it does that after a resize). A program
+that writes only `OSC 1337` has no such mark: with the ConPTY of Windows its picture can go away after a resize.
+
 ## A picture pane
 - The command palette: **Show the picture in the clipboard** (`show_clipboard_picture`), for example a
   screenshot that you just took.

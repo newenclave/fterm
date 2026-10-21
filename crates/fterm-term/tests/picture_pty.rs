@@ -22,17 +22,20 @@ fn timeout() -> Duration {
 
 #[test]
 fn the_mark_of_a_picture_survives_the_pty() {
-    // The picture takes 10×3 cells; the program writes three new lines (room), then more text.
+    // The picture takes 10×3 cells, as `ftermctl image` writes it: its mark is an OSC 8 link on a space (ConPTY
+    // keeps such links when it paints the lines again after a resize), then three new lines (room), then more text.
+    let args = "width=10;height=3;preserveAspectRatio=0;inline=1;ftermRoom=1;ftermMark=2147483999";
+    let link = "8;id=2147483999;fterm-picture:2147483999";
     let options = if cfg!(windows) {
         let script = format!(
             "$e=[char]27; $b=[char]7; Write-Host 'before'; \
-             Write-Host -NoNewline \"$e]1337;File=width=10;height=3;preserveAspectRatio=0;inline=1:{PNG}$b\"; \
+             Write-Host -NoNewline \"$e]1337;File={args}:{PNG}$b$e]{link}$b $e]8;;$b\"; \
              Write-Host \"`n`n\"; Write-Host 'after'; Start-Sleep -Seconds 3; Write-Host 'end'"
         );
         SessionOptions::command("powershell.exe", ["-NoProfile", "-Command", &script])
     } else {
         let script = format!(
-            "echo before; printf '\\033]1337;File=width=10;height=3;preserveAspectRatio=0;inline=1:{PNG}\\007'; \
+            "echo before; printf '\\033]1337;File={args}:{PNG}\\007\\033]{link}\\007 \\033]8;;\\007'; \
              echo; echo after; sleep 3; echo end"
         );
         SessionOptions::command("sh", ["-c", &script])

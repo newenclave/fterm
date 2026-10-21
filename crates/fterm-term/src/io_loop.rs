@@ -66,6 +66,43 @@ pub type OscSink = Arc<dyn Fn(Vec<OscEvent>) + Send + Sync>;
 /// sends them on to the window.
 pub type OutputTap = Arc<dyn Fn(&[u8]) + Send + Sync>;
 
+/// The chars of the screen (no styles): a repaint of ConPTY writes the same chars again.
+fn screen_text<U: EventListener>(term: &Term<U>) -> String {
+    use alacritty_terminal::index::{Column, Line};
+    let grid = term.grid();
+    let mut text = String::new();
+    for line in 0..grid.screen_lines() as i32 {
+        let row = &grid[Line(line)];
+        text.extend((0..grid.columns()).map(|c| row[Column(c)].c));
+        text.push('\n');
+    }
+    text
+}
+
+/// After a repaint (the text of the screen did not change), the marks of pictures that an erase took from their
+/// blank cells come back. ConPTY paints all lines again after a resize, with `ESC[K` on each one.
+fn keep_marks<U: EventListener>(term: &mut Term<U>, marks: &[(u32, i32, usize)], text: &str) {
+    use alacritty_terminal::index::{Column, Line, Point};
+    let screen = term.screen_lines() as i32;
+    let now: Vec<u32> = crate::picture::marks(term, 0..screen)
+        .into_iter()
+        .map(|(id, _, _)| id)
+        .collect();
+    if marks.iter().all(|(id, _, _)| now.contains(id)) || screen_text(term) != text {
+        return;
+    }
+    for &(id, line, column) in marks {
+        if now.contains(&id) || line >= screen || column >= term.columns() {
+            continue;
+        }
+        let cell = &mut term.grid_mut()[Point::new(Line(line), Column(column))];
+        if cell.c == ' ' && cell.hyperlink().is_none() {
+            let uri = picture_uri(id);
+            cell.set_hyperlink(Some(Hyperlink::new(Some(uri.clone()), uri)));
+        }
+    }
+}
+
 /// The cell size in pixels, shared by a session and its feeder (a picture takes as many cells as its pixels need).
 #[derive(Clone, Debug, Default)]
 pub struct CellPx(Arc<AtomicU32>);
@@ -135,6 +172,10 @@ impl Feeder {
     ) {
         self.found.clear();
         self.hidden.clear();
+        // The marks of pictures on the screen now, and its text (to see a repaint that keeps the text).
+        let screen = term.screen_lines() as i32;
+        let marks = crate::picture::marks(term, 0..screen);
+        let text = (!marks.is_empty()).then(|| screen_text(term));
         self.scanner
             .feed_parts(bytes, &mut self.found, &mut self.hidden);
         let found = std::mem::take(&mut self.found);
@@ -171,6 +212,9 @@ impl Feeder {
             }
         }
         self.advance(term, bytes, from..bytes.len());
+        if let Some(text) = text {
+            keep_marks(term, &marks, &text);
+        }
     }
 
     /// Parses `bytes[range]` without the hidden parts (the bodies of pictures).
@@ -210,11 +254,19 @@ impl Feeder {
             self.cell.get(),
             (term.columns(), term.screen_lines()),
         );
-        self.last_picture = self.last_picture.wrapping_add(1).max(1);
-        let id = self.last_picture;
         let point = term.grid().cursor.point;
-        let uri = picture_uri(id);
-        term.grid_mut()[point].set_hyperlink(Some(Hyperlink::new(Some(uri.clone()), uri)));
+        let id = match args.mark {
+            // The program marks the cell itself (OSC 8 after the picture).
+            Some(id) => id,
+            None => {
+                // Ours stay below the ids that programs pick (they take big random ones).
+                self.last_picture = (self.last_picture % 0x7fff_ffff) + 1;
+                let id = self.last_picture;
+                let uri = picture_uri(id);
+                term.grid_mut()[point].set_hyperlink(Some(Hyperlink::new(Some(uri.clone()), uri)));
+                id
+            }
+        };
         if self.make_room && !args.own_room {
             // Down to the last row of the picture, right of it.
             let mut room = b"\n".repeat(rows.saturating_sub(1));

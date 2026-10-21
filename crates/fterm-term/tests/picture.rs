@@ -173,6 +173,59 @@ fn a_clear_removes_the_mark() {
 }
 
 #[test]
+fn a_program_can_give_its_own_mark() {
+    // `ftermctl image` puts the mark itself, as an OSC 8 link on a space: ConPTY keeps OSC 8 links in its buffer
+    // and paints them again, so the mark lives through any repaint. fterm then writes no mark of its own.
+    let mut term = term(40, 10, 100);
+    let mut bytes = sequence(10, 20);
+    let at = bytes.iter().position(|&b| b == b':').unwrap();
+    bytes.splice(at..at, b";ftermMark=3000000001;ftermRoom=1".iter().copied());
+    let osc = feed(&mut feeder(true), &mut term, &bytes);
+    let [OscEvent::Picture(mark)] = &osc[..] else {
+        panic!("{osc:?}");
+    };
+    assert_eq!(mark.id, 3_000_000_001);
+    assert_eq!(all_marks(&term), [], "no mark of fterm");
+    feed(
+        &mut feeder(true),
+        &mut term,
+        b"\x1b]8;id=3000000001;fterm-picture:3000000001\x07 \x1b]8;;\x07",
+    );
+    assert_eq!(all_marks(&term), [(3_000_000_001, 0, 0)]);
+}
+
+#[test]
+fn a_conpty_repaint_keeps_the_mark() {
+    // After a resize the ConPTY of Windows paints all lines again: the same text, and `ESC[K` on each line. The
+    // erase would take the mark of a picture on a blank cell; the text did not change, so the mark comes back.
+    let mut term = term(50, 8, 100);
+    let mut feeder = feeder(false);
+    feed(&mut feeder, &mut term, b"before\r\n");
+    feed(&mut feeder, &mut term, &sequence(10, 20));
+    feed(&mut feeder, &mut term, b"\n\n\rafter\r\n");
+    let id = all_marks(&term)[0].0;
+    let repaint = b"\x1b[?25l\x1b[Hbefore\x1b[K\r\n\x1b[K\r\n\x1b[K\r\nafter\x1b[K\r\n\x1b[K\r\n\x1b[K\x1b[5;1H\x1b[?25h";
+    feed(&mut feeder, &mut term, repaint);
+    assert_eq!(all_marks(&term), [(id, 1, 0)]);
+    // The same repaint in two chunks.
+    feed(&mut feeder, &mut term, &repaint[..20]);
+    feed(&mut feeder, &mut term, &repaint[20..]);
+    assert_eq!(all_marks(&term), [(id, 1, 0)]);
+}
+
+#[test]
+fn new_text_on_the_screen_does_not_bring_the_mark_back() {
+    let mut term = term(50, 8, 100);
+    let mut feeder = feeder(false);
+    feed(&mut feeder, &mut term, b"before\r\n");
+    feed(&mut feeder, &mut term, &sequence(10, 20));
+    feed(&mut feeder, &mut term, b"\n\n\rafter\r\n");
+    // A program erases the line of the picture and writes other text: the picture is gone.
+    feed(&mut feeder, &mut term, b"\x1b[Hchanged\x1b[K\r\n\x1b[K");
+    assert_eq!(all_marks(&term), []);
+}
+
+#[test]
 fn text_over_the_cell_removes_the_mark() {
     // With no room (a program that does not know about ConPTY), its next text goes on the cell of the picture.
     let mut term = term(40, 5, 100);

@@ -35,6 +35,9 @@ pub struct FileArgs {
     pub keep_aspect: bool,
     /// `ftermRoom=1` (ours): the program makes room for the picture itself (new lines), so the cursor stays.
     pub own_room: bool,
+    /// `ftermMark=<id>` (ours): the program puts the mark itself (an OSC 8 link `fterm-picture:<id>` on the first
+    /// cell; ConPTY keeps such links when it paints the screen again), and the picture has this id.
+    pub mark: Option<u32>,
 }
 
 /// A decoded picture: RGBA8, `width * height * 4` bytes.
@@ -57,6 +60,7 @@ pub fn parse_file(text: &[u8]) -> Option<(FileArgs, &[u8])> {
         height: Dim::Auto,
         keep_aspect: true,
         own_room: false,
+        mark: None,
     };
     for arg in String::from_utf8_lossy(args).split(';') {
         let Some((key, value)) = arg.split_once('=') else {
@@ -72,6 +76,7 @@ pub fn parse_file(text: &[u8]) -> Option<(FileArgs, &[u8])> {
             "height" => out.height = dim(value),
             "preserveAspectRatio" => out.keep_aspect = value != "0",
             "ftermRoom" => out.own_room = value == "1",
+            "ftermMark" => out.mark = value.parse().ok(),
             _ => {}
         }
     }
@@ -220,6 +225,7 @@ pub fn fit(picture: (u32, u32), cell: (f32, f32), pane: (usize, usize)) -> (usiz
         height: Dim::Percent(100),
         keep_aspect: true,
         own_room: false,
+        mark: None,
     };
     cells(&args, picture, cell, pane)
 }
@@ -393,6 +399,7 @@ mod tests {
             height,
             keep_aspect: true,
             own_room: false,
+            mark: None,
         }
     }
 

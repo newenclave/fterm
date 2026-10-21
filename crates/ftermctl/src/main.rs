@@ -127,9 +127,12 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let mut out = std::io::stdout().lock();
-            std::io::Write::write_all(&mut out, &picture::sequence(&name, &file, *height))
-                .and_then(|()| std::io::Write::flush(&mut out))
-                .map_err(|err| format!("cannot write the picture: {err}"))?;
+            std::io::Write::write_all(
+                &mut out,
+                &picture::sequence(&name, &file, *height, picture::new_mark()),
+            )
+            .and_then(|()| std::io::Write::flush(&mut out))
+            .map_err(|err| format!("cannot write the picture: {err}"))?;
             Ok(ExitCode::SUCCESS)
         }
         Command::ShowImage { path, place, pane } => {
