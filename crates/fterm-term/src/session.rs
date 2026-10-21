@@ -180,6 +180,8 @@ pub struct Session {
     program: String,
     /// `FTERM_RECORD`: the recording of this session (the sizes are written here).
     recorder: crate::record::Shared,
+    /// The cell size in pixels, for the pictures in the output.
+    cell: crate::io_loop::CellPx,
 }
 
 impl Session {
@@ -266,12 +268,14 @@ impl Session {
                 Err(err) => tracing::warn!(path = %path.display(), "cannot record: {err}"),
             }
         }
+        let cell_px = crate::io_loop::CellPx::new(cell);
         let event_loop = IoLoop::new(
             term.clone(),
             listener.clone(),
             pty,
             osc_sink,
             options.tap.map(|t| t.0),
+            cell_px.clone(),
             recorder.clone(),
         )?;
         let sender = event_loop.channel();
@@ -287,6 +291,7 @@ impl Session {
             pid,
             program: program_name,
             recorder,
+            cell: cell_px,
         })
     }
 
@@ -312,9 +317,14 @@ impl Session {
             listener.clone(),
         )));
         let program = options.program.clone().unwrap_or_else(default_shell);
+        let cell = crate::io_loop::CellPx::default();
         let feed = RemoteFeed {
             term: term.clone(),
-            feeder: Mutex::new(crate::io_loop::Feeder::default()),
+            feeder: Mutex::new({
+                let mut feeder = crate::io_loop::Feeder::default();
+                feeder.cell = cell.clone();
+                feeder
+            }),
             listener,
         };
         let session = Self {
@@ -326,6 +336,7 @@ impl Session {
             pid: None,
             program: program_name(&program),
             recorder: Default::default(),
+            cell,
         };
         (session, feed)
     }
@@ -341,6 +352,7 @@ impl Session {
     }
 
     pub fn resize(&self, size: GridSize, cell: (u16, u16)) {
+        self.cell.set(cell);
         crate::record::with(&self.recorder, |r| {
             r.resize(size.columns, size.rows, std::time::Instant::now())
         });
@@ -387,6 +399,7 @@ impl Session {
             pid: None,
             program: "scene".to_owned(),
             recorder: Default::default(),
+            cell: Default::default(),
         }
     }
 

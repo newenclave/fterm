@@ -184,6 +184,31 @@ pub fn cells(
     )
 }
 
+/// The pictures whose top-left cell is on the grid lines `lines` (screen lines: negative = the history):
+/// (id, line, column). Lines out of the grid are skipped.
+pub fn marks<T>(
+    term: &alacritty_terminal::term::Term<T>,
+    lines: std::ops::Range<i32>,
+) -> Vec<(u32, i32, usize)> {
+    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::index::{Column, Line};
+    let grid = term.grid();
+    let top = -(grid.history_size() as i32);
+    let bottom = grid.screen_lines() as i32;
+    let mut out = Vec::new();
+    for line in lines.start.max(top)..lines.end.min(bottom) {
+        let row = &grid[Line(line)];
+        for column in 0..grid.columns() {
+            if let Some(link) = row[Column(column)].hyperlink()
+                && let Some(id) = crate::osc::picture_id(link.uri())
+            {
+                out.push((id, line, column));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,8 +1,17 @@
-//! Finds the OSC sequences that alacritty does not handle (shell integration, notifications, agent state).
-//! The scanner only reads the bytes; all bytes still go to the alacritty parser.
+//! Finds the OSC sequences that alacritty does not handle (shell integration, notifications, agent state,
+//! pictures). The scanner only reads the bytes; the bytes still go to the alacritty parser, except the body of a
+//! picture (`hidden`): alacritty does not need it, and it would keep a copy of megabytes.
 
-/// The longest OSC payload we keep. Longer sequences are dropped.
+use std::ops::Range;
+use std::sync::Arc;
+
+use crate::picture::{FileArgs, MAX_PAYLOAD, Picture};
+
+/// The longest OSC payload we keep. Longer sequences are dropped. A picture (`1337;File=`) may have `MAX_PAYLOAD`.
 pub const MAX_OSC: usize = 8 * 1024;
+
+/// The start of a picture sequence (iTerm2).
+const FILE: &[u8] = b"1337;File=";
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OscEvent {
@@ -24,7 +33,36 @@ pub enum OscEvent {
     /// Not from the shell: the pty loop adds it right after 133;C and 133;D. The place of the cursor,
     /// so fterm knows the lines of the command output.
     OutputMark { line: usize, column: usize },
+    /// A picture file from the output (OSC 1337;File=, `inline=1`), not decoded yet. The pty loop decodes it and
+    /// gives `Picture` in its place.
+    #[serde(skip)]
+    PictureFile { args: FileArgs, data: Arc<Vec<u8>> },
+    /// A picture in the output: its top-left cell has the mark `picture_uri(id)` (a hyperlink), so it moves with
+    /// its cell and goes away with it.
+    #[serde(skip)]
+    Picture(PictureMark),
 }
+
+/// A decoded picture and the cells it takes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PictureMark {
+    pub id: u32,
+    pub picture: Picture,
+    pub columns: usize,
+    pub rows: usize,
+}
+
+/// The hyperlink that marks the top-left cell of picture `id`.
+pub fn picture_uri(id: u32) -> String {
+    format!("{PICTURE_SCHEME}{id}")
+}
+
+/// The id of a picture mark (`None` for a real link).
+pub fn picture_id(uri: &str) -> Option<u32> {
+    uri.strip_prefix(PICTURE_SCHEME)?.parse().ok()
+}
+
+const PICTURE_SCHEME: &str = "fterm-picture:";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PromptMark {
@@ -43,6 +81,8 @@ pub enum PromptMark {
 pub struct Scanner {
     state: State,
     payload: Vec<u8>,
+    /// Inside the body of a picture (after `1337;File=`): its bytes are hidden from the parser.
+    file: bool,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -71,52 +111,120 @@ impl Scanner {
     /// Like `feed`, but each event comes with the offset just after its sequence in `bytes`.
     /// So the parser can run up to that place first (for example, to know where the cursor is at 133;B).
     pub fn feed_at(&mut self, bytes: &[u8], out: &mut Vec<(usize, OscEvent)>) {
+        self.feed_parts(bytes, out, &mut Vec::new());
+    }
+
+    /// Like `feed_at`, and `hidden` gets the byte ranges that the parser must not get (the body of a picture; never
+    /// an ESC or a BEL, so the parser still sees the end of the sequence).
+    pub fn feed_parts(
+        &mut self,
+        bytes: &[u8],
+        out: &mut Vec<(usize, OscEvent)>,
+        hidden: &mut Vec<Range<usize>>,
+    ) {
         const ESC: u8 = 0x1b;
         const BEL: u8 = 0x07;
+        let mut hide_from = self.file.then_some(0);
         for (i, &b) in bytes.iter().enumerate() {
             let end = i + 1;
+            // A hidden range ends before an ESC or a BEL.
+            if let Some(from) = hide_from
+                && (b == ESC || b == BEL)
+            {
+                if from < i {
+                    hidden.push(from..i);
+                }
+                hide_from = None;
+            }
+            let limit = if self.file { MAX_PAYLOAD } else { MAX_OSC };
             self.state = match (self.state, b) {
                 (State::Ground, ESC) => State::Escape,
                 (State::Ground, _) => State::Ground,
                 (State::Escape, b']') => {
                     self.payload.clear();
+                    self.file = false;
                     State::Osc
                 }
                 (State::Escape, ESC) => State::Escape,
                 (State::Escape, _) => State::Ground,
                 (State::Osc, BEL) => self.finish(end, out),
                 (State::Osc, ESC) => State::OscEscape,
-                (State::Osc, _) if self.payload.len() >= MAX_OSC => {
-                    self.payload.clear();
+                (State::Osc, _) if self.payload.len() >= limit => {
+                    self.payload = Vec::new();
                     State::Skip
                 }
                 (State::Osc, _) => {
                     self.payload.push(b);
+                    if !self.file && self.payload == FILE {
+                        self.file = true;
+                    }
                     State::Osc
                 }
                 (State::OscEscape, b'\\') => self.finish(end, out),
                 // ESC in the middle ends the OSC without a result; it can start a new one.
                 (State::OscEscape, b']') => {
                     self.payload.clear();
+                    self.file = false;
                     State::Osc
                 }
-                (State::OscEscape, _) => State::Ground,
-                (State::Skip, BEL) => State::Ground,
+                (State::OscEscape, _) => {
+                    self.file = false;
+                    State::Ground
+                }
+                (State::Skip, BEL) => {
+                    self.file = false;
+                    State::Ground
+                }
                 (State::Skip, ESC) => State::SkipEscape,
                 (State::Skip, _) => State::Skip,
-                (State::SkipEscape, _) => State::Ground,
+                (State::SkipEscape, _) => {
+                    self.file = false;
+                    State::Ground
+                }
             };
+            // The body of a picture starts after `1337;File=`, and goes on after an ESC that did not end it.
+            if self.file && hide_from.is_none() && b != ESC && b != BEL {
+                hide_from = Some(end);
+            }
+        }
+        if let Some(from) = hide_from
+            && self.file
+            && from < bytes.len()
+        {
+            hidden.push(from..bytes.len());
         }
     }
 
     fn finish(&mut self, end: usize, out: &mut Vec<(usize, OscEvent)>) -> State {
-        let payload = String::from_utf8_lossy(&self.payload);
-        if let Some(event) = parse(&payload) {
+        let event = if self.file {
+            self.file = false;
+            parse_picture(&self.payload["1337;".len()..])
+        } else {
+            parse(&String::from_utf8_lossy(&self.payload))
+        };
+        if let Some(event) = event {
             out.push((end, event));
         }
-        self.payload.clear();
+        if self.payload.capacity() > MAX_OSC {
+            self.payload = Vec::new();
+        } else {
+            self.payload.clear();
+        }
         State::Ground
     }
+}
+
+/// `File=<args>:<base64>`: a picture to show (`inline=1`, good base64), or nothing.
+fn parse_picture(text: &[u8]) -> Option<OscEvent> {
+    let (args, data) = crate::picture::parse_file(text)?;
+    if !args.inline {
+        return None;
+    }
+    let data = crate::picture::base64_decode(data)?;
+    Some(OscEvent::PictureFile {
+        args,
+        data: Arc::new(data),
+    })
 }
 
 /// Turns one OSC payload (without `ESC ]` and the end) into an event.
@@ -450,6 +558,100 @@ mod tests {
         long.extend(std::iter::repeat_n(b'x', MAX_OSC + 10));
         long.extend(b"\x07\x1b]9;ok\x07");
         assert_eq!(scan(&[&long]), [notify(None, "ok")]);
+    }
+
+    /// Scans `chunks` and gives the events and the bytes that the parser gets (all but the hidden ones).
+    fn scan_parts(chunks: &[&[u8]]) -> (Vec<OscEvent>, Vec<u8>) {
+        let mut scanner = Scanner::default();
+        let (mut events, mut seen) = (Vec::new(), Vec::new());
+        for chunk in chunks {
+            let (mut out, mut hidden) = (Vec::new(), Vec::new());
+            scanner.feed_parts(chunk, &mut out, &mut hidden);
+            events.extend(out.into_iter().map(|(_, e)| e));
+            let mut at = 0;
+            for range in hidden {
+                assert!(range.start >= at && range.end <= chunk.len(), "{range:?}");
+                seen.extend_from_slice(&chunk[at..range.start]);
+                at = range.end;
+            }
+            seen.extend_from_slice(&chunk[at..]);
+        }
+        (events, seen)
+    }
+
+    fn picture(data: &[u8]) -> OscEvent {
+        OscEvent::PictureFile {
+            args: crate::picture::parse_file(b"File=inline=1:").unwrap().0,
+            data: Arc::new(data.to_vec()),
+        }
+    }
+
+    #[test]
+    fn a_picture_is_found_and_its_body_is_hidden_from_the_parser() {
+        let (events, seen) = scan_parts(&[b"a\x1b]1337;File=inline=1:QUJD\x07b"]);
+        assert_eq!(events, [picture(b"ABC")]);
+        assert_eq!(
+            seen, b"a\x1b]1337;File=\x07b",
+            "the parser sees only the start and the end"
+        );
+        // The ST end (`ESC \`) works too, and the ESC is not hidden.
+        let (events, seen) = scan_parts(&[b"\x1b]1337;File=inline=1:QUJD\x1b\\x"]);
+        assert_eq!(events, [picture(b"ABC")]);
+        assert_eq!(seen, b"\x1b]1337;File=\x1b\\x");
+    }
+
+    #[test]
+    fn a_picture_cut_into_many_chunks() {
+        let (events, seen) = scan_parts(&[
+            b"x\x1b]1337;Fi",
+            b"le=inl",
+            b"ine=1:QU",
+            b"JD",
+            b"\x1b",
+            b"\\y",
+        ]);
+        assert_eq!(events, [picture(b"ABC")]);
+        assert_eq!(seen, b"x\x1b]1337;File=\x1b\\y");
+    }
+
+    #[test]
+    fn a_picture_longer_than_other_osc_sequences() {
+        // 100 KiB of base64: much more than MAX_OSC.
+        let body = "QUJD".repeat(25 * 1024);
+        let seq = format!("\x1b]1337;File=inline=1:{body}\x07");
+        let (events, seen) = scan_parts(&[seq.as_bytes()]);
+        assert_eq!(events.len(), 1);
+        let OscEvent::PictureFile { data, .. } = &events[0] else {
+            panic!("{events:?}");
+        };
+        assert_eq!(data.len(), 75 * 1024);
+        assert_eq!(seen, b"\x1b]1337;File=\x07");
+    }
+
+    #[test]
+    fn not_a_picture_to_show() {
+        // A download (no inline=1), bad base64, and other 1337 sequences give nothing; the next sequence works.
+        let (events, _) = scan_parts(&[
+            b"\x1b]1337;File=name=eA==:QUJD\x07\x1b]1337;File=inline=1:Q*\x07\x1b]1337;SetMark\x07\x1b]9;ok\x07",
+        ]);
+        assert_eq!(events, [notify(None, "ok")]);
+    }
+
+    #[test]
+    fn a_picture_over_the_limit_is_dropped_and_still_hidden() {
+        let mut long = b"\x1b]1337;File=inline=1:".to_vec();
+        long.extend(std::iter::repeat_n(b'Q', MAX_PAYLOAD + 10));
+        long.extend(b"\x07\x1b]9;ok\x07");
+        let (events, seen) = scan_parts(&[&long]);
+        assert_eq!(events, [notify(None, "ok")]);
+        assert_eq!(seen, b"\x1b]1337;File=\x07\x1b]9;ok\x07");
+    }
+
+    #[test]
+    fn picture_marks() {
+        assert_eq!(picture_id(&picture_uri(42)), Some(42));
+        assert_eq!(picture_id("https://example.com"), None);
+        assert_eq!(picture_id("fterm-picture:x"), None);
     }
 
     #[test]

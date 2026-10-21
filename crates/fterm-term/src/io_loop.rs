@@ -10,7 +10,9 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind, Read, Write};
 use std::num::NonZeroUsize;
+use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -21,11 +23,13 @@ use alacritty_terminal::event::{self, Event, EventListener, WindowSize};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
+use alacritty_terminal::term::cell::Hyperlink;
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi;
 use polling::{Event as PollingEvent, Events, PollMode, Poller};
 
-use crate::osc::{OscEvent, PromptMark, Scanner};
+use crate::osc::{OscEvent, PictureMark, PromptMark, Scanner, picture_uri};
+use crate::picture::FileArgs;
 
 // alacritty registers the pty with these poll keys. On Unix they are not public, so here is a copy
 // (alacritty_terminal 0.26, `tty/unix.rs`).
@@ -62,13 +66,49 @@ pub type OscSink = Arc<dyn Fn(Vec<OscEvent>) + Send + Sync>;
 /// sends them on to the window.
 pub type OutputTap = Arc<dyn Fn(&[u8]) + Send + Sync>;
 
+/// The cell size in pixels, shared by a session and its feeder (a picture takes as many cells as its pixels need).
+#[derive(Clone, Debug, Default)]
+pub struct CellPx(Arc<AtomicU32>);
+
+impl CellPx {
+    pub fn new(cell: (u16, u16)) -> Self {
+        let px = Self::default();
+        px.set(cell);
+        px
+    }
+
+    pub fn set(&self, (w, h): (u16, u16)) {
+        self.0
+            .store((u32::from(w) << 16) | u32::from(h), Ordering::Relaxed);
+    }
+
+    /// (width, height); a guess before the window says it.
+    pub fn get(&self) -> (f32, f32) {
+        let v = self.0.load(Ordering::Relaxed);
+        let (w, h) = (v >> 16, v & 0xffff);
+        if w == 0 || h == 0 {
+            (8.0, 16.0)
+        } else {
+            (w as f32, h as f32)
+        }
+    }
+}
+
 /// Output bytes into a Term: our OSC sequences first (the scanner only reads), then the parser. At 133;B the parser
 /// runs only up to the end of that sequence, so the cursor can be read where the typed text starts (and at 133;C
-/// and 133;D where the output starts and ends). Used by the pty loop and by a remote session.
+/// and 133;D where the output starts and ends). A picture (OSC 1337) is decoded here, and its top-left cell gets
+/// its mark. Used by the pty loop and by a remote session.
 pub struct Feeder {
     pub parser: ansi::Processor,
     scanner: Scanner,
     found: Vec<(usize, OscEvent)>,
+    hidden: Vec<Range<usize>>,
+    /// The cell size, for the cells of a picture.
+    pub cell: CellPx,
+    /// After a picture the cursor goes below it (as in iTerm2). Not with ConPTY: its cursor stays, so ours must stay
+    /// too, and the program makes room.
+    pub make_room: bool,
+    last_picture: u32,
 }
 
 impl Default for Feeder {
@@ -77,6 +117,10 @@ impl Default for Feeder {
             parser: ansi::Processor::new(),
             scanner: Scanner::default(),
             found: Vec::new(),
+            hidden: Vec::new(),
+            cell: CellPx::default(),
+            make_room: !cfg!(windows),
+            last_picture: 0,
         }
     }
 }
@@ -90,9 +134,12 @@ impl Feeder {
         osc: &mut Vec<OscEvent>,
     ) {
         self.found.clear();
-        self.scanner.feed_at(bytes, &mut self.found);
+        self.hidden.clear();
+        self.scanner
+            .feed_parts(bytes, &mut self.found, &mut self.hidden);
+        let found = std::mem::take(&mut self.found);
         let mut from = 0;
-        for (end, event) in self.found.drain(..) {
+        for (end, event) in found {
             let mark = match &event {
                 OscEvent::Prompt(PromptMark::CommandStart) => Some(true),
                 OscEvent::Prompt(PromptMark::CommandExecuted | PromptMark::CommandFinished(_)) => {
@@ -100,9 +147,17 @@ impl Feeder {
                 }
                 _ => None,
             };
+            if let OscEvent::PictureFile { args, data } = event {
+                self.advance(term, bytes, from..end);
+                from = end;
+                if let Some(mark) = self.picture(term, &args, &data) {
+                    osc.push(OscEvent::Picture(mark));
+                }
+                continue;
+            }
             osc.push(event);
             if let Some(input) = mark {
-                self.parser.advance(term, &bytes[from..end]);
+                self.advance(term, bytes, from..end);
                 from = end;
                 let grid = term.grid();
                 let cursor = grid.cursor.point;
@@ -115,7 +170,64 @@ impl Feeder {
                 });
             }
         }
-        self.parser.advance(term, &bytes[from..]);
+        self.advance(term, bytes, from..bytes.len());
+    }
+
+    /// Parses `bytes[range]` without the hidden parts (the bodies of pictures).
+    fn advance<U: EventListener>(&mut self, term: &mut Term<U>, bytes: &[u8], range: Range<usize>) {
+        let mut at = range.start;
+        for hidden in &self.hidden {
+            if hidden.end <= at || hidden.start >= range.end {
+                continue;
+            }
+            if hidden.start > at {
+                self.parser.advance(term, &bytes[at..hidden.start]);
+            }
+            at = hidden.end.min(range.end);
+        }
+        if at < range.end {
+            self.parser.advance(term, &bytes[at..range.end]);
+        }
+    }
+
+    /// Decodes a picture at the cursor and marks its cell. `None` (and a log line) when it cannot be decoded.
+    fn picture<U: EventListener>(
+        &mut self,
+        term: &mut Term<U>,
+        args: &FileArgs,
+        data: &[u8],
+    ) -> Option<PictureMark> {
+        let picture = match crate::picture::decode(data, crate::picture::MAX_SIDE) {
+            Ok(picture) => picture,
+            Err(err) => {
+                tracing::warn!(name = ?args.name, "a picture in the output: {err}");
+                return None;
+            }
+        };
+        let (columns, rows) = crate::picture::cells(
+            args,
+            (picture.width, picture.height),
+            self.cell.get(),
+            (term.columns(), term.screen_lines()),
+        );
+        self.last_picture = self.last_picture.wrapping_add(1).max(1);
+        let id = self.last_picture;
+        let point = term.grid().cursor.point;
+        let uri = picture_uri(id);
+        term.grid_mut()[point].set_hyperlink(Some(Hyperlink::new(Some(uri.clone()), uri)));
+        if self.make_room {
+            // Down to the last row of the picture, right of it.
+            let mut room = b"\n".repeat(rows.saturating_sub(1));
+            let column = (point.column.0 + columns).min(term.columns().saturating_sub(1));
+            room.extend(format!("\x1b[{}G", column + 1).as_bytes());
+            self.parser.advance(term, &room);
+        }
+        Some(PictureMark {
+            id,
+            picture,
+            columns,
+            rows,
+        })
     }
 }
 
@@ -128,6 +240,8 @@ pub struct IoLoop<T: tty::EventedPty, U: EventListener> {
     event_proxy: U,
     osc_sink: OscSink,
     tap: Option<OutputTap>,
+    /// The cell size, for the pictures of the feeder.
+    cell: CellPx,
     /// `FTERM_RECORD`: what the program writes goes here too.
     recorder: crate::record::Shared,
 }
@@ -143,6 +257,7 @@ where
         pty: T,
         osc_sink: OscSink,
         tap: Option<OutputTap>,
+        cell: CellPx,
         recorder: crate::record::Shared,
     ) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
@@ -155,6 +270,7 @@ where
             event_proxy,
             osc_sink,
             tap,
+            cell,
             recorder,
         })
     }
@@ -304,6 +420,7 @@ where
             .name("pty".into())
             .spawn(move || {
                 let mut state = State::default();
+                state.feeder.cell = self.cell.clone();
                 let mut buf = vec![0u8; READ_BUFFER_SIZE];
 
                 let poll_opts = PollMode::Level;

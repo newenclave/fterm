@@ -89,8 +89,10 @@ fn line_links<T: EventListener>(term: &Term<T>, start: Line, end: Line) -> Vec<L
             {
                 continue;
             }
+            // The mark of a picture is a hyperlink too, but not a link to open.
             let link = cell
                 .hyperlink()
+                .filter(|h| crate::osc::picture_id(h.uri()).is_none())
                 .map(|h| (h.id().to_owned(), h.uri().to_owned()));
             cells.push((cell.c, Point::new(line, Column(col)), link));
         }
@@ -214,6 +216,19 @@ mod tests {
             at(&term, 0, 29).as_deref(),
             Some("https://example.com/a?b=1")
         );
+    }
+
+    #[test]
+    fn the_mark_of_a_picture_is_not_a_link() {
+        let term = term_with(
+            &format!(
+                "\x1b]8;id=p;{}\x1b\\X\x1b]8;;\x1b\\ text",
+                crate::osc::picture_uri(3)
+            ),
+            60,
+        );
+        assert_eq!(at(&term, 0, 0), None);
+        assert!(links_in(&term, Line(0), Line(0)).is_empty());
     }
 
     #[test]

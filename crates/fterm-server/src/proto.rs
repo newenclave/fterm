@@ -108,7 +108,10 @@ impl Meta {
                 OscEvent::CommandLine(_) => 4,
                 OscEvent::InputStart { .. } => 5,
                 OscEvent::OutputMark { .. } => 6,
-                OscEvent::Notify { .. } => return None,
+                // A picture is in the output itself (the snapshot of the server does not keep it yet).
+                OscEvent::Notify { .. } | OscEvent::PictureFile { .. } | OscEvent::Picture(_) => {
+                    return None;
+                }
             })
         };
         let Some(k) = kind(event) else {
