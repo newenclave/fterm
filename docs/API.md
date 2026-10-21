@@ -88,6 +88,7 @@ A missing `pane` means: the pane of the client (from `hello`), else the active p
 | `read_messages` | `pane` (default: yours), `unread_only` (default true), `mark_read` (default true) | `messages`: `id`, `from`, `from_name`, `text`, `time` |
 | `scene_open` | `place`: `"right"` (default) or `"down"`; `pane` (split next to it) | `pane`, `cols`, `rows`, `width`, `height` (dots), `aspect` |
 | `scene_draw` | `pane`, `ops`: one drawing command or a list (see [SCENE.md](SCENE.md)) | `pane`, `cols`, `rows`, `width`, `height`, `aspect` |
+| `show_image` | `data` (a PNG, JPEG, or BMP file in base64) or `file` (its path on the fterm machine); `place`: `"right"` (default) or `"down"`; `pane` (split next to it) | `pane`, `width`, `height` (pixels). See [PICTURES.md](PICTURES.md). |
 | `screenshot` | `pane`; `path`: a `.png` file (default: a new file in the temp folder) | `pane`, `path`, `width`, `height` (pixels) |
 | `ai_read` | `last`: only the last turns (a question and its answer are 2 turns) | `turns`: each with `role` (`"user"` or `"ai"`), `text`, `streaming`, `error`; `input`, `context`, `running`, `provider`, `model` |
 | `ai_ask` | `text`; `pane` (send the last command of this pane and its output too); `wait` (default false); `timeout_ms` (default 300000, at most one hour) | `id`; with `wait`, when the answer has ended: `id`, `text`, `error` |

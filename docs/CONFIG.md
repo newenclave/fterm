@@ -56,6 +56,7 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `font.size` | number | `14` | Font size in pixels (it is made bigger on HiDPI screens). |
 | `padding` | number | `6` | Empty space around the text, in pixels. |
 | `scrollback` | number | `10000` | Lines of history. New tabs and panes use it. |
+| `pictures` | `"pixels"`, `"braille"`, or `"off"` | `"pixels"` | Pictures in panes (`ftermctl image`, OSC 1337, picture panes): real pixels, Braille dots, or none. See [PICTURES.md](PICTURES.md). |
 | `braille_style` | `"dots"` or `"pixels"` | `"dots"` | Braille chars in panes with programs: round dots (like a font; the spinners of agents look right), or square pixels with no gaps. Scenes always use pixels. |
 | `gpu` | table | `{ backend = "auto", power = "high" }` | The GPU that draws the window. See "The GPU". |
 | `data_dir` | string | the folders of the user | One folder for the history, the sessions, and the shell scripts. See "A portable fterm". |
@@ -174,6 +175,7 @@ also work on other layouts (for example, Russian).
 | `choose_workspace` (Ctrl+Alt+W), `move_tab_to_workspace` | The list of workspaces: go to one or make one, or move the active tab there. |
 | `connect_ssh` | "Connect over SSH…": asks for `user@host`, then shows the panes of the mux server there. |
 | `stop_mux` | Stop the mux server: all its panes end (after a question; see [MUX.md](MUX.md)). |
+| `show_clipboard_picture`, `show_pane_screenshot` | A picture pane with the picture in the clipboard, or with a screenshot of the active pane (see [PICTURES.md](PICTURES.md)). |
 | `next_workspace`, `prev_workspace`, `rename_workspace` | The next / the previous workspace, a new name for this one. |
 | `open_link_hints` (Ctrl+Shift+U) | Labels on the links of the screen: a label opens its link, Shift + label copies it. |
 | `plan_review_mode` | The next `plan_review` mode (ask → always → never), until the config changes. |

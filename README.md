@@ -16,6 +16,7 @@ data (`data/`) are in the same folder, so you can move the folder or carry it on
 - The API for scripts and agents: [docs/API.md](docs/API.md)
 - MCP for Claude Code and other agents: [docs/MCP.md](docs/MCP.md)
 - Braille scenes (charts and pictures from scripts and agents): [docs/SCENE.md](docs/SCENE.md)
+- Pictures in panes (`ftermctl image`, iTerm2 OSC 1337, the clipboard, agents): [docs/PICTURES.md](docs/PICTURES.md)
 - Themes (the colors of the terminal and the UI): [docs/THEMES.md](docs/THEMES.md)
 - The language of the UI: [docs/L10N.md](docs/L10N.md)
 - Panes that live on after the window closes (like tmux): [docs/MUX.md](docs/MUX.md)

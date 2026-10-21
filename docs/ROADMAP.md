@@ -155,10 +155,19 @@ Ideas (we pick the order in the Phase 3 plan):
     Not decided yet.
 - Our own pty read loop, so we can catch image sequences before the parser.
   It also reads the pty until the end of the stream after the process ends. ✅ (done in Phase 6.0: `io_loop.rs`)
-- iTerm2 (OSC 1337) and Sixel first, then the Kitty graphics protocol.
-- Images are quads that stay on their cells and scroll with the text.
-- `fterm cli image file.png` and an MCP tool: they send images over the local API (Phase 7), not over ConPTY.
-- **Check:** `yazi` shows image previews, `chafa`/`imgcat` work, an agent shows a picture.
+- **Step 1 ✅ (done, 2026-10-21): show pictures** (see [PICTURES.md](PICTURES.md)).
+  - A picture takes a rectangle of cells in any pane and scrolls with the text. iTerm2 OSC 1337 (PNG, JPEG,
+    BMP); real pixels (a texture per picture, cut to the pane) or Braille (`pictures = "braille"`).
+  - The anchor is a mark in the grid (a hyperlink on the top-left cell), not a line number: line numbers go
+    wrong when the history is full, after a clear, and after a reflow. A real-pty test checks that the mark
+    survives ConPTY and a resize.
+  - With ConPTY the program makes room (new lines); `ftermctl image` does it and says so (`ftermRoom=1`), so it
+    works the same in WSL and over SSH. Without ConPTY fterm moves the cursor, as iTerm2 does.
+  - Picture panes: `show_image` (API, MCP, `ftermctl show-image`), the clipboard picture, a screenshot of a pane.
+- **Step 2: mark up a picture** (a pen, a rectangle, an arrow, text, Ctrl+Z), see "Mark up a picture" in the ideas.
+- Later: GIF and WebP; pictures in the snapshot of the mux server (today a mux pane shows a picture only while it
+  is attached); picture panes in saved sessions; Sixel and Kitty on Linux and macOS.
+- **Check:** `yazi` shows image previews, `chafa`/`imgcat` work. ✅ An agent shows a picture (`show_image`).
 
 ### Phase 4 — Tabs ✅ (done)
 - Model: window → tabs → panes. A tab has a tree of panes (from the start, so splits fit in later).
@@ -386,8 +395,8 @@ program (the Windows screenshot tool) and draw with a pen there. fterm could do 
   Over the whole window (like the palette) or in its own tab (like Review)?
 
 ### Pictures in the terminal (Phase 3b)
-Waits. Do we need them at all, and where are they useful? On Windows only iTerm2 (OSC 1337) gets through ConPTY
-(see Phase 3b). Also open: load `conpty.dll` from PATH, or only next to `fterm.exe`?
+Step 1 is done: see Phase 3b and [PICTURES.md](PICTURES.md). Still open: load `conpty.dll` from PATH, or only
+next to `fterm.exe`?
 
 ### Sessions that live on (like tmux), here and on other machines
 **Step 1 is done (on this machine): `mux = true`, see [MUX.md](MUX.md).** The server is `fterm --mux-server`

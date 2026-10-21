@@ -7,6 +7,7 @@ return {
   padding = 6,
   scrollback = 10000,          -- lines of history (for new tabs)
   braille_style = "dots",      -- Braille in panes: "dots" (round, like a font) or "pixels" (no gaps); scenes are always pixels
+  -- pictures = "pixels",      -- pictures in panes (ftermctl image, OSC 1337): "pixels", "braille", or "off"
   -- The GPU (read at start): "gl" takes the least memory; "auto" = DX12 on Windows.
   -- gpu = { backend = "auto", power = "high" },
   -- One folder for the history, the sessions, and the shell scripts (read at start; relative to this file).

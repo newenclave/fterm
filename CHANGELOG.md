@@ -7,6 +7,14 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 ## [Unreleased]
 
 ### Added
+- **Pictures in panes.** A picture (PNG, JPEG, BMP) takes a rectangle of cells in any pane and scrolls with
+  the text. `ftermctl image cat.png` (`--height N`, 12 rows by default) shows one in the output of its pane; it
+  works in WSL and over SSH too. Programs can show pictures with the iTerm2 sequence (OSC 1337). A picture pane
+  (the picture fills the pane): `ftermctl show-image FILE`, the API method and the MCP tool `show_image` (so an
+  agent can show you a picture), and the palette actions "Show the picture in the clipboard" and "Show a
+  screenshot of this pane". `pictures = "pixels" | "braille" | "off"` in `fterm.lua`. On Windows a program must
+  make room for its picture with new lines (ConPTY does not know about pictures); `ftermctl image` does it. See
+  [docs/PICTURES.md](docs/PICTURES.md).
 - **Panes that live on (a mux server).** With `mux = true` in `fterm.lua` (or in a profile), the programs of new
   panes run in a small background server (`fterm --mux-server`). Close the window, and they go on running; open
   fterm again, and the panes come back in the same tabs, with their screen, their history, and the programs
