@@ -18,6 +18,17 @@ pub(super) struct PicturePane {
     pub text: Option<(Point, String)>,
     /// The mouse draws a mark now (the button is down).
     pub drawing: bool,
+    /// The question of an agent (`show_image` with `question`), on the tool bar.
+    pub question: Option<String>,
+    /// An API client waits for the marked-up picture (`show_image` with `wait`).
+    pub waiting: Option<PictureWait>,
+}
+
+/// A client that waits for the marked-up picture.
+pub(super) struct PictureWait {
+    pub client: fterm_api::server::ClientId,
+    pub deadline: Instant,
+    pub reply: std::sync::mpsc::Sender<Result<serde_json::Value, fterm_api::protocol::RpcError>>,
 }
 
 impl PicturePane {
@@ -29,6 +40,8 @@ impl PicturePane {
             origin,
             text: None,
             drawing: false,
+            question: None,
+            waiting: None,
         }
     }
 
@@ -133,12 +146,17 @@ fn tool_name(tool: Tool) -> String {
     }
 }
 
-/// The tool bar at the bottom of a picture pane.
-pub(super) fn bar_text(tool: Tool, color: usize, typing: bool) -> String {
-    if typing {
-        return tr!("markup.typing");
+/// The tool bar at the bottom of a picture pane (after the question of an agent, when there is one).
+pub(super) fn bar_text(tool: Tool, color: usize, typing: bool, question: Option<&str>) -> String {
+    let bar = if typing {
+        tr!("markup.typing")
+    } else {
+        tr!("markup.bar", tool = tool_name(tool), color = color + 1)
+    };
+    match question.map(str::trim).filter(|q| !q.is_empty()) {
+        Some(question) => format!("{question} · {bar}"),
+        None => bar,
     }
-    tr!("markup.bar", tool = tool_name(tool), color = color + 1)
 }
 
 impl App {
@@ -429,10 +447,10 @@ impl App {
     /// Enter in a picture pane: the picture with its marks goes to a file and the clipboard, its path is pasted
     /// into the pane that it was opened next to, and the picture pane closes.
     pub(super) fn finish_markup(&mut self, pane: PaneId) {
-        let Some((picture, origin)) = self.running.as_mut().and_then(|r| {
+        let Some((picture, origin, waiting)) = self.running.as_mut().and_then(|r| {
             let pp = r.panes.get_mut(&pane)?.picture_pane.as_mut()?;
             pp.markup.commit_draft();
-            Some((pp.markup.render(), pp.origin))
+            Some((pp.markup.render(), pp.origin, pp.waiting.take()))
         }) else {
             return;
         };
@@ -448,8 +466,26 @@ impl App {
                 );
             }
         };
-        let copied = self.clipboard.set_picture(&picture);
         let shown = path.display().to_string();
+        // An agent waits for it: it gets the path (nothing goes to the clipboard or into its pane).
+        if let Some(wait) = waiting {
+            let _ = wait.reply.send(Ok(serde_json::json!({
+                "done": true,
+                "path": shown,
+                "width": picture.width,
+                "height": picture.height,
+            })));
+            self.notify(
+                None,
+                &tr!("toast.markup_saved"),
+                &tr!("toast.markup_sent", path = shown),
+                Level::Success,
+                Source::App,
+            );
+            self.close_pane_now(pane);
+            return self.tab_changed();
+        }
+        let copied = self.clipboard.set_picture(&picture);
         let pasted = origin.filter(|o| {
             self.running.as_ref().is_some_and(|r| {
                 r.panes.get(o).is_some_and(|p| {
@@ -491,6 +527,80 @@ impl App {
             running.mux.focus(origin);
         }
         self.tab_changed();
+    }
+}
+
+impl App {
+    /// `show_image` with `wait`: the picture pane opens, and the answer comes later (Enter, the pane closes, the
+    /// time is over, or the client goes).
+    pub(super) fn api_show_image_wait(&mut self, request: crate::api::ApiRequest) {
+        let opened = self.open_image(request.client, &request.params);
+        let pane = match opened {
+            Ok((pane, _, _)) => pane,
+            Err(err) => {
+                let _ = request.reply.send(Err(err));
+                return;
+            }
+        };
+        let deadline = Instant::now() + crate::api::picture_timeout(&request.params);
+        let client = request.client;
+        let reply = request.reply;
+        self.with_picture(pane, |pp| {
+            pp.waiting = Some(PictureWait {
+                client,
+                deadline,
+                reply,
+            });
+        });
+    }
+
+    /// A picture pane closes: a client that waits for it gets `done: false`.
+    pub(super) fn picture_pane_closed(&mut self, pane: PaneId) {
+        let waiting = self
+            .running
+            .as_mut()
+            .and_then(|r| r.panes.get_mut(&pane))
+            .and_then(|p| p.picture_pane.as_mut())
+            .and_then(|pp| pp.waiting.take());
+        if let Some(wait) = waiting {
+            let _ = wait.reply.send(Ok(serde_json::json!({ "done": false })));
+        }
+    }
+
+    /// A client went: nobody waits for its pictures now (Enter then pastes the path as usual).
+    pub(super) fn picture_client_gone(&mut self, client: fterm_api::server::ClientId) {
+        if let Some(running) = &mut self.running {
+            for p in running.panes.values_mut() {
+                if let Some(pp) = &mut p.picture_pane
+                    && pp.waiting.as_ref().is_some_and(|w| w.client == client)
+                {
+                    pp.waiting = None;
+                }
+            }
+        }
+    }
+
+    /// The waits that are over get `done: false, timed_out: true` (the picture pane stays). Gives the next deadline.
+    pub(super) fn expire_pictures(&mut self, now: Instant) -> Option<Instant> {
+        let running = self.running.as_mut()?;
+        let mut next: Option<Instant> = None;
+        for p in running.panes.values_mut() {
+            let Some(pp) = &mut p.picture_pane else {
+                continue;
+            };
+            match &pp.waiting {
+                Some(wait) if wait.deadline <= now => {
+                    if let Some(wait) = pp.waiting.take() {
+                        let _ = wait
+                            .reply
+                            .send(Ok(serde_json::json!({ "done": false, "timed_out": true })));
+                    }
+                }
+                Some(wait) => next = Some(next.map_or(wait.deadline, |n| n.min(wait.deadline))),
+                None => {}
+            }
+        }
+        next
     }
 }
 
@@ -575,6 +685,14 @@ mod tests {
             cmd(&Key::Named(NamedKey::Escape), None),
             Some(Command::Cancel)
         );
+    }
+
+    #[test]
+    fn the_question_of_an_agent_is_on_the_tool_bar() {
+        let bar = bar_text(Tool::Rect, 1, false, Some("Mark the bug"));
+        assert!(bar.starts_with("Mark the bug · "), "{bar}");
+        assert!(bar.contains("Enter"), "{bar}");
+        assert!(!bar_text(Tool::Rect, 1, false, None).contains("Mark the bug"));
     }
 
     #[test]

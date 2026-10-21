@@ -278,6 +278,7 @@
     "toast.lua_error": "Lua error",
     "toast.markup_saved": "The picture is saved",
     "toast.markup_saved_copied": "{path}: the picture is in the clipboard",
+    "toast.markup_sent": "{path}: the agent that asked for it has it now",
     "toast.markup_saved_pasted": "{path}: its path is in the pane, the picture is in the clipboard",
     "toast.markup_saved_pasted_no_clipboard": "{path}: its path is in the pane",
     "toast.message_for": "Message for {tab}",

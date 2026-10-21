@@ -141,6 +141,9 @@ impl App {
         if request.method == "review" {
             return self.api_review(event_loop, request);
         }
+        if request.method == "show_image" && crate::api::picture_wait(&request.params) {
+            return self.api_show_image_wait(request);
+        }
         let result =
             self.api_dispatch(event_loop, request.client, &request.method, &request.params);
         let _ = request.reply.send(result);
@@ -258,6 +261,7 @@ impl App {
         self.ai_waits.retain(|w| w.client != client);
         self.api_questions.retain(|a| a.client != client);
         self.review_client_gone(client);
+        self.picture_client_gone(client);
         if let Some(running) = &self.running {
             running.window.request_redraw();
         }
@@ -487,6 +491,7 @@ impl App {
     /// A pane closed: its inbox goes, and its waits get an error.
     pub(super) fn api_pane_closed(&mut self, pane: PaneId) {
         self.review_pane_closed(pane);
+        self.picture_pane_closed(pane);
         self.inbox.remove(pane);
         let (gone, waiting): (Vec<Wait>, Vec<Wait>) = std::mem::take(&mut self.waits)
             .into_iter()
@@ -808,6 +813,16 @@ impl App {
 
     /// `show_image`: a picture pane next to a pane. The picture is `data` (base64) or a `file` on this machine.
     fn api_show_image(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
+        let (pane, width, height) = self.open_image(client, params)?;
+        Ok(json!({ "pane": pane.0, "width": width, "height": height }))
+    }
+
+    /// Opens the picture pane of `show_image` (with the `question` of the client on its tool bar).
+    pub(super) fn open_image(
+        &mut self,
+        client: ClientId,
+        params: &Value,
+    ) -> Result<(PaneId, u32, u32), RpcError> {
         let direction = crate::api::scene_place(params)?;
         let next_to = pane_param(params, "pane")?.map(PaneId);
         if let Some(next_to) = next_to
@@ -825,10 +840,14 @@ impl App {
         let pane = self
             .open_picture(picture, direction, next_to)
             .map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
+        let question = crate::api::str_param(params, "question")?;
         if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {
             p.opened_by = Some(client);
+            if let Some(pp) = &mut p.picture_pane {
+                pp.question = question;
+            }
         }
-        Ok(json!({ "pane": pane.0, "width": width, "height": height }))
+        Ok((pane, width, height))
     }
 
     /// `scene_draw`: drawing commands for a scene pane (see `fterm_scene::Op`).

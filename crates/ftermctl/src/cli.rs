@@ -57,11 +57,11 @@ pub enum Command {
         path: String,
         height: u64,
     },
-    /// `show-image FILE [--right|--down] [--pane N]`: a picture pane next to a pane.
+    /// `show-image FILE [--right|--down] [--pane N] [--question T] [--wait] [--timeout S]`: a picture pane next to
+    /// a pane. `params` are the ones of `show_image` but the picture (ftermctl reads the file).
     ShowImage {
         path: String,
-        place: String,
-        pane: Option<u64>,
+        params: Value,
     },
 }
 
@@ -267,15 +267,25 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             }
         }
         "show-image" => {
-            let w = read(&["pane"], &["right", "down"])?;
+            let w = read(&["pane", "question", "timeout"], &["right", "down", "wait"])?;
             let path = w.text();
             if path.trim().is_empty() {
                 return Err("show-image needs a file".to_owned());
             }
+            let mut params = json!({ "place": if w.flag("down") { "down" } else { "right" } });
+            w.pane_into(&mut params)?;
+            if w.flag("wait") {
+                params["wait"] = json!(true);
+            }
+            if let Some(question) = w.value("question") {
+                params["question"] = json!(question);
+            }
+            if let Some(seconds) = w.number("timeout")? {
+                params["timeout_ms"] = json!(seconds * 1000);
+            }
             Command::ShowImage {
                 path: path.trim().to_owned(),
-                place: if w.flag("down") { "down" } else { "right" }.to_owned(),
-                pane: w.number("pane")?,
+                params,
             }
         }
         "guide" => Command::Guide {
@@ -577,19 +587,27 @@ mod tests {
             cli("show-image --down --pane 3 cat.png").unwrap().command,
             Command::ShowImage {
                 path: "cat.png".into(),
-                place: "down".into(),
-                pane: Some(3)
+                params: json!({ "place": "down", "pane": 3 })
             }
         );
         assert_eq!(
             cli("show-image cat.png").unwrap().command,
             Command::ShowImage {
                 path: "cat.png".into(),
-                place: "right".into(),
-                pane: None
+                params: json!({ "place": "right" })
             }
         );
         assert!(cli("show-image").is_err());
+        // An agent waits for the user to mark it up (the question is on the tool bar).
+        assert_eq!(
+            cli("show-image --wait --question Mark --timeout 60 cat.png")
+                .unwrap()
+                .command,
+            Command::ShowImage {
+                path: "cat.png".into(),
+                params: json!({ "place": "right", "wait": true, "question": "Mark", "timeout_ms": 60_000 })
+            }
+        );
     }
 
     #[test]

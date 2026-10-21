@@ -53,8 +53,9 @@ Text:
                                          (no FILE = a file in the temp folder)
   image [--height N] FILE                show a picture (PNG, JPEG, BMP) here in the output, N rows high
                                          (default 12); works in WSL and over SSH too
-  show-image [--right|--down] [--pane N] FILE
-                                         a picture pane next to a pane (the picture fills the pane)
+  show-image [--right|--down] [--pane N] [--question TEXT] [--wait] [--timeout S] FILE
+                                         a picture pane next to a pane (the picture fills the pane; the user
+                                         can mark it up). --wait: print the path of the marked-up picture
 
 The AI panel:
   ai read [--last N]                     the chat: questions and answers
@@ -135,16 +136,24 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             .map_err(|err| format!("cannot write the picture: {err}"))?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::ShowImage { path, place, pane } => {
+        Command::ShowImage { path, params } => {
             let file = read_picture(path)?;
-            let mut params = json!({ "data": mcp::base64(&file), "place": place });
-            if let Some(pane) = pane {
-                params["pane"] = json!(pane);
-            }
+            let mut params = params.clone();
+            params["data"] = json!(mcp::base64(&file));
             let mut client = connect(cli.window)?;
             let answer = client
                 .call("show_image", params)
                 .map_err(|err| err.to_string())?;
+            // With --wait: the path of the marked-up picture (for a script), or nothing when it was closed.
+            if !cli.json && answer.get("done").is_some() {
+                return match answer["path"].as_str() {
+                    Some(path) => {
+                        println!("{path}");
+                        Ok(ExitCode::SUCCESS)
+                    }
+                    None => Err("the picture was closed with no result".to_owned()),
+                };
+            }
             print_answer(cli.json, "show_image", &answer);
             Ok(ExitCode::SUCCESS)
         }

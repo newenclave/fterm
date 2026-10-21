@@ -133,7 +133,7 @@ pub fn timeout_for(method: &str, params: &Value) -> Duration {
         // The access question can come first, then the answer.
         return BASE + asked(AI_TIMEOUT_MS);
     }
-    if method == "review" {
+    if method == "review" || (method == "show_image" && picture_wait(params)) {
         return review_timeout(params) + BASE;
     }
     if method != "wait_for" {
@@ -343,6 +343,16 @@ pub fn scene_place(params: &Value) -> Result<fterm_mux::Direction, RpcError> {
     }
 }
 
+/// `show_image` with `wait: true`: the answer comes when the user has marked up the picture (or closed it).
+pub fn picture_wait(params: &Value) -> bool {
+    params.get("wait").and_then(Value::as_bool) == Some(true)
+}
+
+/// How long `show_image` with `wait` waits (`timeout_ms`, default one hour).
+pub fn picture_timeout(params: &Value) -> Duration {
+    review_timeout(params)
+}
+
 /// The picture of `show_image`: `data` (base64) or `file` (a path on this machine).
 pub fn picture_param(params: &Value) -> Result<Vec<u8>, RpcError> {
     if let Some(data) = str_param(params, "data")? {
@@ -370,6 +380,25 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn show_image_waits_as_long_as_it_is_asked() {
+        // Without `wait` it answers at once; with it the user marks up the picture first (default one hour).
+        assert_eq!(
+            timeout_for("show_image", &json!({})),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            timeout_for("show_image", &json!({"wait": true, "timeout_ms": 1000})),
+            Duration::from_secs(121)
+        );
+        assert_eq!(
+            timeout_for("show_image", &json!({"wait": true})),
+            Duration::from_secs(3600 + 120)
+        );
+        assert!(picture_wait(&json!({"wait": true})));
+        assert!(!picture_wait(&json!({"wait": false})) && !picture_wait(&json!({})));
+    }
 
     #[test]
     fn the_picture_of_show_image() {

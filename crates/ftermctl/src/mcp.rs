@@ -224,7 +224,10 @@ pub fn tools() -> Value {
                 "path": { "type": "string", "description": "The picture file (a full path)." },
                 "data": { "type": "string", "description": "The picture file in base64 (when there is no file)." },
                 "place": { "type": "string", "enum": ["right", "down"], "description": "A split on the right (default) or below." },
-                "next_to": { "type": "integer", "description": "Split next to this pane." }
+                "next_to": { "type": "integer", "description": "Split next to this pane." },
+                "question": { "type": "string", "description": "A short request for the user, on the tool bar of the picture, for example \"Mark what looks wrong\"." },
+                "wait": { "type": "boolean", "description": "Wait until the user marks up the picture (pen, boxes, arrows, text) and presses Enter: you get the marked-up picture. If the user closes it, you get no picture." },
+                "timeout_seconds": { "type": "integer", "description": "With wait: how long to wait (default 3600)." }
             }}
         },
         {
@@ -351,6 +354,18 @@ impl<B: Backend> Server<B> {
         if name == "screenshot_pane" {
             let params = pick(&[("pane", "pane"), ("path", "path")]);
             return Some(self.screenshot(params));
+        }
+        if name == "show_image" {
+            let mut params = pick(&[
+                ("place", "place"),
+                ("next_to", "pane"),
+                ("question", "question"),
+                ("wait", "wait"),
+            ]);
+            if let Some(ms) = seconds("timeout_seconds") {
+                params["timeout_ms"] = json!(ms);
+            }
+            return Some(self.show_image(args, params));
         }
         let result = match name {
             "list_panes" => self.backend.call("list", json!({})).map(pretty),
@@ -536,23 +551,6 @@ self.backend.call("review", params).map(|v| {
                         v["pane"], v["width"], v["height"], v["aspect"]
                     )
                 }),
-            "show_image" => {
-                let data = match (args.get("data").and_then(Value::as_str), args.get("path").and_then(Value::as_str)) {
-                    (Some(data), _) => Ok(data.to_owned()),
-                    (None, Some(path)) => crate::read_picture(path).map(|file| base64(&file)),
-                    (None, None) => Err("give `path` (a picture file) or `data` (base64)".to_owned()),
-                };
-                data.and_then(|data| {
-                    let mut params = pick(&[("place", "place"), ("next_to", "pane")]);
-                    params["data"] = json!(data);
-                    self.backend.call("show_image", params).map(|v| {
-                        format!(
-                            "Opened picture pane {} ({}x{} px).",
-                            v["pane"], v["width"], v["height"]
-                        )
-                    })
-                })
-            }
             "draw_scene" => need("pane")
                 .and_then(|_| need("commands"))
                 .and_then(|commands| {
@@ -594,6 +592,46 @@ self.backend.call("review", params).map(|v| {
     }
 
     /// `screenshot_pane`: fterm writes a PNG; the agent gets the picture and where the file is.
+    /// `show_image`: the picture (a file of the agent's machine, read here, or base64) in a picture pane. With
+    /// `wait` the user marks it up first, and the agent gets the marked-up picture.
+    fn show_image(&mut self, args: &Value, mut params: Value) -> Result<Vec<Value>, String> {
+        let data = match (
+            args.get("data").and_then(Value::as_str),
+            args.get("path").and_then(Value::as_str),
+        ) {
+            (Some(data), _) => data.to_owned(),
+            (None, Some(path)) => base64(&crate::read_picture(path)?),
+            (None, None) => {
+                return Err("give `path` (a picture file) or `data` (base64)".to_owned());
+            }
+        };
+        params["data"] = json!(data);
+        let v = self.backend.call("show_image", params)?;
+        let text = |t: String| json!({ "type": "text", "text": t });
+        if v.get("done").is_none() {
+            return Ok(vec![text(format!(
+                "Opened picture pane {} ({}x{} px). The user can mark it up there.",
+                v["pane"], v["width"], v["height"]
+            ))]);
+        }
+        let Some(path) = v["path"].as_str() else {
+            let why = if v["timed_out"] == json!(true) {
+                "The time is over: the user did not finish the picture."
+            } else {
+                "The user closed the picture with no result."
+            };
+            return Ok(vec![text(why.to_owned())]);
+        };
+        let png = self.backend.read_file(path)?;
+        Ok(vec![
+            json!({ "type": "image", "mimeType": "image/png", "data": base64(&png) }),
+            text(format!(
+                "The user marked up the picture ({}x{} pixels), saved as {path}.",
+                v["width"], v["height"]
+            )),
+        ])
+    }
+
     fn screenshot(&mut self, params: Value) -> Result<Vec<Value>, String> {
         let shot = self.backend.call("screenshot", params)?;
         let path = shot["path"].as_str().ok_or("fterm gave no file")?;
@@ -749,6 +787,14 @@ mod tests {
                 "scene_open" | "scene_draw" => {
                     json!({ "pane": 7, "cols": 66, "rows": 21, "width": 132, "height": 84, "aspect": 1.1875 })
                 }
+                "show_image"
+                    if params["wait"] == json!(true) && params["question"] == json!("closed") =>
+                {
+                    json!({ "done": false })
+                }
+                "show_image" if params["wait"] == json!(true) => {
+                    json!({ "done": true, "path": "T:/shots/markup-1.png", "width": 64, "height": 48 })
+                }
                 "show_image" => json!({ "pane": 9, "width": 64, "height": 48 }),
                 _ => json!({}),
             })
@@ -767,8 +813,11 @@ mod tests {
         }
 
         fn read_file(&mut self, path: &str) -> Result<Vec<u8>, String> {
-            assert_eq!(path, "T:/fterm-shot-4.png");
-            Ok(b"PNG!".to_vec())
+            match path {
+                "T:/fterm-shot-4.png" => Ok(b"PNG!".to_vec()),
+                "T:/shots/markup-1.png" => Ok(b"MARK".to_vec()),
+                other => panic!("no file {other}"),
+            }
         }
     }
 
@@ -1162,6 +1211,37 @@ mod tests {
         );
         let result = tool(&mut s, "show_image", json!({}));
         assert_eq!(result["isError"], json!(true));
+    }
+
+    #[test]
+    fn the_agent_gets_the_marked_up_picture() {
+        let mut s = server();
+        let result = tool(
+            &mut s,
+            "show_image",
+            json!({ "data": "QUJD", "question": "Mark the bug", "wait": true, "timeout_seconds": 60 }),
+        );
+        assert_eq!(
+            s.backend.calls[0],
+            (
+                "show_image".into(),
+                json!({ "data": "QUJD", "question": "Mark the bug", "wait": true, "timeout_ms": 60_000 })
+            )
+        );
+        // The picture as an image block, and its path.
+        assert_eq!(result["content"][0]["type"], json!("image"));
+        assert_eq!(result["content"][0]["data"], json!("TUFSSw=="));
+        let text = result["content"][1]["text"].as_str().unwrap();
+        assert!(text.contains("T:/shots/markup-1.png"), "{text}");
+        // Closed with no result: a text, not an error.
+        let result = tool(
+            &mut s,
+            "show_image",
+            json!({ "data": "QUJD", "question": "closed", "wait": true }),
+        );
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("closed"), "{text}");
+        assert_ne!(result["isError"], json!(true));
     }
 
     #[test]

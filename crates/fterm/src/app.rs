@@ -4607,6 +4607,7 @@ impl App {
                                         pp.markup.tool,
                                         pp.markup.color,
                                         pp.text.is_some(),
+                                        pp.question.as_deref(),
                                     ),
                                     *rect,
                                     term.grid().screen_lines().saturating_sub(1),
@@ -5101,6 +5102,9 @@ impl ApplicationHandler<UserEvent> for App {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
         if let Some(at) = self.expire_reviews(now) {
+            wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
+        }
+        if let Some(at) = self.expire_pictures(now) {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
         if let Some(at) = self.expire_plan_questions(now) {
