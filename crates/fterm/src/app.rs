@@ -5194,7 +5194,14 @@ impl ApplicationHandler<UserEvent> for App {
                 self.mods = mods.state();
                 self.update_link_hover();
             }
-            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+            // A synthetic press is not a key that the user pressed: winit sends one for each key that it thinks is
+            // still down when the window gets the focus back (a key let go in another window stays "down" for it).
+            // Typed, it would put a char into the pane. Modifiers come in `ModifiersChanged`.
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } if event.state == ElementState::Pressed => {
                 if self.restore_offer.is_some() {
                     self.restore_key(&event);
                     return;

@@ -58,6 +58,9 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   An agent or a script that asks for a review itself (`review_plan`, `ftermctl review`) still gets the tab.
 
 ### Fixed
+- **No stray char when the window gets the focus back.** A key that you let go in another window (for example `/`)
+  could be typed into the pane when you clicked on fterm again. fterm now skips the key presses that the window
+  system sends again on focus.
 - **A restored pane comes back in its folder also when its shell never told fterm the folder.** Before, such a
   pane (no shell integration, or a shell that something else started, for example a fterm started from ConEmu)
   was saved with no folder and came back in the folder of the fterm process. Now fterm keeps the folder that the
