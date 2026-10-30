@@ -455,9 +455,28 @@ The steps, from small to big:
    tests and for machines with a broken driver.
 2. A fallback: when no GPU adapter or device works, try the software one, and show a toast ("drawing with no
    GPU"). Steps 1 and 2 are small and go together. First check what wgpu gives today when there is no GPU.
-3. Maybe later: our own CPU renderer (`softbuffer`), with no wgpu at all. The frame is already made on the CPU
+3. Maybe later: our own CPU renderer (`softbuffer`), with no wgpu at all. It is slower than a weak GPU, so it is not
+   a way to be fast (see "Fast on weak Linux machines"). The frame is already made on the CPU
    (`frame.rs` makes quads, the glyph atlas is on the CPU), so it can be done, but it needs quads, blending, and
    pictures drawn by hand. Only for machines with neither WARP nor llvmpipe, which are rare.
+
+### Fast on weak Linux machines (an idea from the user)
+The user has a small Linux machine (a Chuwi: 6 GB of memory, a weak CPU and GPU) and wants fterm to fly there.
+A software renderer does not help: even a weak Intel GPU (Mesa) draws much faster than the CPU, and the CPU is
+needed for the shell and the programs. What can help, to check with numbers first:
+1. **Measure on the machine.** `RUST_LOG=fterm=debug` already logs `frames fps= ms=` every 5 s. Also: the start
+   time, the memory of fterm and of one pane, the CPU and the GPU (`lscpu`, `glxinfo -B`, `vulkaninfo --summary`),
+   and X11 or Wayland. Run something noisy (`yes`, `cargo build`, `top`) for a minute.
+2. **Make frames on the CPU only for lines that changed.** Today every change makes the quads of all cells of the
+   panes on the screen again. A cache of rows can make only the changed rows again. Most likely the biggest win
+   with fast output.
+3. **Load fallback fonts only when a char needs them.** Today all system fonts are read at start (385 faces,
+   about 90 ms on a fast machine): time and memory.
+4. **Memory.** Scrollback is 10 000 lines per pane; measure the cost of a pane and pick good values for 6 GB.
+5. **The build.** A release profile with LTO, `codegen-units = 1`, `panic = "abort"`, and maybe a build for the
+   CPU of the machine (`target-cpu`). Often 10–30 % with no change in the code.
+6. **`performance = "low"`:** one setting that turns off the heavy parts (pictures, color harmonize, history
+   hints) and takes the GL backend and the low-power GPU.
 
 ### Plugins
 The user is thinking about it. One plugin idea:
