@@ -46,9 +46,6 @@ const MAX_LOCKED_READ: usize = u16::MAX as usize;
 const DRAIN_QUIET: Duration = Duration::from_millis(150);
 /// ... or after this long in total.
 const DRAIN_MAX: Duration = Duration::from_secs(2);
-/// The longest wait for pty events. A child that ends before the pty is registered sends its exit
-/// event to nobody, so we also look for it after each wait.
-const MAX_WAIT: Duration = Duration::from_millis(200);
 
 /// Messages to the loop.
 #[derive(Debug)]
@@ -489,16 +486,23 @@ where
 
                 let mut events = Events::with_capacity(NonZeroUsize::new(1024).unwrap());
 
+                // A child that ended before the pty was registered sent its exit event to nobody (on Windows it
+                // waits in a channel); later exits wake the poller.
+                if let Some(tty::ChildEvent::Exited(status)) = self.pty.next_child_event() {
+                    self.child_exited(&mut state, &mut buf, status);
+                    let _ = self.pty.deregister(&self.poll);
+                    return;
+                }
+
                 'event_loop: loop {
-                    // Wake up when a synchronized update times out.
+                    // Wake up when a synchronized update times out; else sleep until an event.
                     let handler = state.feeder.parser.sync_timeout();
                     let timeout = handler
                         .sync_timeout()
-                        .map(|st| st.saturating_duration_since(Instant::now()))
-                        .map_or(MAX_WAIT, |t| t.min(MAX_WAIT));
+                        .map(|st| st.saturating_duration_since(Instant::now()));
 
                     events.clear();
-                    if let Err(err) = self.poll.wait(&mut events, Some(timeout)) {
+                    if let Err(err) = self.poll.wait(&mut events, timeout) {
                         match err.kind() {
                             ErrorKind::Interrupted => continue,
                             _ => {
@@ -506,12 +510,6 @@ where
                                 break 'event_loop;
                             }
                         }
-                    }
-
-                    // The child may have ended without a poll event (see MAX_WAIT).
-                    if let Some(tty::ChildEvent::Exited(status)) = self.pty.next_child_event() {
-                        self.child_exited(&mut state, &mut buf, status);
-                        break 'event_loop;
                     }
 
                     if events.is_empty() && self.rx.peek().is_none() {
