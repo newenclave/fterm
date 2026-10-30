@@ -234,13 +234,17 @@ pub enum BuiltinAction {
     ShowClipboardPicture,
     /// A picture pane with a screenshot of the active pane (to look at it next to the pane).
     ShowPaneScreenshot,
+    /// Asks for a command and runs it in an overlay over the active pane.
+    RunInOverlay,
+    /// Shows or hides the scratch shell (a drop-down shell of the window).
+    ToggleScratch,
     /// "Connect over SSH…": a box for `user@host`, then its panes.
     ConnectSsh,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 65] = [
+    pub const ALL: [BuiltinAction; 67] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -306,6 +310,8 @@ impl BuiltinAction {
         Self::ConnectSsh,
         Self::ShowClipboardPicture,
         Self::ShowPaneScreenshot,
+        Self::RunInOverlay,
+        Self::ToggleScratch,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -375,6 +381,8 @@ impl BuiltinAction {
             Self::StopMux => "stop_mux",
             Self::ShowClipboardPicture => "show_clipboard_picture",
             Self::ShowPaneScreenshot => "show_pane_screenshot",
+            Self::RunInOverlay => "run_in_overlay",
+            Self::ToggleScratch => "toggle_scratch",
             Self::ConnectSsh => "connect_ssh",
         };
         name.to_owned()
@@ -492,6 +500,8 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+shift+[", "harmonize_less"),
     ("ctrl+shift+u", "open_link_hints"),
     ("ctrl+alt+w", "choose_workspace"),
+    ("ctrl+shift+l", "run_in_overlay"),
+    ("ctrl+`", "toggle_scratch"),
 ];
 
 impl Keymap {
@@ -760,6 +770,23 @@ mod tests {
             BuiltinAction::from_name("open_link_hints"),
             Some(BuiltinAction::OpenLinkHints)
         );
+    }
+
+    #[test]
+    fn overlay_and_scratch_actions_and_keys() {
+        let keys = Keymap::with_defaults();
+        let action = BuiltinAction::from_name("run_in_overlay").unwrap();
+        assert_eq!(action, BuiltinAction::RunInOverlay);
+        assert_eq!(action.label(), "Run in an overlay…");
+        assert_eq!(
+            keys.get(&chord("ctrl+shift+l")),
+            Some(&Action::Builtin(action))
+        );
+        let action = BuiltinAction::from_name("toggle_scratch").unwrap();
+        assert_eq!(action, BuiltinAction::ToggleScratch);
+        assert_eq!(action.label(), "Scratch shell: show or hide");
+        assert_eq!(keys.get(&chord("ctrl+`")), Some(&Action::Builtin(action)));
+        assert!(BuiltinAction::ALL.contains(&action));
     }
 
     #[test]

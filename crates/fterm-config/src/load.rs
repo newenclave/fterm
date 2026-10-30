@@ -508,6 +508,10 @@ pub struct Config {
     pub braille_style: BrailleStyle,
     /// How pictures in the output are drawn.
     pub pictures: Pictures,
+    /// The size of an overlay in percent of the pane under it (20..100; 100 = all of it).
+    pub overlay_size: u8,
+    /// The height of the scratch shell in percent of the tab (20..100).
+    pub scratch_size: u8,
     pub colors: ColorConfig,
     /// The theme: the colors of the terminal and the UI. `colors` changes it.
     pub theme: crate::theme::ThemeChoice,
@@ -571,6 +575,8 @@ impl Default for Config {
             scrollback: 10_000,
             braille_style: BrailleStyle::Dots,
             pictures: Pictures::Pixels,
+            overlay_size: 80,
+            scratch_size: 50,
             colors: ColorConfig::default(),
             theme: crate::theme::ThemeChoice::Default,
             harmonize: HarmonizeConfig::default(),
@@ -1170,6 +1176,12 @@ impl Reader {
                     ));
                 }
             };
+        }
+        if let Some(size) = number_field(root, "overlay_size", "overlay_size")? {
+            config.overlay_size = percent(size);
+        }
+        if let Some(size) = number_field(root, "scratch_size", "scratch_size")? {
+            config.scratch_size = percent(size);
         }
         if let Some(mode) = string_field(root, "pictures", "pictures")? {
             config.pictures = match mode.as_str() {
@@ -1845,10 +1857,18 @@ fn profile(table: &Table, path: &str) -> Result<Profile, String> {
         palette_changes: bool_field(table, "palette_changes", &format!("{path}.palette_changes"))?,
         mux: bool_field(table, "mux", &format!("{path}.mux"))?,
         remote: string_field(table, "remote", &format!("{path}.remote"))?,
+        overlay: bool_field(table, "overlay", &format!("{path}.overlay"))?.unwrap_or(false),
+        overlay_size: number_field(table, "overlay_size", &format!("{path}.overlay_size"))?
+            .map(percent),
         workspace: string_field(table, "workspace", &format!("{path}.workspace"))?
             .map(|w| w.trim().to_owned())
             .filter(|w| !w.is_empty()),
     })
+}
+
+/// A size in percent for an overlay or the scratch: 20..100.
+fn percent(size: f64) -> u8 {
+    size.round().clamp(20.0, 100.0) as u8
 }
 
 /// The items of a Lua list, with their 1-based index.
@@ -2375,6 +2395,28 @@ mod tests {
                 .braille_style,
             BrailleStyle::Pixels
         );
+    }
+
+    #[test]
+    fn the_sizes_of_overlays_and_the_scratch() {
+        let config = load("return {}").config;
+        assert_eq!((config.overlay_size, config.scratch_size), (80, 50));
+        let config = load("return { overlay_size = 100, scratch_size = 35 }").config;
+        assert_eq!((config.overlay_size, config.scratch_size), (100, 35));
+        // Out of 20..100: the nearest end.
+        let config = load("return { overlay_size = 5, scratch_size = 300 }").config;
+        assert_eq!((config.overlay_size, config.scratch_size), (20, 100));
+    }
+
+    #[test]
+    fn a_profile_can_open_as_an_overlay() {
+        let loaded = load(
+            r#"return { profiles = { { name = "yazi", command = "yazi", overlay = true, overlay_size = 100 },
+                                     { name = "shell", command = "pwsh" } } }"#,
+        );
+        let (yazi, shell) = (&loaded.config.profiles[0], &loaded.config.profiles[1]);
+        assert!(yazi.overlay && !shell.overlay);
+        assert_eq!((yazi.overlay_size, shell.overlay_size), (Some(100), None));
     }
 
     #[test]

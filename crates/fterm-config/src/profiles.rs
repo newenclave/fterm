@@ -24,6 +24,10 @@ pub struct Profile {
     pub mux: Option<bool>,
     /// Its panes run on another machine: a `name` of `remotes` in the config.
     pub remote: Option<String>,
+    /// It opens as an overlay over the active pane (for example a file manager), not as a tab or a split.
+    pub overlay: bool,
+    /// The size of its overlay in percent (`None` = `overlay_size` of the config).
+    pub overlay_size: Option<u8>,
 }
 
 impl Profile {
@@ -41,6 +45,8 @@ impl Profile {
             workspace: None,
             mux: None,
             remote: None,
+            overlay: false,
+            overlay_size: None,
         }
     }
 }

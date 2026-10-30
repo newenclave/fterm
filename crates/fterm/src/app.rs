@@ -2966,6 +2966,8 @@ impl App {
             | A::InstallClaudeHooks
             | A::ShowClipboardPicture
             | A::ShowPaneScreenshot
+            | A::RunInOverlay
+            | A::ToggleScratch
             | A::NewScene => {}
             A::ToggleRemoteControl => {
                 let Some(pane) = running.mux.active_pane() else {
