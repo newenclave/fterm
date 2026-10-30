@@ -169,6 +169,13 @@ impl Running {
         self.panes.get(&self.mux.input_pane()?)
     }
 
+    /// The pane is on the screen now (in the active tab, or an overlay or the scratch that is shown).
+    fn is_visible(&self, pane: PaneId) -> bool {
+        let area = self.tab_area();
+        self.mux.pane_rects(area).iter().any(|(p, _)| *p == pane)
+            || self.floating_rects().iter().any(|(p, _)| *p == pane)
+    }
+
     /// The overlay of the active tab and the scratch (when shown), with their places.
     fn floating_rects(&self) -> Vec<(PaneId, Rect)> {
         let min = overlay_calls::floating_min(self.renderer.cell(), self.renderer.padding());
@@ -517,6 +524,13 @@ pub struct App {
         Vec<std::sync::mpsc::Receiver<Result<serde_json::Value, fterm_api::protocol::RpcError>>>,
     /// The fonts for text on pictures (mark-up), loaded the first time.
     markup_fonts: Option<fterm_render::font::Fonts>,
+    /// Changes off the screen (the spinner of an agent in another tab) redraw at most `background_redraws` times a
+    /// second.
+    background: crate::redraw::Throttle,
+    /// Frames per second and their time, for the debug log.
+    frame_stats: crate::redraw::FrameStats,
+    /// The title that the window shows now (the system call only when it changes).
+    window_title_shown: std::cell::RefCell<String>,
     /// `ai_ask` calls that wait for the end of the answer.
     ai_waits: Vec<api_calls::AiWait>,
     /// `review` calls that wait for the user.
@@ -641,6 +655,9 @@ impl App {
             shots: Vec::new(),
             shot_pictures: Vec::new(),
             markup_fonts: None,
+            background: crate::redraw::Throttle::new(1.0),
+            frame_stats: crate::redraw::FrameStats::default(),
+            window_title_shown: std::cell::RefCell::new(String::new()),
             ai_waits: Vec::new(),
             reviews: Vec::new(),
             inbox: crate::inbox::Inbox::default(),
@@ -1743,6 +1760,8 @@ impl App {
 
     /// Gives the config to the renderer: font, padding, colors, Braille.
     fn apply_config(&mut self) {
+        self.background
+            .set_rate(self.config.config.background_redraws);
         let palette = self.palette();
         let Some(running) = &mut self.running else {
             return;
@@ -2617,13 +2636,23 @@ impl App {
     }
 
     fn update_window_title(&self) {
-        let Some(running) = &self.running else {
-            return;
-        };
         if self.title_message_until.is_some() {
             return;
         }
-        running.window.set_title(&self.window_title());
+        self.set_window_title(&self.window_title());
+    }
+
+    /// Sets the title of the window, when it is not the one there already (a system call, and the spinners of
+    /// agents change the title often).
+    fn set_window_title(&self, title: &str) {
+        let Some(running) = &self.running else {
+            return;
+        };
+        let mut shown = self.window_title_shown.borrow_mut();
+        if *shown != title {
+            running.window.set_title(title);
+            title.clone_into(&mut shown);
+        }
     }
 
     /// `[tab/tabs] title — ⏳ 1 waiting`, or what `window_title` in the config says.
@@ -2669,8 +2698,8 @@ impl App {
     /// Shows a short message in the window title.
     fn title_message(&mut self, message: &str) {
         let title = self.window_title();
-        if let Some(running) = &self.running {
-            running.window.set_title(&format!("{title} — {message}"));
+        if self.running.is_some() {
+            self.set_window_title(&format!("{title} — {message}"));
             self.title_message_until = Some(Instant::now() + TITLE_MESSAGE);
         }
     }
@@ -5003,7 +5032,8 @@ impl ApplicationHandler<UserEvent> for App {
         };
         match event {
             TermEvent::Redraw => {
-                if running.mux.active_pane() == Some(pane) {
+                // Every pane on the screen, not only the active one (a split next to it, an overlay).
+                if running.is_visible(pane) {
                     running.window.request_redraw();
                 }
                 self.check_text_waits(pane);
@@ -5018,7 +5048,13 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(p) = running.panes.get_mut(&pane) {
                     p.app_title = (!title.is_empty()).then_some(title);
                 }
-                running.window.request_redraw();
+                // On the screen: at once. Off the screen (a tab title in the bar): with the next frame, at most
+                // `background_redraws` times a second.
+                if running.is_visible(pane)
+                    || self.background.change(Instant::now()) == crate::redraw::Redraw::Now
+                {
+                    running.window.request_redraw();
+                }
                 self.update_window_title();
                 self.detect_agent(event_loop, pane);
             }
@@ -5218,6 +5254,16 @@ impl ApplicationHandler<UserEvent> for App {
         }
         if let Some(at) = self.expire_pictures(now) {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
+        }
+        // Changes off the screen that wait for a frame.
+        if let Some(at) = self.background.due() {
+            if now >= at {
+                if let Some(running) = &self.running {
+                    running.window.request_redraw();
+                }
+            } else {
+                wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
+            }
         }
         if let Some(at) = self.expire_plan_questions(now) {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
@@ -5470,7 +5516,18 @@ impl ApplicationHandler<UserEvent> for App {
                 self.mouse_button(event_loop, state, button)
             }
             WindowEvent::MouseWheel { delta, .. } => self.mouse_wheel(delta),
-            WindowEvent::RedrawRequested => self.redraw(event_loop),
+            WindowEvent::RedrawRequested => {
+                let start = Instant::now();
+                self.redraw(event_loop);
+                let now = Instant::now();
+                self.background.drawn(now);
+                if let Some((fps, ms)) =
+                    self.frame_stats
+                        .frame(now, now - start, std::time::Duration::from_secs(5))
+                {
+                    tracing::debug!(fps = format!("{fps:.1}"), ms = format!("{ms:.2}"), "frames");
+                }
+            }
             _ => {}
         }
     }

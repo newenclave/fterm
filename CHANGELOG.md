@@ -65,6 +65,10 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   An agent or a script that asks for a review itself (`review_plan`, `ftermctl review`) still gets the tab.
 
 ### Fixed
+- **Many tabs with agents do not slow fterm down.** The spinner of an agent changes the title of its pane about 10
+  times a second, and each change in any tab drew the whole window again. Now a change that you do not see (another
+  tab) is drawn with the next frame, at most once a second (`background_redraws`), and the window title is set only
+  when it changes. A split pane next to the active one now shows its new output at once too.
 - **No stray char when the window gets the focus back.** A key that you let go in another window (for example `/`)
   could be typed into the pane when you clicked on fterm again. fterm now skips the key presses that the window
   system sends again on focus.

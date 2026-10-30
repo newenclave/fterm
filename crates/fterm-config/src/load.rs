@@ -512,6 +512,9 @@ pub struct Config {
     pub overlay_size: u8,
     /// The height of the scratch shell in percent of the tab (20..100).
     pub scratch_size: u8,
+    /// How many times a second a change off the screen (the title of a pane in another tab, for example the spinner
+    /// of an agent) may redraw the window (0.1..60).
+    pub background_redraws: f64,
     pub colors: ColorConfig,
     /// The theme: the colors of the terminal and the UI. `colors` changes it.
     pub theme: crate::theme::ThemeChoice,
@@ -577,6 +580,7 @@ impl Default for Config {
             pictures: Pictures::Pixels,
             overlay_size: 80,
             scratch_size: 50,
+            background_redraws: 1.0,
             colors: ColorConfig::default(),
             theme: crate::theme::ThemeChoice::Default,
             harmonize: HarmonizeConfig::default(),
@@ -1182,6 +1186,9 @@ impl Reader {
         }
         if let Some(size) = number_field(root, "scratch_size", "scratch_size")? {
             config.scratch_size = percent(size);
+        }
+        if let Some(rate) = number_field(root, "background_redraws", "background_redraws")? {
+            config.background_redraws = rate.clamp(0.1, 60.0);
         }
         if let Some(mode) = string_field(root, "pictures", "pictures")? {
             config.pictures = match mode.as_str() {
@@ -2394,6 +2401,30 @@ mod tests {
                 .config
                 .braille_style,
             BrailleStyle::Pixels
+        );
+    }
+
+    #[test]
+    fn panes_off_the_screen_redraw_once_a_second() {
+        assert_eq!(load("return {}").config.background_redraws, 1.0);
+        assert_eq!(
+            load("return { background_redraws = 4 }")
+                .config
+                .background_redraws,
+            4.0
+        );
+        // At least one every 10 s, at most 60 a second.
+        assert_eq!(
+            load("return { background_redraws = 0 }")
+                .config
+                .background_redraws,
+            0.1
+        );
+        assert_eq!(
+            load("return { background_redraws = 500 }")
+                .config
+                .background_redraws,
+            60.0
         );
     }
 
