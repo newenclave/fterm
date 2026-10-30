@@ -97,6 +97,9 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
 - `focus_pane` shows a pane to the user (its tab, and the keyboard goes there). Use it when the user
   should look at something now, not for your own work.
 - `set_title` sets the title of the tab of a pane, for example "tests" or "server".
+- `dashboard_tile` (`ftermctl dashboard-tile ID --title T --state working --line "step 2/5"`) puts a tile on the
+  dashboard of the user (Ctrl+Shift+D): good for the progress of a long task. The same `id` changes it; `remove`
+  takes it away when you are done.
 - `set_tab_color` (`ftermctl tab-color --pane N "#f38ba8"`) puts a color line at the top of the tab of a pane,
   so the user sees it from other tabs: for example red when tests fail, green when they pass. `none` takes it away.
 - `list_themes` and `set_theme` (`ftermctl theme`, `ftermctl theme NAME`) show and change the colors of the

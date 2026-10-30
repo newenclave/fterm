@@ -21,6 +21,13 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   with it. `companion_side = "right"` and `companion_size` (40% by default) set the place. From scripts and agents:
   `ftermctl companion -- COMMAND`, `ftermctl companion --toggle|--next`, `spawn` with `place: "companion"`, the API
   method `companion`, and the MCP tool `open_pane`. See [docs/KEYS.md](docs/KEYS.md#companions).
+- **The dashboard** (Ctrl+Shift+D): tiles over the window, in a grid. A tile shows a pane (its state, its last lines,
+  and a chart of its output), the output of any command (for example `gh pr list`, run again every minute), or
+  buttons that run a command or an action (for example a publish workflow, with `confirm = true`). You choose the
+  tiles in `dashboard` in `fterm.lua`; by default it shows the agents and the busy panes. Keys 1–9 go to a pane,
+  a–z press buttons, Esc hides it. Scripts and agents add their own tiles with `ftermctl dashboard-tile`, the API
+  method `dashboard_tile`, and the MCP tool. See [docs/KEYS.md](docs/KEYS.md#the-dashboard) and
+  [docs/CONFIG.md](docs/CONFIG.md#the-dashboard).
 - **Recent panes.** Alt+` goes back to the pane that you used before (in any tab or workspace), and again comes
   back. Ctrl+Shift+H shows all panes, the recently used first, with their folder and agent state; type to find
   one. A pane counts when you stay in it for a second, so a quick walk through tabs does not count.

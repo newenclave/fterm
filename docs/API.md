@@ -72,6 +72,8 @@ A missing `pane` means: the pane of the client (from `hello`), else the active p
 | `list` | | `workspace` (the one in use); `tabs` (of all workspaces): each with `tab` (its number in its workspace), `workspace`, `title`, `active`, `zoomed`, `panes` (each pane has `workspace` too) |
 | `spawn` | `place`: `"tab"` (default), `"right"`, `"down"`, `"overlay"`, or `"companion"`; `profile`; `cwd`; `pane` (split next to it; with `"overlay"`: the pane to cover); with `"overlay"`: `command` (the shell runs it; the box goes when it ends) and `size` (percent); `"companion"`: a strip of `pane` (default: the active pane) that runs `command` (no command = a shell) | `pane` |
 | `scratch` | `show`: `true` / `false` (no `show` = the other state) | `pane`, `shown` |
+| `dashboard` | `show`: `true` / `false` (no `show` = the other state) | `shown` |
+| `dashboard_tile` | `id`; `title`, `status`, `state` (`working`, `waiting`, `done`, `error`, `idle`), `lines` (texts), `values` (numbers for a chart); `remove: true` takes it away. The same `id` changes the tile. Text and numbers only (at most 32 tiles, 50 lines, 500 values) | `tiles` |
 | `companion` | `action`: `"toggle"` (hide or show) or `"next"`; `pane` (default: the active pane; its companions) | `pane` (the shown companion or `null`), `shown` |
 | `send_text` | `pane`, `text`, `enter` (true = press Enter after the text) | |
 | `get_text` | `pane`, `what`: `"screen"` (default), `"history"`, or `"last_output"`; `lines` (default 200, at most 10000); `styled` (default false) | `text`; for `last_output` also `command`, `exit`, `running`; with `styled` also `fg`, `bg`, `lines` (see below) |

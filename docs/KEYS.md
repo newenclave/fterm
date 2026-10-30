@@ -72,6 +72,25 @@ When a shell ends (for example, you type `exit`), only its tab closes. The windo
 A pane counts as used when you stay in it for a second. So a quick walk through tabs with Ctrl + Tab does not
 change where Alt + ` goes. Overlays and the scratch shell are not in the list: they have their own keys.
 
+## The dashboard
+Ctrl + Shift + D shows the **dashboard** over any tab: a grid of tiles. A tile shows a pane (its state, its last
+lines, and a chart of its output in the last 5 minutes), the output of a command, buttons, or a tile from a script
+or an agent. The frame of a tile has the color of its state: blue works, yellow waits for you, green is done, red
+failed. Which tiles there are is up to you: see `dashboard` in [CONFIG.md](CONFIG.md#the-dashboard). With no
+`dashboard` in the config, it shows the panes with agents and the panes where a command runs or failed.
+
+| Key | What it does |
+|---|---|
+| Ctrl + Shift + D | Show or hide the dashboard. |
+| 1 … 9 | Go to the pane of that tile (the dashboard hides). On a command tile: run it again. |
+| a … z | Press that button (the key is in front of the button: `[a] Staging`). |
+| Arrows, Enter | Choose a tile; Enter does the same as its number key. |
+| F5 | Run all command tiles again now. |
+| Esc | Hide the dashboard. |
+
+A click on a tile chooses it, a second click opens it, and a click on a button presses it. A button with
+`confirm = true` wants a second press.
+
 ## Overlays and the scratch shell
 An **overlay** is a program in a box over the active pane: a file manager (yazi, Far), lazygit, htop. The layout
 does not change. The pane under the box is dim. A tab has one overlay: hide it, and its program lives on until you

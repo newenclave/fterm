@@ -78,6 +78,7 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `profiles` | list | found by fterm | See "Profiles". |
 | `keys` | list | see `KEYS.md` | See "Keys". |
 | `commands` | list | none | More lines for the command palette. |
+| `dashboard` | table | agents and busy panes | The tiles of the dashboard (Ctrl+Shift+D). See "The dashboard". |
 | `shell_integration` | true / false | `true` | Load the fterm script into PowerShell (see "Shell integration"). |
 | `notifications` | table | see "Notifications" | Toasts, OS notifications, long commands. |
 | `on_notification` | function | none | See every notification first: drop, change, or route it. |
@@ -181,6 +182,7 @@ also work on other layouts (for example, Russian).
 | `toggle_original_colors` | The colors that programs chose as they are, or fitted to the theme (`harmonize`). |
 | `harmonize_more`, `harmonize_less` (Ctrl+Shift+], Ctrl+Shift+[) | Try a stronger or weaker `harmonize` (steps of 0.1) until the config changes. |
 | `choose_workspace` (Ctrl+Alt+W), `move_tab_to_workspace` | The list of workspaces: go to one or make one, or move the active tab there. |
+| `toggle_dashboard` (Ctrl+Shift+D) | Show or hide the dashboard (see [The dashboard](#the-dashboard)). |
 | `previous_pane` (Alt+\`), `recent_panes` (Ctrl+Shift+H) | Go back to the pane that you used before; the list of panes, the recently used first (see [KEYS.md](KEYS.md#recent-panes)). |
 | `connect_ssh` | "Connect over SSH…": asks for `user@host`, then shows the panes of the mux server there. |
 | `stop_mux` | Stop the mux server: all its panes end (after a question; see [MUX.md](MUX.md)). |
@@ -223,6 +225,39 @@ commands = {
 ```
 
 Commands show in the command palette (Ctrl + Shift + P), next to all actions and profiles.
+
+## The dashboard
+The dashboard (Ctrl+Shift+D) shows tiles over the window. You choose them in `dashboard.tiles`, in this order:
+
+```lua
+dashboard = {
+  columns = 0,   -- columns of tiles; 0 = fterm chooses
+  tiles = {
+    -- A tile for each pane that matches: "agents", "busy" (a command runs or the last one failed), "all",
+    -- or a table: each text must be in the program, title, workspace, or profile of the pane (no case).
+    { panes = "agents" },
+    { panes = { program = "cargo" } },
+
+    -- The output of a command, run again every `every` seconds (at least 5; 60 by default) while the dashboard
+    -- is shown. Green when it exits with 0, red when not.
+    { title = "PRs to review", command = "gh pr list --search review-requested:@me", every = 120 },
+
+    -- Buttons. `run` runs a command and shows the result as a toast (or `show = "overlay"`: in an overlay, so you
+    -- see the output). `action` is the same as in `keys` and `commands`. `confirm = true` wants a second press.
+    { title = "Publish", buttons = {
+        { label = "Staging", run = "gh workflow run publish.yml -f target=staging", confirm = true },
+        { label = "Runs", run = "gh run list --limit 5", show = "overlay" },
+        { label = "Tests", action = function(fterm) fterm.spawn(nil, { split = "right" }) end },
+    } },
+  },
+}
+```
+
+- Commands run with the shell of the default profile, with no window, and stop after 60 seconds. Write them for
+  that shell (PowerShell on Windows: `;` between commands).
+- With no `dashboard`, the tiles are `{ panes = "agents" }` and `{ panes = "busy" }`.
+- Scripts and agents can add their own tiles with the API (`dashboard_tile`, `ftermctl dashboard-tile`). Those
+  tiles show only text and a chart: they cannot run commands or have buttons.
 
 ## The GPU
 fterm draws with the GPU. Which API it uses changes how much memory fterm takes:

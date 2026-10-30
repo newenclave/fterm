@@ -73,6 +73,7 @@ When FTERM_PANE_ID is set, you run in the fterm terminal: run `ftermctl guide` o
 | `list_themes` | The color themes of fterm; the theme in use has a `*`. |
 | `set_theme` | Changes all colors of the window until fterm closes: a theme by name, or a whole theme as JSON (the agent can make one). |
 | `review_plan` | Shows the agent's plan in a Review tab and waits: you mark each item Ok, comment, change, add, or remove items. The agent gets the decision and your feedback (see [REVIEW.md](REVIEW.md)). |
+| `dashboard_tile` | Puts a tile on the dashboard of the user (Ctrl+Shift+D): `id`, `title`, `status`, `state`, `lines`, `values` (a chart); the same `id` changes it, `remove` takes it away. For the progress of a long task. |
 | `set_tab_color` | Gives the tab a color (a line at its top), for example red when tests fail. `"none"` takes it away. |
 | `open_scene` | Opens a Braille scene (a pane to draw into) on the right or below. Gives its id, its size in dots, and the aspect of the dots. |
 | `draw_scene` | Draws commands into a scene: dots, lines, rects, circles, text, colors, charts (see [SCENE.md](SCENE.md)). |
