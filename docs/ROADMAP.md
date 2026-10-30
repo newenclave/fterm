@@ -441,6 +441,24 @@ Things to think about:
 - the API, agents, and the Agents panel for remote panes too;
 - what happens when the network drops (attach again, nothing lost).
 
+### Draw with no GPU (a software renderer)
+Today fterm draws only with wgpu (DX12, Vulkan, Metal, or GL). When there is no GPU adapter (a server, some
+virtual machines, a broken driver), fterm says "no GPU adapter can draw to this window" and does not start.
+The systems have software drivers that wgpu can use:
+- Windows: WARP (the Microsoft Basic Render Driver), a software DX12 in every Windows 10 and 11, also in RDP
+  and virtual machines.
+- Linux: llvmpipe and lavapipe of Mesa (software GL and Vulkan).
+- macOS: Metal is always there.
+
+The steps, from small to big:
+1. `gpu.power = "software"` in the config: ask wgpu for the software adapter (`force_fallback_adapter`). Good for
+   tests and for machines with a broken driver.
+2. A fallback: when no GPU adapter or device works, try the software one, and show a toast ("drawing with no
+   GPU"). Steps 1 and 2 are small and go together. First check what wgpu gives today when there is no GPU.
+3. Maybe later: our own CPU renderer (`softbuffer`), with no wgpu at all. The frame is already made on the CPU
+   (`frame.rs` makes quads, the glyph atlas is on the CPU), so it can be done, but it needs quads, blending, and
+   pictures drawn by hand. Only for machines with neither WARP nor llvmpipe, which are rare.
+
 ### Plugins
 The user is thinking about it. One plugin idea:
 - **git:** for example the branch and the state (changed files, ahead/behind) of the pane's folder in the tab bar,
