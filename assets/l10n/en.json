@@ -211,6 +211,8 @@
     "dashboard.header": "Dashboard · 1-9 go · a-z buttons · arrows + Enter · F5 runs the commands again · Esc",
     "dashboard.empty": "Dashboard · no tiles: no agents or busy panes now (set `dashboard` in fterm.lua, see CONFIG.md) · Esc",
     "dashboard.running": "running…",
+    "dashboard.open_link": "open the link",
+    "dashboard.back": "back",
     "dashboard.confirm": "{key} again = run",
     "dashboard.pane_title": "{title} (tab {tab})",
     "dashboard.button_running": "{label}: running…",

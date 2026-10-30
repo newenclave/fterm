@@ -544,6 +544,8 @@ pub struct App {
     spawn_cwd: Option<String>,
     /// A command for the next new pane: the shell runs it and ends (an overlay).
     spawn_command: Option<String>,
+    /// The next pane runs this program with these arguments (no shell): the steps of a dashboard overlay.
+    spawn_argv: Option<(String, Vec<String>)>,
     /// "Run in an overlay…": the command that is typed.
     overlay_prompt: Option<crate::ai_chat::InputBox>,
     /// What the command in `overlay_prompt` is for.
@@ -693,6 +695,7 @@ impl App {
             spawn_intro: Vec::new(),
             spawn_cwd: None,
             spawn_command: None,
+            spawn_argv: None,
             overlay_prompt: None,
             overlay_prompt_for: overlay_calls::PromptFor::Overlay,
             hint_cache: RefCell::new(None),
@@ -2252,6 +2255,10 @@ impl App {
             options.args = overlay_calls::shell_run_args(&shell, command);
             options.program = Some(shell);
         }
+        if let Some((program, args)) = &self.spawn_argv {
+            options.program = Some(program.clone());
+            options.args = args.clone();
+        }
         if let Some(dir) = self.spawn_cwd.take() {
             options.cwd = Some(std::path::PathBuf::from(dir)).filter(|dir| dir.is_dir());
         }
@@ -2841,6 +2848,16 @@ impl App {
                 self.notify(pane, &title, &body, level, Source::Lua);
             }
             ApiCall::Copy(text) => self.copy_text(text),
+            ApiCall::Run { steps, overlay } => self.lua_run(steps, overlay),
+            ApiCall::Open(url) => {
+                self.open_link(fterm_term::links::Link {
+                    start: Default::default(),
+                    end: Default::default(),
+                    text: url.clone(),
+                    url,
+                    osc8: false,
+                });
+            }
             ApiCall::Action(builtin) => self.run_builtin(event_loop, builtin),
             ApiCall::SetTabColor { pane, color } => {
                 let pane = pane

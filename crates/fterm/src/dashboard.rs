@@ -43,6 +43,79 @@ impl Activity {
     }
 }
 
+/// A line of a list tile: the line and its fields (between tabs).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Item {
+    pub line: String,
+    pub fields: Vec<String>,
+}
+
+impl Item {
+    pub fn parse(line: &str) -> Self {
+        Self {
+            line: line.to_owned(),
+            fields: line.split('\t').map(str::to_owned).collect(),
+        }
+    }
+
+    /// The text to show: field `show` (from 1), else the whole line.
+    pub fn shown(&self, show: Option<usize>) -> &str {
+        show.and_then(|n| n.checked_sub(1))
+            .and_then(|i| self.fields.get(i))
+            .filter(|_| self.fields.len() > 1)
+            .map_or(self.line.as_str(), String::as_str)
+    }
+}
+
+/// `template` with `{1}`, `{2}`, ... (the fields of `item`; a missing one is empty) and `{line}`. Other braces stay.
+pub fn fill(template: &str, item: &Item) -> String {
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        match after.find('}') {
+            Some(close) => {
+                let name = &after[..close];
+                if name == "line" {
+                    out.push_str(&item.line);
+                } else if let Ok(n) = name.parse::<usize>() {
+                    if let Some(field) = n.checked_sub(1).and_then(|i| item.fields.get(i)) {
+                        out.push_str(field);
+                    }
+                } else {
+                    out.push('{');
+                    out.push_str(name);
+                    out.push('}');
+                }
+                rest = &after[close + 1..];
+            }
+            None => {
+                out.push_str(&rest[open..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The arguments of a program with the fields filled in: each one stays one argument (no shell splits them).
+pub fn fill_args(args: &[String], item: &Item) -> Vec<String> {
+    args.iter().map(|a| fill(a, item)).collect()
+}
+
+/// The first `http://` or `https://` link in a text.
+pub fn first_url(text: &str) -> Option<&str> {
+    let start = text.find("https://").or_else(|| text.find("http://"))?;
+    let rest = &text[start..];
+    let end = rest
+        .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')' | ']'))
+        .unwrap_or(rest.len());
+    let url = rest[..end].trim_end_matches(['.', ',', ';', ':']);
+    (url.len() > "https://".len()).then_some(url)
+}
+
 /// What the filter of a `panes` tile needs to know about a pane.
 #[derive(Clone, Debug, Default)]
 pub struct PaneFacts<'a> {
@@ -115,6 +188,11 @@ pub struct Tile {
     pub values: Vec<f64>,
     /// The labels of its buttons.
     pub buttons: Vec<String>,
+    /// A list: the lines from the top (not the last ones), and the chosen one.
+    pub from_top: bool,
+    pub cursor: Option<usize>,
+    /// The keys of the chosen item: (key, label), shown at the bottom as `[a] approve`.
+    pub keys: Vec<(String, String)>,
 }
 
 /// The colors of the dashboard.
@@ -154,6 +232,8 @@ pub struct Places {
     pub tiles: Vec<CellRect>,
     /// (tile, button, its place).
     pub buttons: Vec<(usize, usize, CellRect)>,
+    /// (tile, item key, its place).
+    pub keys: Vec<(usize, usize, CellRect)>,
 }
 
 /// The key of tile `i`: `1` to `9`; later tiles have none (arrows and Enter reach them).
@@ -296,11 +376,12 @@ pub fn draw(
             fill: false,
         });
         if selected == Some(i) {
+            // One dot inside the frame: it stays in the cells of the frame, off the text and the keys.
             ops.push(Op::Rect {
-                x: x + 2,
-                y: y + 2,
-                w: w - 4,
-                h: h - 4,
+                x: x + 1,
+                y: y + 1,
+                w: w - 2,
+                h: h - 2,
                 fill: false,
             });
         }
@@ -353,6 +434,30 @@ pub fn draw(
             }
             bottom = bottom.saturating_sub(2);
         }
+        if !tile.keys.is_empty() && bottom >= first {
+            let mut col = place.col + 2;
+            ops.push(color(colors.dim));
+            for (k, (key, label)) in tile.keys.iter().enumerate() {
+                let shown = format!("[{key}] {label}");
+                let w = width(&shown);
+                if col + w > place.col + 2 + inner {
+                    break;
+                }
+                places.keys.push((
+                    i,
+                    k,
+                    CellRect {
+                        col,
+                        row: bottom,
+                        cols: w,
+                        rows: 1,
+                    },
+                ));
+                ops.push(text(col, bottom, shown));
+                col += w + 2;
+            }
+            bottom = bottom.saturating_sub(2);
+        }
         let room = (bottom + 1).saturating_sub(first);
         // The chart takes about a third of the room, when there is room for lines too.
         if !tile.values.is_empty() && room >= 6 {
@@ -374,9 +479,27 @@ pub fn draw(
         let room = (bottom + 1).saturating_sub(first);
         if room > 0 {
             ops.push(color(colors.text));
-            let start = tile.lines.len().saturating_sub(room);
-            for (n, line) in tile.lines[start..].iter().enumerate() {
-                ops.push(text(place.col + 2, first + n, cut(line, inner)));
+            // A list from the top, scrolled so the chosen item is seen; else the last lines.
+            let start = if tile.from_top {
+                match tile.cursor {
+                    Some(c) if c >= room => c + 1 - room,
+                    _ => 0,
+                }
+            } else {
+                tile.lines.len().saturating_sub(room)
+            };
+            let end = (start + room).min(tile.lines.len());
+            for (n, line) in tile.lines[start.min(end)..end].iter().enumerate() {
+                let row = first + n;
+                match tile.cursor {
+                    Some(c) if c == start + n => {
+                        ops.push(color(frame));
+                        ops.push(text(place.col + 2, row, cut(&format!("› {line}"), inner)));
+                        ops.push(color(colors.text));
+                    }
+                    Some(_) => ops.push(text(place.col + 2, row, cut(&format!("  {line}"), inner))),
+                    None => ops.push(text(place.col + 2, row, cut(line, inner))),
+                }
             }
         }
     }
@@ -582,6 +705,110 @@ mod tests {
             let last = row.chars().nth(cols - 2).unwrap_or(' ');
             assert!(frame(last), "the right frame is still there: {row:?}");
         }
+    }
+
+    #[test]
+    fn an_item_has_fields_between_tabs() {
+        let item = Item::parse("https://github.com/o/r/pull/7\to/r: Fix it\t2026-10-30");
+        assert_eq!(item.fields.len(), 3);
+        assert_eq!(item.shown(Some(2)), "o/r: Fix it");
+        assert_eq!(item.shown(None), item.line);
+        assert_eq!(
+            item.shown(Some(9)),
+            item.line,
+            "no such field: the whole line"
+        );
+        assert_eq!(fill("{1}", &item), "https://github.com/o/r/pull/7");
+        assert_eq!(
+            fill("see {2} at {1}", &item),
+            "see o/r: Fix it at https://github.com/o/r/pull/7"
+        );
+        assert_eq!(fill("{line}", &item), item.line);
+        assert_eq!(
+            fill("{4} {x} {", &item),
+            " {x} {",
+            "no field 4: empty; other braces stay"
+        );
+    }
+
+    #[test]
+    fn a_field_stays_one_argument() {
+        // A title of a pull request is written by someone else: it must never become a command.
+        let item = Item::parse("https://x/pull/1\tnice\"; rm -rf ~; echo \"");
+        let args = fill_args(
+            &["gh".into(), "pr".into(), "review".into(), "{2}".into()],
+            &item,
+        );
+        assert_eq!(args.len(), 4, "{args:?}");
+        assert_eq!(args[3], "nice\"; rm -rf ~; echo \"");
+    }
+
+    #[test]
+    fn the_first_link_of_a_line() {
+        assert_eq!(
+            first_url("o/r#7 https://github.com/o/r/pull/7 open"),
+            Some("https://github.com/o/r/pull/7")
+        );
+        assert_eq!(first_url("see (http://a.b/c)."), Some("http://a.b/c"));
+        assert_eq!(first_url("no link here"), None);
+    }
+
+    #[test]
+    fn a_list_tile_shows_its_cursor_and_keys() {
+        let tiles = [Tile {
+            lines: (1..=30).map(|n| format!("item {n}")).collect(),
+            from_top: true,
+            cursor: Some(0),
+            keys: vec![
+                ("enter".into(), "open".into()),
+                ("a".into(), "approve".into()),
+            ],
+            ..tile("PRs")
+        }];
+        let (cols, rows) = (60, 14);
+        let (ops, places) = draw(&tiles, cols, rows, 0, None, "", &COLORS);
+        let mut scene = Scene::new(cols, rows);
+        scene.draw(&ops).unwrap();
+        let text = scene.canvas().rows_text().join("\n");
+        assert!(
+            text.contains("› item 1"),
+            "the cursor, from the top:\n{text}"
+        );
+        assert!(!text.contains("item 30"), "{text}");
+        assert!(
+            text.contains("[enter] open") && text.contains("[a] approve"),
+            "{text}"
+        );
+        assert_eq!(places.keys.len(), 2);
+        assert_eq!((places.keys[1].0, places.keys[1].1), (0, 1));
+        // The cursor far down: the list scrolls to it.
+        let tiles = [Tile {
+            cursor: Some(25),
+            ..tiles[0].clone()
+        }];
+        let text = rows_text(&tiles, cols, rows).join("\n");
+        assert!(text.contains("› item 26"), "{text}");
+        assert!(!text.contains("item 1 "), "{text}");
+    }
+
+    #[test]
+    fn the_frame_of_the_chosen_tile_stays_off_the_keys() {
+        let tiles = [Tile {
+            buttons: vec!["Go".into()],
+            ..tile("t")
+        }];
+        let (ops, places) = draw(&tiles, 40, 12, 0, Some(0), "", &COLORS);
+        let mut scene = Scene::new(40, 12);
+        scene.draw(&ops).unwrap();
+        let rect = places.buttons[0].2;
+        let row: Vec<char> = scene.canvas().rows_text()[rect.row].chars().collect();
+        // Right after the button text there is no frame line.
+        assert_eq!(
+            row[rect.col + rect.cols],
+            ' ',
+            "{:?}",
+            row.iter().collect::<String>()
+        );
     }
 
     #[test]

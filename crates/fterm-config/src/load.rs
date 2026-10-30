@@ -528,11 +528,20 @@ impl Default for DashboardConfig {
 pub enum DashTile {
     /// A tile for each pane that matches.
     Panes(PaneFilter),
-    /// The output of a command, run again every `every` seconds.
+    /// The output of a command, run again every `every` seconds. Each line is an item of a list that `actions` work
+    /// on (fields between tabs are `{1}`, `{2}`, ...).
     Command {
         title: String,
         command: String,
         every: u64,
+        /// The field of a line to show (from 1); `None` = the whole line.
+        show: Option<usize>,
+        actions: Vec<ItemAction>,
+        /// `waiting_when = "output"`: the tile waits for you (yellow) when the list is not empty.
+        waiting: bool,
+        /// `command` as a list: the program and its arguments, with no shell (quotes reach the program as they are).
+        /// `command` is then the words joined, for the display.
+        argv: Option<Vec<String>>,
     },
     /// Buttons that run something.
     Buttons {
@@ -559,6 +568,37 @@ pub struct PaneMatch {
     pub title: Option<String>,
     pub workspace: Option<String>,
     pub profile: Option<String>,
+}
+
+/// A key on an item of a list tile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemAction {
+    pub key: ItemKey,
+    pub label: String,
+    pub does: ItemDo,
+    /// Ask first (a second press).
+    pub confirm: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ItemKey {
+    Enter,
+    Char(char),
+}
+
+/// What an item action does. `{1}`, `{2}`, ... are the fields of the item, `{line}` is the whole line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ItemDo {
+    /// Open a link.
+    Open(String),
+    /// Programs with their arguments, one after another (no shell, so a field is always one argument): in the
+    /// background with the result as a toast, or in an overlay to see the output.
+    Run {
+        steps: Vec<Vec<String>>,
+        overlay: bool,
+    },
+    /// An action; a Lua function gets `(fterm, item)`.
+    Action(Action),
 }
 
 /// A button of the dashboard.
@@ -730,6 +770,13 @@ pub enum ApiCall {
     },
     Copy(String),
     Action(BuiltinAction),
+    /// `fterm.run`: programs with their arguments, one after another (no shell).
+    Run {
+        steps: Vec<Vec<String>>,
+        overlay: bool,
+    },
+    /// `fterm.open`: a link.
+    Open(String),
     /// A color for the tab of a pane (`None` = the active pane); `color: None` = no color.
     SetTabColor {
         pane: Option<u64>,
@@ -1009,6 +1056,74 @@ impl LoadedConfig {
             .map_err(|err| err.to_string())?;
         Ok(std::mem::take(&mut *self.queue.borrow_mut()))
     }
+
+    /// Calls Lua function number `index` with `(fterm, item)`: the item of a list tile, `{ line = ..., fields = {...} }`.
+    pub fn call_with_item(
+        &self,
+        index: usize,
+        line: &str,
+        fields: &[String],
+    ) -> Result<Vec<ApiCall>, String> {
+        let (Some(function), Some(api), Some(lua)) =
+            (self.functions.get(index), &self.api, &self._lua)
+        else {
+            return Err(format!("no Lua function number {index}"));
+        };
+        self.queue.borrow_mut().clear();
+        let item = lua.create_table().map_err(|err| err.to_string())?;
+        item.set("line", line).map_err(|err| err.to_string())?;
+        let list = lua
+            .create_sequence_from(fields.iter().map(String::as_str))
+            .map_err(|err| err.to_string())?;
+        item.set("fields", list).map_err(|err| err.to_string())?;
+        function
+            .call::<()>((api.clone(), item))
+            .map_err(|err| err.to_string())?;
+        Ok(std::mem::take(&mut *self.queue.borrow_mut()))
+    }
+}
+
+/// `{ "gh", "pr", "list" }` (one program) or `{ { "a" }, { "b", "c" } }` (one after another): the steps of a run.
+fn run_steps(value: &Value, path: &str) -> Result<Vec<Vec<String>>, String> {
+    let Value::Table(table) = value else {
+        return Err(format!(
+            "{path}: must be a list of arguments, like {{ \"gh\", \"pr\", \"view\", \"{{1}}\" }} (a text would go through the shell), got {}",
+            value.type_name()
+        ));
+    };
+    let items = list(table);
+    if items.is_empty() {
+        return Err(format!("{path}: empty"));
+    }
+    let words = |t: &Table, path: &str| -> Result<Vec<String>, String> {
+        let words: Vec<String> = list(t)
+            .into_iter()
+            .map(|(i, v)| match v {
+                Value::String(s) => Ok(s.to_string_lossy()),
+                Value::Integer(n) => Ok(n.to_string()),
+                Value::Number(n) => Ok(n.to_string()),
+                other => Err(format!(
+                    "{path}[{i}]: expected a text, got {}",
+                    other.type_name()
+                )),
+            })
+            .collect::<Result<_, _>>()?;
+        if words.first().is_none_or(|w| w.trim().is_empty()) {
+            return Err(format!("{path}: empty"));
+        }
+        Ok(words)
+    };
+    if items.iter().all(|(_, v)| matches!(v, Value::Table(_))) {
+        items
+            .iter()
+            .map(|(i, v)| match v {
+                Value::Table(t) => words(t, &format!("{path}[{i}]")),
+                _ => unreachable!("checked above"),
+            })
+            .collect()
+    } else {
+        Ok(vec![words(table, path)?])
+    }
 }
 
 /// Runs a config script. `name` is shown in error messages (for example the file path).
@@ -1112,6 +1227,27 @@ fn make_api(lua: &Lua, queue: &Rc<RefCell<Vec<ApiCall>>>) -> mlua::Result<Table>
         "copy",
         lua.create_function(move |_, text: String| {
             q.borrow_mut().push(ApiCall::Copy(text));
+            Ok(())
+        })?,
+    )?;
+    let q = queue.clone();
+    api.set(
+        "run",
+        lua.create_function(move |_, (steps, options): (Value, Option<Table>)| {
+            let steps = run_steps(&steps, "fterm.run").map_err(mlua::Error::runtime)?;
+            let overlay = match &options {
+                Some(o) => o.get::<Option<String>>("show")?.as_deref() == Some("overlay"),
+                None => false,
+            };
+            q.borrow_mut().push(ApiCall::Run { steps, overlay });
+            Ok(())
+        })?,
+    )?;
+    let q = queue.clone();
+    api.set(
+        "open",
+        lua.create_function(move |_, url: String| {
+            q.borrow_mut().push(ApiCall::Open(url));
             Ok(())
         })?,
     )?;
@@ -1634,16 +1770,67 @@ impl Reader {
                 ));
             }
         }
-        if let Some(command) = string_field(tile, "command", &format!("{path}.command"))? {
+        let command_value: Value = tile
+            .get("command")
+            .map_err(|err| format!("{path}.command: {err}"))?;
+        let (command, argv) = match &command_value {
+            Value::Nil => (None, None),
+            Value::String(s) => (Some(s.to_string_lossy()), None),
+            Value::Table(_) => {
+                let mut steps = run_steps(&command_value, &format!("{path}.command"))?;
+                if steps.len() != 1 {
+                    return Err(format!("{path}.command: one program and its arguments"));
+                }
+                let argv = steps.remove(0);
+                (Some(argv.join(" ")), Some(argv))
+            }
+            other => {
+                return Err(format!(
+                    "{path}.command: expected a text or a list of arguments, got {}",
+                    other.type_name()
+                ));
+            }
+        };
+        if let Some(command) = command {
             let every = match number_field(tile, "every", &format!("{path}.every"))? {
                 None => 60,
                 Some(n) if n >= 5.0 => n.round() as u64,
                 Some(n) => return Err(format!("{path}.every: at least 5 seconds, got {n}")),
             };
+            let show = number_field(tile, "show", &format!("{path}.show"))?
+                .map(|n| n.round().max(1.0) as usize);
+            let waiting = match string_field(tile, "waiting_when", &format!("{path}.waiting_when"))?
+                .as_deref()
+            {
+                None | Some("never") => false,
+                Some("output") => true,
+                Some(other) => {
+                    return Err(format!(
+                        "{path}.waiting_when: must be \"output\" or \"never\", got `{other}`"
+                    ));
+                }
+            };
+            let mut actions = Vec::new();
+            if let Some(list_table) = table_field(tile, "actions", &format!("{path}.actions"))? {
+                for (a, value) in list(&list_table) {
+                    let path = format!("{path}.actions[{a}]");
+                    let Value::Table(action) = value else {
+                        return Err(format!(
+                            "{path}: expected a table, got {}",
+                            value.type_name()
+                        ));
+                    };
+                    actions.push(self.item_action(&action, &path)?);
+                }
+            }
             return Ok(DashTile::Command {
                 title: title.unwrap_or_else(|| command.clone()),
                 command,
                 every,
+                show,
+                actions,
+                waiting,
+                argv,
             });
         }
         if let Some(list_table) = table_field(tile, "buttons", &format!("{path}.buttons"))? {
@@ -1703,6 +1890,66 @@ impl Reader {
             });
         }
         Err(format!("{path}: needs `panes`, `command`, or `buttons`"))
+    }
+
+    fn item_action(&mut self, table: &Table, path: &str) -> Result<ItemAction, String> {
+        let key = string_field(table, "key", &format!("{path}.key"))?
+            .ok_or_else(|| format!("{path}.key: missing"))?;
+        let key = match key.as_str() {
+            "enter" => ItemKey::Enter,
+            k if k.chars().count() == 1 && k.chars().all(|c| c.is_ascii_alphanumeric()) => {
+                ItemKey::Char(k.chars().next().unwrap_or(' ').to_ascii_lowercase())
+            }
+            other => {
+                return Err(format!(
+                    "{path}.key: \"enter\" or one letter or digit, got `{other}`"
+                ));
+            }
+        };
+        let label = string_field(table, "label", &format!("{path}.label"))?
+            .ok_or_else(|| format!("{path}.label: missing"))?;
+        let confirm = bool_field(table, "confirm", &format!("{path}.confirm"))?.unwrap_or(false);
+        let does = if let Some(url) = string_field(table, "open", &format!("{path}.open"))? {
+            ItemDo::Open(url)
+        } else {
+            let run: Value = table
+                .get("run")
+                .map_err(|err| format!("{path}.run: {err}"))?;
+            if !matches!(run, Value::Nil) {
+                let overlay = match string_field(table, "show", &format!("{path}.show"))?.as_deref()
+                {
+                    None | Some("toast") => false,
+                    Some("overlay") => true,
+                    Some(other) => {
+                        return Err(format!(
+                            "{path}.show: must be \"toast\" or \"overlay\", got `{other}`"
+                        ));
+                    }
+                };
+                ItemDo::Run {
+                    steps: run_steps(&run, &format!("{path}.run"))?,
+                    overlay,
+                }
+            } else if !matches!(
+                table
+                    .get::<Value>("action")
+                    .map_err(|err| format!("{path}.action: {err}"))?,
+                Value::Nil
+            ) {
+                match self.action(table, &format!("{path}.action"))? {
+                    Some(action) => ItemDo::Action(action),
+                    None => return Err(format!("{path}.action: \"none\" does nothing")),
+                }
+            } else {
+                return Err(format!("{path}: needs `open`, `run`, or `action`"));
+            }
+        };
+        Ok(ItemAction {
+            key,
+            label,
+            does,
+            confirm,
+        })
     }
 
     fn action(&mut self, table: &Table, path: &str) -> Result<Option<Action>, String> {
@@ -2748,14 +2995,28 @@ mod tests {
             })),
             "matches have no case"
         );
+        let DashTile::Command {
+            title,
+            command,
+            every,
+            show,
+            actions,
+            waiting,
+            argv,
+        } = &dash.tiles[2]
+        else {
+            panic!("{:?}", dash.tiles[2]);
+        };
         assert_eq!(
-            dash.tiles[2],
-            DashTile::Command {
-                title: "PRs".into(),
-                command: "gh pr list".into(),
-                every: 30
-            }
+            (title.as_str(), command.as_str(), *every),
+            ("PRs", "gh pr list", 30)
         );
+        assert_eq!(
+            (*show, actions.len(), *waiting),
+            (None, 0, false),
+            "a plain list"
+        );
+        assert_eq!(*argv, None, "a text: the shell runs it");
         assert!(
             matches!(&dash.tiles[3], DashTile::Command { every: 60, .. }),
             "60 s by default"
@@ -2786,6 +3047,162 @@ mod tests {
             Press::Action(Action::Builtin(BuiltinAction::NewTab))
         );
         assert!(!buttons[2].confirm);
+    }
+
+    #[test]
+    fn a_list_tile_with_actions_on_its_items() {
+        let loaded = load(
+            r#"return { dashboard = { tiles = {
+                { title = "PRs", command = "gh search prs", show = 2, waiting_when = "output", actions = {
+                    { key = "enter", label = "open", open = "{1}" },
+                    { key = "a", label = "approve", run = { "gh", "pr", "review", "--approve", "{1}" }, confirm = true },
+                    { key = "v", label = "view", show = "overlay",
+                      run = { { "gh", "pr", "view", "{1}" }, { "gh", "pr", "diff", "{1}" } } },
+                    { key = "c", label = "comment", action = function(fterm, item) fterm.notify(item.line) end },
+                } },
+            } } }"#,
+        );
+        let DashTile::Command {
+            show,
+            actions,
+            waiting,
+            ..
+        } = &loaded.config.dashboard.tiles[0]
+        else {
+            panic!("{:?}", loaded.config.dashboard.tiles[0]);
+        };
+        assert_eq!(*show, Some(2));
+        assert!(*waiting);
+        assert_eq!(actions.len(), 4);
+        assert_eq!(actions[0].key, ItemKey::Enter);
+        assert_eq!(actions[0].does, ItemDo::Open("{1}".into()));
+        assert_eq!(actions[1].key, ItemKey::Char('a'));
+        assert!(actions[1].confirm);
+        assert_eq!(
+            actions[1].does,
+            ItemDo::Run {
+                steps: vec![vec![
+                    "gh".into(),
+                    "pr".into(),
+                    "review".into(),
+                    "--approve".into(),
+                    "{1}".into()
+                ]],
+                overlay: false
+            }
+        );
+        assert_eq!(
+            actions[2].does,
+            ItemDo::Run {
+                steps: vec![
+                    vec!["gh".into(), "pr".into(), "view".into(), "{1}".into()],
+                    vec!["gh".into(), "pr".into(), "diff".into(), "{1}".into()],
+                ],
+                overlay: true
+            }
+        );
+        let ItemDo::Action(Action::Lua(index)) = actions[3].does else {
+            panic!("{:?}", actions[3].does);
+        };
+        // The function gets the item: its line and its fields.
+        let calls = loaded
+            .call_with_item(index, "u\tt", &["u".into(), "t".into()])
+            .unwrap();
+        assert_eq!(
+            calls,
+            [ApiCall::Notify {
+                title: String::new(),
+                body: "u\tt".into(),
+                level: "info".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_command_tile_can_skip_the_shell() {
+        let loaded = load(
+            r#"return { dashboard = { tiles = {
+                { title = "PRs", command = { "gh", "search", "prs", "--template", '{{"\t"}}' } },
+            } } }"#,
+        );
+        let DashTile::Command { command, argv, .. } = &loaded.config.dashboard.tiles[0] else {
+            panic!();
+        };
+        assert_eq!(argv.as_ref().unwrap()[4], "{{\"\t\"}}", "the quotes stay");
+        assert!(command.starts_with("gh search prs"));
+        assert!(
+            error(r#"return { dashboard = { tiles = { { command = { { "a" }, { "b" } } } } } }"#)
+                .contains("one program")
+        );
+    }
+
+    #[test]
+    fn bad_item_actions_say_where() {
+        for (action, want) in [
+            // A command as one string goes through the shell: a field from the output could run as a command.
+            (
+                r#"{ key = "a", label = "x", run = "gh pr review {1}" }"#,
+                "a list of arguments",
+            ),
+            (r#"{ key = "a", label = "x", run = { } }"#, "empty"),
+            (r#"{ key = "ab", label = "x", open = "{1}" }"#, ".key"),
+            (r#"{ key = "a", open = "{1}" }"#, ".label"),
+            (
+                r#"{ key = "a", label = "x" }"#,
+                "needs `open`, `run`, or `action`",
+            ),
+        ] {
+            let source = format!(
+                r#"return {{ dashboard = {{ tiles = {{ {{ command = "x", actions = {{ {action} }} }} }} }} }}"#
+            );
+            let err = error(&source);
+            assert!(
+                err.contains("dashboard.tiles[1].actions[1]") && err.contains(want),
+                "{action}: {err}"
+            );
+        }
+        assert!(
+            error(
+                r#"return { dashboard = { tiles = { { command = "x", waiting_when = "y" } } } }"#
+            )
+            .contains("waiting_when")
+        );
+    }
+
+    #[test]
+    fn lua_can_run_programs_and_open_links_through_fterm() {
+        let loaded = load(
+            r#"return { keys = {
+                { key = "f6", action = function(fterm)
+                    fterm.run({ "gh", "pr", "list" })
+                    fterm.run({ { "a" }, { "b", "c" } }, { show = "overlay" })
+                    fterm.open("https://example.com")
+                end },
+            } }"#,
+        );
+        let Some(Action::Lua(index)) = loaded
+            .config
+            .keys
+            .get(&KeyChord::parse("f6").unwrap())
+            .cloned()
+        else {
+            panic!("no f6");
+        };
+        let calls = loaded.call(index).unwrap();
+        assert_eq!(
+            calls,
+            [
+                ApiCall::Run {
+                    steps: vec![vec!["gh".into(), "pr".into(), "list".into()]],
+                    overlay: false
+                },
+                ApiCall::Run {
+                    steps: vec![vec!["a".into()], vec!["b".into(), "c".into()]],
+                    overlay: true
+                },
+                ApiCall::Open("https://example.com".into()),
+            ]
+        );
     }
 
     #[test]

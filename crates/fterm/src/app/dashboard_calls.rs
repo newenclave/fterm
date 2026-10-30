@@ -4,12 +4,13 @@
 use std::collections::{HashMap, HashSet};
 
 use fterm_api::RpcError;
-use fterm_config::load::{DashTile, Press};
+use fterm_config::keys::Action;
+use fterm_config::load::{DashTile, ItemAction, ItemDo, ItemKey, Press};
 use serde_json::{Value, json};
 use winit::keyboard::{Key, NamedKey};
 
 use super::*;
-use crate::dashboard::{self, Activity, Colors, PaneFacts, Places, Tile, TileState};
+use crate::dashboard::{self, Activity, Colors, Item, PaneFacts, Places, Tile, TileState};
 use crate::runner::RunResult;
 
 /// How often a shown dashboard is drawn again.
@@ -69,7 +70,7 @@ pub(super) fn api_tile(params: &Value) -> Result<Option<(String, Tile)>, RpcErro
         state: TileState::from_name(&text("state")),
         lines: lines[lines.len().saturating_sub(MAX_API_LINES)..].to_vec(),
         values: values[values.len().saturating_sub(MAX_API_VALUES)..].to_vec(),
-        buttons: Vec::new(),
+        ..Default::default()
     };
     Ok(Some((id, tile)))
 }
@@ -112,6 +113,8 @@ pub enum DashDone {
     Command(String, RunResult),
     /// A button with `run` ran (its tile, its label).
     Button(usize, String, RunResult),
+    /// Programs of an item action or of `fterm.run` ran (the command of their list tile, if any; the label).
+    Steps(Option<String>, String, RunResult),
 }
 
 /// The state of a command tile.
@@ -145,6 +148,59 @@ pub(super) struct DashState {
     confirm: Option<(usize, usize, Instant)>,
     /// Tiles from the API (`dashboard_tile`), in the order they came.
     pub(super) api_tiles: Vec<(String, Tile)>,
+    /// The list tile that has the keys (its command), and the chosen item in it.
+    inside: Option<String>,
+    cursor: usize,
+    /// An item action with `confirm` that was pressed once: (the command of the tile, the action, until when).
+    item_confirm: Option<(String, usize, Instant)>,
+    /// The list tile whose Lua action runs now (its `fterm.run` makes the list run again).
+    origin: Option<String>,
+}
+
+/// The items of a command tile: its output lines.
+fn items_of(state: Option<&CommandState>) -> Vec<Item> {
+    state
+        .and_then(|s| s.result.as_ref())
+        .filter(|r| r.error.is_none())
+        .map(|r| {
+            r.lines()
+                .iter()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| Item::parse(l))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The keys shown under a list: its actions, and Enter = open the link when no action takes Enter.
+fn item_keys(actions: &[ItemAction]) -> Vec<(String, String)> {
+    let mut keys: Vec<(String, String)> = actions
+        .iter()
+        .map(|a| {
+            let key = match a.key {
+                ItemKey::Enter => "enter".to_owned(),
+                ItemKey::Char(c) => c.to_string(),
+            };
+            (key, a.label.clone())
+        })
+        .collect();
+    if !actions.iter().any(|a| a.key == ItemKey::Enter) {
+        keys.insert(0, ("enter".to_owned(), tr!("dashboard.open_link")));
+    }
+    keys.push(("esc".to_owned(), tr!("dashboard.back")));
+    keys
+}
+
+/// The path of `ftermctl` next to fterm (it runs the steps of an overlay).
+fn ftermctl_path() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let name = if cfg!(windows) {
+        "ftermctl.exe"
+    } else {
+        "ftermctl"
+    };
+    let path = exe.with_file_name(name);
+    path.is_file().then_some(path)
 }
 
 /// `4m`, `12s`, `2h`.
@@ -273,7 +329,32 @@ impl App {
         state.running = true;
         state.started = Some(now);
         let owned = command.to_owned();
-        self.run_in_background(command, move |r| DashDone::Command(owned, r));
+        let argv = self
+            .config
+            .config
+            .dashboard
+            .tiles
+            .iter()
+            .find_map(|t| match t {
+                DashTile::Command {
+                    command: c,
+                    argv: Some(argv),
+                    ..
+                } if c == command => Some(argv.clone()),
+                _ => None,
+            });
+        match argv {
+            // A list: the program itself, no shell.
+            Some(argv) => {
+                let proxy = self.proxy.clone();
+                std::thread::spawn(move || {
+                    let result = crate::runner::run(&argv[0], &argv[1..], TIMEOUT);
+                    let _ =
+                        proxy.send_event(UserEvent::Dashboard(DashDone::Command(owned, result)));
+                });
+            }
+            None => self.run_in_background(command, move |r| DashDone::Command(owned, r)),
+        }
     }
 
     /// The loop waits: start the commands that are due and draw again when it is time. Gives when to wake up.
@@ -359,15 +440,63 @@ impl App {
                         tiles.push(self.pane_tile(id, tab + 1, several.then_some(workspace), now));
                     }
                 }
-                DashTile::Command { title, command, .. } => {
-                    let (status, state, lines) =
-                        command_status(self.dash.commands.get(command), now);
+                DashTile::Command {
+                    title,
+                    command,
+                    show,
+                    actions,
+                    waiting,
+                    ..
+                } => {
+                    let state_of = self.dash.commands.get(command);
+                    let (mut status, mut state, mut lines) = command_status(state_of, now);
+                    let items = items_of(state_of);
+                    let list = !actions.is_empty() || *waiting || show.is_some();
+                    let mut title = title.clone();
+                    if list
+                        && state_of
+                            .and_then(|s| s.result.as_ref())
+                            .is_some_and(|r| r.error.is_none())
+                    {
+                        lines = items.iter().map(|i| i.shown(*show).to_owned()).collect();
+                        title = format!("{title} ({})", items.len());
+                        if let Some(age) = status.split(" · ").nth(1) {
+                            status = age.to_owned();
+                        }
+                        if *waiting {
+                            state = if items.is_empty() {
+                                TileState::Done
+                            } else {
+                                TileState::Waiting
+                            };
+                        }
+                    }
+                    let inside = self.dash.inside.as_deref() == Some(command.as_str());
+                    if inside
+                        && let Some((c, a, until)) = &self.dash.item_confirm
+                        && c == command
+                        && now < *until
+                        && let Some(action) = actions.get(*a)
+                    {
+                        let key = match action.key {
+                            ItemKey::Enter => "enter".to_owned(),
+                            ItemKey::Char(c) => c.to_string(),
+                        };
+                        status = tr!("dashboard.confirm", key = key);
+                    }
                     entries.push(Entry::Command(command.clone()));
                     tiles.push(Tile {
-                        title: title.clone(),
+                        title,
                         status,
                         state,
                         lines,
+                        from_top: list,
+                        cursor: inside.then(|| self.dash.cursor.min(items.len().saturating_sub(1))),
+                        keys: if inside {
+                            item_keys(actions)
+                        } else {
+                            Vec::new()
+                        },
                         ..Default::default()
                     });
                 }
@@ -464,7 +593,7 @@ impl App {
                 .get(&id)
                 .map(|a| a.values(now))
                 .unwrap_or_default(),
-            buttons: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -533,6 +662,9 @@ impl App {
 
     /// A key while the dashboard is shown.
     pub(super) fn dashboard_key(&mut self, event_loop: &ActiveEventLoop, event: &KeyEvent) {
+        if let Some(command) = self.dash.inside.clone() {
+            return self.list_key(event_loop, event, &command);
+        }
         let n = self.dash.tiles.len();
         let cols = self.dash.columns.max(1);
         let sel = self.dash.selected;
@@ -600,6 +732,36 @@ impl App {
             }
             return true;
         }
+        let key = self
+            .dash
+            .places
+            .keys
+            .iter()
+            .find(|(_, _, r)| r.contains(col, row))
+            .map(|(t, k, _)| (*t, *k));
+        if let Some((tile, k)) = key
+            && let Some(Entry::Command(command)) = self.dash.entries.get(tile).cloned()
+            && let Some((name, _)) = self
+                .dash
+                .tiles
+                .get(tile)
+                .and_then(|t| t.keys.get(k))
+                .cloned()
+        {
+            match name.as_str() {
+                "esc" => {
+                    self.dash.inside = None;
+                    self.redraw_dashboard();
+                }
+                "enter" => self.item_key(event_loop, &command, ItemKey::Enter),
+                other => {
+                    if let Some(c) = other.chars().next() {
+                        self.item_key(event_loop, &command, ItemKey::Char(c));
+                    }
+                }
+            }
+            return true;
+        }
         if let Some(tile) = self
             .dash
             .places
@@ -629,9 +791,9 @@ impl App {
                 self.go_to_pane(pane);
             }
             Entry::Command(command) => {
-                if let Some(s) = self.dash.commands.get_mut(&command) {
-                    s.started = None;
-                }
+                // Into the list: arrows choose an item, its keys act on it.
+                self.dash.inside = Some(command);
+                self.dash.cursor = 0;
                 self.redraw_dashboard();
             }
             Entry::Buttons(index) => self.press_button(event_loop, index, 0),
@@ -693,6 +855,215 @@ impl App {
         }
     }
 
+    /// The actions of the list tile of `command` (from the config).
+    fn list_actions(&self, command: &str) -> Option<(Option<usize>, Vec<ItemAction>)> {
+        self.config
+            .config
+            .dashboard
+            .tiles
+            .iter()
+            .find_map(|t| match t {
+                DashTile::Command {
+                    command: c,
+                    show,
+                    actions,
+                    ..
+                } if c == command => Some((*show, actions.clone())),
+                _ => None,
+            })
+    }
+
+    /// A key inside a list tile.
+    fn list_key(&mut self, event_loop: &ActiveEventLoop, event: &KeyEvent, command: &str) {
+        let n = items_of(self.dash.commands.get(command)).len();
+        let last = n.saturating_sub(1);
+        let page = 10;
+        let c = &mut self.dash.cursor;
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.dash.inside = None;
+                self.dash.item_confirm = None;
+            }
+            Key::Named(NamedKey::ArrowUp) => *c = c.saturating_sub(1),
+            Key::Named(NamedKey::ArrowDown) => *c = (*c + 1).min(last),
+            Key::Named(NamedKey::PageUp) => *c = c.saturating_sub(page),
+            Key::Named(NamedKey::PageDown) => *c = (*c + page).min(last),
+            Key::Named(NamedKey::Home) => *c = 0,
+            Key::Named(NamedKey::End) => *c = last,
+            Key::Named(NamedKey::F5) => {
+                if let Some(s) = self.dash.commands.get_mut(command) {
+                    s.started = None;
+                }
+            }
+            Key::Named(NamedKey::Enter) => {
+                return self.item_key(event_loop, command, ItemKey::Enter);
+            }
+            _ => {
+                if let Some(ch) = event.text.as_deref().and_then(|t| t.chars().next())
+                    && ch.is_ascii_alphanumeric()
+                {
+                    return self.item_key(
+                        event_loop,
+                        command,
+                        ItemKey::Char(ch.to_ascii_lowercase()),
+                    );
+                }
+                return;
+            }
+        }
+        self.redraw_dashboard();
+    }
+
+    /// The key of an item action on the chosen item of the list of `command`.
+    fn item_key(&mut self, event_loop: &ActiveEventLoop, command: &str, key: ItemKey) {
+        let items = items_of(self.dash.commands.get(command));
+        let Some(item) = items
+            .get(self.dash.cursor.min(items.len().saturating_sub(1)))
+            .cloned()
+        else {
+            return;
+        };
+        let Some((_, actions)) = self.list_actions(command) else {
+            return;
+        };
+        let Some(index) = actions.iter().position(|a| a.key == key) else {
+            // No action on Enter: open the first link of the line.
+            if key == ItemKey::Enter
+                && let Some(url) = dashboard::first_url(&item.line)
+            {
+                let url = url.to_owned();
+                self.open_checked(&url);
+            }
+            return;
+        };
+        let action = actions[index].clone();
+        let now = Instant::now();
+        if action.confirm
+            && !matches!(&self.dash.item_confirm, Some((c, a, until)) if c == command && *a == index && now < *until)
+        {
+            self.dash.item_confirm = Some((command.to_owned(), index, now + CONFIRM));
+            return self.redraw_dashboard();
+        }
+        self.dash.item_confirm = None;
+        match &action.does {
+            ItemDo::Open(template) => {
+                let url = dashboard::fill(template, &item);
+                self.open_checked(&url);
+            }
+            ItemDo::Run { steps, overlay } => {
+                let steps: Vec<Vec<String>> = steps
+                    .iter()
+                    .map(|s| dashboard::fill_args(s, &item))
+                    .collect();
+                self.run_steps(
+                    steps,
+                    *overlay,
+                    Some(command.to_owned()),
+                    action.label.clone(),
+                );
+            }
+            ItemDo::Action(Action::Lua(i)) => {
+                match self.config.call_with_item(*i, &item.line, &item.fields) {
+                    Ok(calls) => {
+                        self.dash.origin = Some(command.to_owned());
+                        for call in calls {
+                            self.run_api_call(event_loop, call);
+                        }
+                        self.dash.origin = None;
+                    }
+                    Err(err) => self.notify(
+                        None,
+                        &tr!("toast.lua_error"),
+                        &err,
+                        Level::Error,
+                        Source::App,
+                    ),
+                }
+            }
+            ItemDo::Action(other) => {
+                self.hide_dashboard();
+                self.run_action(event_loop, other.clone());
+            }
+        }
+        if self.dashboard_shown().is_some() {
+            self.redraw_dashboard();
+        }
+    }
+
+    /// Opens a link from a list: http(s) at once, other kinds after a question (the same as a click on a link).
+    fn open_checked(&mut self, url: &str) {
+        self.open_link(fterm_term::links::Link {
+            start: Default::default(),
+            end: Default::default(),
+            url: url.to_owned(),
+            text: url.to_owned(),
+            osc8: false,
+        });
+    }
+
+    /// `fterm.run` (from a Lua function): programs one after another.
+    pub(super) fn lua_run(&mut self, steps: Vec<Vec<String>>, overlay: bool) {
+        let label = steps
+            .first()
+            .and_then(|s| s.first())
+            .cloned()
+            .unwrap_or_default();
+        let origin = self.dash.origin.clone();
+        self.run_steps(steps, overlay, origin, label);
+    }
+
+    /// Programs with their arguments, one after another and with no shell: in the background (a toast at the end),
+    /// or in an overlay that stays until Enter (through `ftermctl steps`).
+    fn run_steps(
+        &mut self,
+        steps: Vec<Vec<String>>,
+        overlay: bool,
+        origin: Option<String>,
+        label: String,
+    ) {
+        if steps.iter().any(|s| s.is_empty()) || steps.is_empty() {
+            return;
+        }
+        if overlay {
+            let (program, args) = match ftermctl_path() {
+                Some(ctl) => (
+                    ctl.display().to_string(),
+                    vec![
+                        "steps".to_owned(),
+                        serde_json::to_string(&steps).unwrap_or_default(),
+                    ],
+                ),
+                // No ftermctl next to fterm: the first program alone (the overlay goes when it ends).
+                None => (steps[0][0].clone(), steps[0][1..].to_vec()),
+            };
+            self.hide_dashboard();
+            self.spawn_argv = Some((program, args));
+            let opened = self.open_overlay(None, None, None);
+            self.spawn_argv = None;
+            if let Err(err) = opened {
+                self.notify(
+                    None,
+                    &tr!("toast.cannot_start"),
+                    &format!("{err:#}"),
+                    Level::Error,
+                    Source::App,
+                );
+            }
+            return;
+        }
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let mut result = RunResult::default();
+            for step in &steps {
+                result = crate::runner::run(&step[0], &step[1..], TIMEOUT);
+                if !result.ok() {
+                    break;
+                }
+            }
+            let _ = proxy.send_event(UserEvent::Dashboard(DashDone::Steps(origin, label, result)));
+        });
+    }
+
     /// `dashboard`: shows or hides it (`show`; no `show` = the other state).
     pub(super) fn api_dashboard(&mut self, params: &Value) -> Result<Value, RpcError> {
         let want = params.get("show").and_then(Value::as_bool);
@@ -745,6 +1116,25 @@ impl App {
                     (tr!("toast.button_failed", label = label), Level::Error)
                 };
                 self.notify(None, &title, &last, level, Source::App);
+            }
+            DashDone::Steps(origin, label, result) => {
+                let last = result
+                    .error
+                    .clone()
+                    .or_else(|| result.lines().last().cloned())
+                    .unwrap_or_default();
+                let (title, level) = if result.ok() {
+                    (tr!("toast.button_done", label = label), Level::Success)
+                } else {
+                    (tr!("toast.button_failed", label = label), Level::Error)
+                };
+                self.notify(None, &title, &last, level, Source::App);
+                // The list changed (an approved pull request goes away): run its command again now.
+                if let Some(command) = origin
+                    && let Some(s) = self.dash.commands.get_mut(&command)
+                {
+                    s.started = None;
+                }
             }
         }
         if self.dashboard_shown().is_some() {

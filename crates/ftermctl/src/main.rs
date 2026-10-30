@@ -114,6 +114,34 @@ fn main() -> ExitCode {
     }
 }
 
+/// `steps`: each program in turn, here, with this terminal (colors, a pager). Then it waits for Enter, so the
+/// output stays until the user has read it.
+fn run_steps(steps: &[Vec<String>]) -> ExitCode {
+    let mut code = 0;
+    for step in steps {
+        // Grey: the command that runs now.
+        println!("\x1b[90m$ {}\x1b[0m", step.join(" "));
+        match std::process::Command::new(&step[0])
+            .args(&step[1..])
+            .status()
+        {
+            Ok(status) => code = status.code().unwrap_or(1),
+            Err(err) => {
+                println!("\x1b[31m{}: {err}\x1b[0m", step[0]);
+                code = 1;
+            }
+        }
+        if code != 0 {
+            break;
+        }
+        println!();
+    }
+    println!("\x1b[90m— exit {code} · Enter closes this —\x1b[0m");
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
+    ExitCode::from(u8::try_from(code).unwrap_or(1))
+}
+
 fn run(cli: &Cli) -> Result<ExitCode, String> {
     match &cli.command {
         Command::Help => {
@@ -121,6 +149,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Mcp => mcp::serve(cli.window).map(|()| ExitCode::SUCCESS),
+        Command::Steps { steps } => Ok(run_steps(steps)),
         Command::Mux { stop } => run_mux(*stop, cli.json),
         Command::MuxServe { idle } => fterm_server::run(*idle)
             .map(|()| ExitCode::SUCCESS)

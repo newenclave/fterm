@@ -40,6 +40,11 @@ pub enum Command {
         path: String,
     },
     Mcp,
+    /// `steps JSON`: runs programs one after another here (an overlay of the dashboard), then waits for Enter so
+    /// the output stays. JSON: `[["gh", "pr", "view", "URL"], ["gh", "pr", "diff", "URL"]]`.
+    Steps {
+        steps: Vec<Vec<String>>,
+    },
     /// `mux list|stop`: talks to the mux server itself (no window needed).
     Mux {
         stop: bool,
@@ -296,6 +301,15 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
                 path: path.trim().to_owned(),
                 params,
             }
+        }
+        "steps" => {
+            let json = args.first().ok_or("steps needs a JSON list of programs")?;
+            let steps: Vec<Vec<String>> = serde_json::from_str(json)
+                .map_err(|err| format!("steps: a JSON list of lists of texts: {err}"))?;
+            if steps.is_empty() || steps.iter().any(|s| s.first().is_none_or(|p| p.is_empty())) {
+                return Err("steps: every step needs a program".to_owned());
+            }
+            Command::Steps { steps }
         }
         "guide" => Command::Guide {
             skill: read(&[], &["skill"])?.flag("skill"),
@@ -665,6 +679,32 @@ mod tests {
         assert_eq!(cli("mux proxy").unwrap().command, Command::MuxProxy);
         assert!(cli("mux").is_err());
         assert!(cli("mux start").is_err());
+    }
+
+    #[test]
+    fn steps_for_an_overlay() {
+        assert_eq!(
+            parse(&[
+                "steps".to_owned(),
+                r#"[["gh","pr","view","https://x/1"],["gh","pr","diff","a b"]]"#.to_owned()
+            ])
+            .unwrap()
+            .command,
+            Command::Steps {
+                steps: vec![
+                    vec![
+                        "gh".into(),
+                        "pr".into(),
+                        "view".into(),
+                        "https://x/1".into()
+                    ],
+                    vec!["gh".into(), "pr".into(), "diff".into(), "a b".into()],
+                ]
+            }
+        );
+        assert!(cli("steps").is_err());
+        assert!(cli("steps [[]]").is_err());
+        assert!(cli("steps nope").is_err());
     }
 
     #[test]
