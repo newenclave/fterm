@@ -32,6 +32,16 @@ pub enum Pictures {
     Off,
 }
 
+/// Where the companions of a pane are shown in it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CompanionSide {
+    /// A strip at the bottom of the pane.
+    #[default]
+    Bottom,
+    /// A strip at the right of the pane.
+    Right,
+}
+
 /// Where toasts show in the window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ToastPosition {
@@ -514,6 +524,10 @@ pub struct Config {
     pub scratch_size: u8,
     /// The command of the window overlay (for example `far`): it opens without a question the first time.
     pub window_overlay: Option<String>,
+    /// Where the companions of a pane are shown in it.
+    pub companion_side: CompanionSide,
+    /// The size of a companion in percent of its pane (10..90).
+    pub companion_size: u8,
     /// How many times a second a change off the screen (the title of a pane in another tab, for example the spinner
     /// of an agent) may redraw the window (0.1..60).
     pub background_redraws: f64,
@@ -583,6 +597,8 @@ impl Default for Config {
             overlay_size: 80,
             scratch_size: 50,
             window_overlay: None,
+            companion_side: CompanionSide::Bottom,
+            companion_size: 40,
             background_redraws: 1.0,
             colors: ColorConfig::default(),
             theme: crate::theme::ThemeChoice::Default,
@@ -1195,6 +1211,20 @@ impl Reader {
         }
         if let Some(rate) = number_field(root, "background_redraws", "background_redraws")? {
             config.background_redraws = rate.clamp(0.1, 60.0);
+        }
+        if let Some(side) = string_field(root, "companion_side", "companion_side")? {
+            config.companion_side = match side.as_str() {
+                "bottom" => CompanionSide::Bottom,
+                "right" => CompanionSide::Right,
+                other => {
+                    return Err(format!(
+                        "companion_side: must be \"bottom\" or \"right\", got `{other}`"
+                    ));
+                }
+            };
+        }
+        if let Some(size) = number_field(root, "companion_size", "companion_size")? {
+            config.companion_size = size.round().clamp(10.0, 90.0) as u8;
         }
         if let Some(mode) = string_field(root, "pictures", "pictures")? {
             config.pictures = match mode.as_str() {
@@ -2461,6 +2491,30 @@ mod tests {
         // Out of 20..100: the nearest end.
         let config = load("return { overlay_size = 5, scratch_size = 300 }").config;
         assert_eq!((config.overlay_size, config.scratch_size), (20, 100));
+    }
+
+    #[test]
+    fn the_place_of_companions() {
+        let config = load("return {}").config;
+        assert_eq!(
+            (config.companion_side, config.companion_size),
+            (CompanionSide::Bottom, 40)
+        );
+        let config = load(r#"return { companion_side = "right", companion_size = 30 }"#).config;
+        assert_eq!(
+            (config.companion_side, config.companion_size),
+            (CompanionSide::Right, 30)
+        );
+        // Out of 10..90: the nearest end.
+        assert_eq!(
+            load("return { companion_size = 99 }").config.companion_size,
+            90
+        );
+        assert_eq!(
+            load("return { companion_size = 1 }").config.companion_size,
+            10
+        );
+        assert!(error(r#"return { companion_side = "top" }"#).contains("companion_side"));
     }
 
     #[test]

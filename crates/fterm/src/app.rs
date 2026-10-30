@@ -2982,6 +2982,8 @@ impl App {
                 return self.start_overlay_prompt(false);
             }
             A::ToggleWindowOverlay => return self.toggle_window_overlay(),
+            // Companions: the app acts on them in the next step.
+            A::NewCompanion | A::ToggleCompanion | A::NextCompanion => {}
             A::ToggleScratch => return self.toggle_scratch(),
             A::ToggleOriginalColors => {
                 self.original_colors = !self.original_colors;
