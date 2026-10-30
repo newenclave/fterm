@@ -151,6 +151,15 @@ impl Words {
             .map(|(_, v)| v.as_str())
     }
 
+    /// All values of a flag that may come many times.
+    fn all(&self, name: &str) -> Vec<&str> {
+        self.values
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+            .collect()
+    }
+
     fn flag(&self, name: &str) -> bool {
         self.flags.iter().any(|f| f == name)
     }
@@ -373,6 +382,46 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
                 },
                 params,
             )
+        }
+        "dashboard" => {
+            let w = read(&[], &["show", "hide"])?;
+            let mut params = json!({});
+            if w.flag("show") {
+                params["show"] = json!(true);
+            } else if w.flag("hide") {
+                params["show"] = json!(false);
+            }
+            call("dashboard", params)
+        }
+        "dashboard-tile" => {
+            let w = read(&["title", "state", "status", "line", "values"], &["remove"])?;
+            let id = w.text();
+            if id.trim().is_empty() {
+                return Err("dashboard-tile needs an id".to_owned());
+            }
+            let mut params = json!({ "id": id.trim() });
+            if w.flag("remove") {
+                params["remove"] = json!(true);
+                return Ok(call("dashboard_tile", params));
+            }
+            for key in ["title", "state", "status"] {
+                if let Some(v) = w.value(key) {
+                    params[key] = json!(v);
+                }
+            }
+            let lines = w.all("line");
+            if !lines.is_empty() {
+                params["lines"] = json!(lines);
+            }
+            if let Some(values) = w.value("values") {
+                let numbers: Result<Vec<f64>, _> =
+                    values.split(',').map(|v| v.trim().parse::<f64>()).collect();
+                params["values"] = json!(
+                    numbers
+                        .map_err(|_| format!("--values: numbers with commas, got `{values}`"))?
+                );
+            }
+            call("dashboard_tile", params)
         }
         "scratch" => {
             let w = read(&[], &["show", "hide"])?;
@@ -616,6 +665,39 @@ mod tests {
         assert_eq!(cli("mux proxy").unwrap().command, Command::MuxProxy);
         assert!(cli("mux").is_err());
         assert!(cli("mux start").is_err());
+    }
+
+    #[test]
+    fn the_dashboard_and_its_tiles() {
+        assert_eq!(call("dashboard"), ("dashboard".into(), json!({})));
+        assert_eq!(
+            call("dashboard --show"),
+            ("dashboard".into(), json!({ "show": true }))
+        );
+        assert_eq!(
+            call(
+                "dashboard-tile build --title Build --state working --status 2/5 --line one --line two --values 1,3,2.5"
+            ),
+            (
+                "dashboard_tile".into(),
+                json!({
+                    "id": "build", "title": "Build", "state": "working", "status": "2/5",
+                    "lines": ["one", "two"], "values": [1.0, 3.0, 2.5]
+                })
+            )
+        );
+        assert_eq!(
+            call("dashboard-tile build --remove"),
+            (
+                "dashboard_tile".into(),
+                json!({ "id": "build", "remove": true })
+            )
+        );
+        assert!(cli("dashboard-tile").is_err(), "no id");
+        assert!(
+            cli("dashboard-tile x --values 1,a").is_err(),
+            "a bad number"
+        );
     }
 
     #[test]

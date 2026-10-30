@@ -520,6 +520,8 @@ impl App {
             "show_image" => self.api_show_image(client, params),
             "scratch" => self.api_scratch(params),
             "companion" => self.api_companion(params),
+            "dashboard" => self.api_dashboard(params),
+            "dashboard_tile" => self.api_dashboard_tile(params),
             "scene_draw" => self.api_scene_draw(client, params),
             "send_text" => self.api_send_text(client, params),
             "get_text" => self.api_get_text(client, params),

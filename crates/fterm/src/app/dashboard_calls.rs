@@ -3,7 +3,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+use fterm_api::RpcError;
 use fterm_config::load::{DashTile, Press};
+use serde_json::{Value, json};
 use winit::keyboard::{Key, NamedKey};
 
 use super::*;
@@ -18,6 +20,78 @@ const TIMEOUT: Duration = Duration::from_secs(60);
 const CONFIRM: Duration = Duration::from_secs(4);
 /// The most lines of a pane a tile keeps.
 const PANE_LINES: usize = 20;
+/// The most tiles from the API, and the most lines and values in one of them.
+pub(super) const MAX_API_TILES: usize = 32;
+const MAX_API_LINES: usize = 50;
+const MAX_API_VALUES: usize = 500;
+
+/// A tile from the params of `dashboard_tile`: `None` = remove it. Only text and numbers: no commands or buttons.
+pub(super) fn api_tile(params: &Value) -> Result<Option<(String, Tile)>, RpcError> {
+    let id = params
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| RpcError::invalid_params("`id` is missing"))?
+        .to_owned();
+    if params.get("remove").and_then(Value::as_bool) == Some(true) {
+        return Ok(None);
+    }
+    let text = |key: &str| {
+        params
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
+    let lines: Vec<String> = params
+        .get("lines")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let values: Vec<f64> = params
+        .get("values")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_f64).collect())
+        .unwrap_or_default();
+    let tile = Tile {
+        title: if params.get("title").is_some() {
+            text("title")
+        } else {
+            id.clone()
+        },
+        status: text("status"),
+        state: TileState::from_name(&text("state")),
+        lines: lines[lines.len().saturating_sub(MAX_API_LINES)..].to_vec(),
+        values: values[values.len().saturating_sub(MAX_API_VALUES)..].to_vec(),
+        buttons: Vec::new(),
+    };
+    Ok(Some((id, tile)))
+}
+
+/// Puts (or with `None` removes) the API tile `id`: the same id changes it in place; at most `MAX_API_TILES` (the
+/// oldest goes).
+pub(super) fn put_api_tile(tiles: &mut Vec<(String, Tile)>, id: String, tile: Option<Tile>) {
+    let at = tiles.iter().position(|(i, _)| *i == id);
+    match (at, tile) {
+        (Some(i), Some(tile)) => tiles[i].1 = tile,
+        (Some(i), None) => {
+            tiles.remove(i);
+        }
+        (None, Some(tile)) => {
+            if tiles.len() >= MAX_API_TILES {
+                tiles.remove(0);
+            }
+            tiles.push((id, tile));
+        }
+        (None, None) => {}
+    }
+}
 
 /// What a drawn tile stands for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -619,6 +693,32 @@ impl App {
         }
     }
 
+    /// `dashboard`: shows or hides it (`show`; no `show` = the other state).
+    pub(super) fn api_dashboard(&mut self, params: &Value) -> Result<Value, RpcError> {
+        let want = params.get("show").and_then(Value::as_bool);
+        if want != Some(self.dashboard_shown().is_some()) {
+            self.toggle_dashboard();
+        }
+        Ok(json!({ "shown": self.dashboard_shown().is_some() }))
+    }
+
+    /// `dashboard_tile`: a tile of a script or an agent (`id`, `title`, `status`, `state`, `lines`, `values`,
+    /// `remove`).
+    pub(super) fn api_dashboard_tile(&mut self, params: &Value) -> Result<Value, RpcError> {
+        let (id, tile) = match api_tile(params)? {
+            Some((id, tile)) => (id, Some(tile)),
+            None => (
+                params["id"].as_str().unwrap_or_default().trim().to_owned(),
+                None,
+            ),
+        };
+        put_api_tile(&mut self.dash.api_tiles, id, tile);
+        if self.dashboard_shown().is_some() {
+            self.redraw_dashboard();
+        }
+        Ok(json!({ "tiles": self.dash.api_tiles.len() }))
+    }
+
     /// A result from a thread of the dashboard.
     pub(super) fn dashboard_done(&mut self, done: DashDone) {
         match done {
@@ -650,5 +750,60 @@ impl App {
         if self.dashboard_shown().is_some() {
             self.redraw_dashboard();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tile_from_the_api() {
+        let params = json!({
+            "id": "build", "title": "Build", "state": "working", "status": "2/5",
+            "lines": ["one", 7, "two"], "values": [1, 2.5, "x"]
+        });
+        let (id, tile) = api_tile(&params).unwrap().unwrap();
+        assert_eq!(id, "build");
+        assert_eq!(tile.title, "Build");
+        assert_eq!(tile.state, TileState::Working);
+        assert_eq!(tile.status, "2/5");
+        assert_eq!(tile.lines, ["one", "two"], "only text lines");
+        assert_eq!(tile.values, [1.0, 2.5]);
+        assert!(tile.buttons.is_empty(), "no buttons from outside");
+        assert_eq!(
+            api_tile(&json!({ "id": "build", "remove": true })).unwrap(),
+            None
+        );
+        assert!(api_tile(&json!({ "title": "x" })).is_err(), "no id");
+        // Not too much: a tile is small.
+        let many = json!({ "id": "x", "lines": vec!["l"; 500], "values": vec![1; 5000] });
+        let (_, tile) = api_tile(&many).unwrap().unwrap();
+        assert!(tile.lines.len() <= 50 && tile.values.len() <= 500);
+    }
+
+    #[test]
+    fn api_tiles_change_in_place_and_are_limited() {
+        let mut tiles = Vec::new();
+        for i in 0..40 {
+            put_api_tile(&mut tiles, format!("t{i}"), Some(Tile::default()));
+        }
+        assert_eq!(tiles.len(), MAX_API_TILES);
+        put_api_tile(
+            &mut tiles,
+            "t39".into(),
+            Some(Tile {
+                title: "new".into(),
+                ..Default::default()
+            }),
+        );
+        assert_eq!(tiles.len(), MAX_API_TILES);
+        assert_eq!(
+            tiles.last().unwrap().1.title,
+            "new",
+            "the same id changes in place"
+        );
+        put_api_tile(&mut tiles, "t39".into(), None);
+        assert!(!tiles.iter().any(|(id, _)| id == "t39"));
     }
 }

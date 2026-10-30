@@ -180,6 +180,19 @@ pub fn tools() -> Value {
             }}
         },
         {
+            "name": "dashboard_tile",
+            "description": "Put a tile on the dashboard of the user (Ctrl+Shift+D): your progress or a result, for example the state of a long task. The same id changes the tile; remove takes it away. It only shows text and a chart.",
+            "inputSchema": { "type": "object", "properties": {
+                "id": { "type": "string", "description": "Your name for the tile." },
+                "title": { "type": "string" },
+                "status": { "type": "string", "description": "A short text at the right of the title, for example \"2/5\"." },
+                "state": { "type": "string", "enum": ["working", "waiting", "done", "error", "idle"], "description": "The color of the frame." },
+                "lines": { "type": "array", "items": { "type": "string" }, "description": "The lines to show (the last ones are kept)." },
+                "values": { "type": "array", "items": { "type": "number" }, "description": "A small chart at the bottom." },
+                "remove": { "type": "boolean", "description": "Take the tile away." }
+            }, "required": ["id"] }
+        },
+        {
             "name": "set_tab_color",
             "description": "Give the tab of a pane a color: a line at the top of the tab, so the user sees it from other tabs. For example red for failed tests, green when done. \"none\" takes the color away.",
             "inputSchema": { "type": "object", "properties": {
@@ -530,6 +543,22 @@ self.backend.call("review", params).map(|v| {
                         .map(|v| format!("The theme is {}.", v["name"]))
                 }
             }
+            "dashboard_tile" => need("id").and_then(|_| {
+                self.backend
+                    .call(
+                        "dashboard_tile",
+                        pick(&[
+                            ("id", "id"),
+                            ("title", "title"),
+                            ("status", "status"),
+                            ("state", "state"),
+                            ("lines", "lines"),
+                            ("values", "values"),
+                            ("remove", "remove"),
+                        ]),
+                    )
+                    .map(|_| "Done.".to_owned())
+            }),
             "set_tab_color" => need("color").and_then(|_| {
                 self.backend
                     .call(
@@ -1246,6 +1275,30 @@ mod tests {
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("closed"), "{text}");
         assert_ne!(result["isError"], json!(true));
+    }
+
+    #[test]
+    fn a_tile_on_the_dashboard() {
+        let mut s = server();
+        tool(
+            &mut s,
+            "dashboard_tile",
+            json!({ "id": "tests", "title": "Tests", "state": "error", "lines": ["2 failed"], "values": [3, 1] }),
+        );
+        assert_eq!(
+            s.backend.calls[0],
+            (
+                "dashboard_tile".into(),
+                json!({ "id": "tests", "title": "Tests", "state": "error", "lines": ["2 failed"], "values": [3, 1] })
+            )
+        );
+        assert!(
+            tools()
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["name"] == "dashboard_tile")
+        );
     }
 
     #[test]

@@ -42,6 +42,10 @@ Panes and tabs:
   scratch [--show|--hide]                show or hide the drop-down scratch shell (no flag = the other one)
   companion [--pane N] [--] [COMMAND]    run COMMAND (or a shell) as a companion of a pane: a strip of the pane
   companion --toggle|--next [--pane N]   hide or show the companion of a pane, or show its next one
+  dashboard [--show|--hide]              show or hide the dashboard (no flag = the other one)
+  dashboard-tile ID [--title T] [--state S] [--status T] [--line L]... [--values 1,2,3] [--remove]
+                                         put a tile on the dashboard (the same ID changes it); S is
+                                         working, waiting, done, error, or idle
 
 Braille scenes (2x4 dots in each cell):
   scene [--right|--down] [--pane N]      open a scene pane; prints its id and its size in dots
