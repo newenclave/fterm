@@ -105,6 +105,7 @@ mod link_calls;
 mod markup_calls;
 mod mux_calls;
 mod overlay_calls;
+mod recent_calls;
 mod review_calls;
 mod session_calls;
 mod workspace_calls;
@@ -523,6 +524,8 @@ pub struct App {
     background: crate::redraw::Throttle,
     /// Frames per second and their time, for the debug log.
     frame_stats: crate::redraw::FrameStats,
+    /// The panes that had the keys, for "go back" and the pane list.
+    recent: crate::recent::Recent,
     /// The title that the window shows now (the system call only when it changes).
     window_title_shown: std::cell::RefCell<String>,
     /// `ai_ask` calls that wait for the end of the answer.
@@ -652,6 +655,7 @@ impl App {
             markup_fonts: None,
             background: crate::redraw::Throttle::new(1.0),
             frame_stats: crate::redraw::FrameStats::default(),
+            recent: crate::recent::Recent::default(),
             window_title_shown: std::cell::RefCell::new(String::new()),
             ai_waits: Vec::new(),
             reviews: Vec::new(),
@@ -1448,13 +1452,18 @@ impl App {
         ))
     }
 
-    /// Goes to the tab and the pane (for example, after a click on a toast).
+    /// Goes to the tab and the pane (after a click on a toast, from the pane list, Alt+`). The pane it leaves counts
+    /// as visited, so Alt+` comes back.
     fn go_to_pane(&mut self, pane: PaneId) {
+        self.recent.keep();
         let Some(running) = &mut self.running else {
             return;
         };
         if running.mux.reveal(pane) {
+            self.recent.focus(pane, Instant::now());
+            self.hints = None;
             self.tab_changed();
+            self.update_ime();
         }
     }
 
@@ -3000,6 +3009,8 @@ impl App {
             }
             A::ToggleCompanion => return self.toggle_companion(),
             A::NextCompanion => return self.next_companion(),
+            A::RecentPanes => return self.open_recent_popup(),
+            A::PreviousPane => return self.go_previous_pane(),
             A::ToggleScratch => return self.toggle_scratch(),
             A::ToggleOriginalColors => {
                 self.original_colors = !self.original_colors;
@@ -3190,6 +3201,9 @@ impl App {
         if matches!(kind, PopupKind::Workspaces | PopupKind::MoveTab) {
             return self.workspace_popup_rows();
         }
+        if kind == PopupKind::Panes {
+            return self.recent_popup_rows();
+        }
         let Some(history) = &self.history else {
             return Vec::new();
         };
@@ -3198,7 +3212,8 @@ impl App {
             PopupKind::Sessions
             | PopupKind::Themes
             | PopupKind::Workspaces
-            | PopupKind::MoveTab => Vec::new(),
+            | PopupKind::MoveTab
+            | PopupKind::Panes => Vec::new(),
             PopupKind::Commands => {
                 let filter = CommandFilter {
                     cwd: if only_here {
@@ -3311,6 +3326,9 @@ impl App {
         let Some(row) = popup.selected().cloned() else {
             return;
         };
+        if popup.kind == PopupKind::Panes {
+            return self.accept_recent_popup(&row.key);
+        }
         let busy = self
             .running
             .as_ref()
@@ -3318,7 +3336,7 @@ impl App {
             .is_some_and(|pane| pane.shell.is_running());
         match popup.kind {
             // Handled above.
-            PopupKind::Workspaces | PopupKind::MoveTab => return,
+            PopupKind::Workspaces | PopupKind::MoveTab | PopupKind::Panes => return,
             PopupKind::Sessions => return self.restore_entry(&row.key),
             PopupKind::Themes => {
                 // An error was shown as a toast.
@@ -3458,7 +3476,8 @@ impl App {
                         PopupKind::Sessions
                         | PopupKind::Themes
                         | PopupKind::Workspaces
-                        | PopupKind::MoveTab => Ok(()),
+                        | PopupKind::MoveTab
+                        | PopupKind::Panes => Ok(()),
                     };
                     if let Err(err) = result {
                         tracing::warn!("cannot change the history: {err}");
@@ -5246,6 +5265,7 @@ impl ApplicationHandler<UserEvent> for App {
         self.scene_events();
         self.shot_pictures();
         let now = Instant::now();
+        self.note_focus(now);
         let mut wake_at = None;
         match self.reload_at {
             Some(at) if now >= at => {

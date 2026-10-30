@@ -19,6 +19,8 @@ pub enum PopupKind {
     Workspaces,
     /// The workspaces: Enter moves the active tab there.
     MoveTab,
+    /// The panes, the recently used first: Enter goes to one.
+    Panes,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -126,6 +128,7 @@ impl HistoryPopup {
             PopupKind::Themes => tr!("popup.themes"),
             PopupKind::Workspaces => tr!("popup.workspaces"),
             PopupKind::MoveTab => tr!("popup.move_tab"),
+            PopupKind::Panes => tr!("popup.panes"),
             PopupKind::Commands => {
                 let mut title = tr!("popup.commands");
                 if self.only_here {
@@ -153,6 +156,7 @@ impl HistoryPopup {
             PopupKind::Themes => tr!("popup.themes_keys"),
             PopupKind::Workspaces => tr!("popup.workspaces_keys"),
             PopupKind::MoveTab => tr!("popup.move_tab_keys"),
+            PopupKind::Panes => tr!("popup.panes_keys"),
         }
     }
 }

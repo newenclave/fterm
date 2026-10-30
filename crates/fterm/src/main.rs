@@ -23,6 +23,7 @@ mod palette;
 mod panels;
 mod paths;
 mod pictures;
+mod recent;
 mod redraw;
 mod review;
 mod screenshot;

@@ -246,13 +246,17 @@ pub enum BuiltinAction {
     ToggleCompanion,
     /// Shows the next companion of the active pane.
     NextCompanion,
+    /// The list of panes, the recently used first: Enter goes to one.
+    RecentPanes,
+    /// Goes back to the pane that had the keys before (again: back here).
+    PreviousPane,
     /// "Connect over SSH…": a box for `user@host`, then its panes.
     ConnectSsh,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 71] = [
+    pub const ALL: [BuiltinAction; 73] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -324,6 +328,8 @@ impl BuiltinAction {
         Self::NewCompanion,
         Self::ToggleCompanion,
         Self::NextCompanion,
+        Self::RecentPanes,
+        Self::PreviousPane,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -399,6 +405,8 @@ impl BuiltinAction {
             Self::NewCompanion => "new_companion",
             Self::ToggleCompanion => "toggle_companion",
             Self::NextCompanion => "next_companion",
+            Self::RecentPanes => "recent_panes",
+            Self::PreviousPane => "previous_pane",
             Self::ConnectSsh => "connect_ssh",
         };
         name.to_owned()
@@ -522,6 +530,8 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+shift+n", "new_companion"),
     ("ctrl+shift+k", "toggle_companion"),
     ("ctrl+shift+m", "next_companion"),
+    ("ctrl+shift+h", "recent_panes"),
+    ("alt+`", "previous_pane"),
 ];
 
 impl Keymap {
@@ -790,6 +800,30 @@ mod tests {
             BuiltinAction::from_name("open_link_hints"),
             Some(BuiltinAction::OpenLinkHints)
         );
+    }
+
+    #[test]
+    fn recent_pane_actions_and_keys() {
+        let keys = Keymap::with_defaults();
+        for (name, action, label, key) in [
+            (
+                "recent_panes",
+                BuiltinAction::RecentPanes,
+                "Recent panes…",
+                "ctrl+shift+h",
+            ),
+            (
+                "previous_pane",
+                BuiltinAction::PreviousPane,
+                "Go back to the previous pane",
+                "alt+`",
+            ),
+        ] {
+            assert_eq!(BuiltinAction::from_name(name), Some(action));
+            assert_eq!(action.label(), label);
+            assert_eq!(keys.get(&chord(key)), Some(&Action::Builtin(action)));
+            assert!(BuiltinAction::ALL.contains(&action));
+        }
     }
 
     #[test]
