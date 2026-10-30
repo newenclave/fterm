@@ -102,18 +102,28 @@ impl App {
         let input = self.workspace_prompt.as_ref()?;
         Some(vec![
             tr!("box.rename_workspace"),
-            format!("{}▏", input.text),
+            input.line_with_cursor('▏'),
             String::new(),
             tr!("box.rename_workspace_keys"),
         ])
     }
 
     pub(super) fn workspace_prompt_key(&mut self, event: &KeyEvent) {
+        use super::overlay_calls::{edit_line, is_paste, one_line};
         let ctrl = self.mods.control_key();
+        let pasted = is_paste(
+            &event.logical_key,
+            event.physical_key,
+            ctrl,
+            self.mods.shift_key(),
+        )
+        .then(|| self.clipboard.paste())
+        .flatten();
         let Some(input) = &mut self.workspace_prompt else {
             return;
         };
         match &event.logical_key {
+            _ if pasted.is_some() => input.insert(&one_line(pasted.as_deref().unwrap_or(""))),
             Key::Named(NamedKey::Escape) => self.workspace_prompt = None,
             Key::Named(NamedKey::Enter) => {
                 let name = input.take();
@@ -132,7 +142,7 @@ impl App {
                 }
                 self.tab_changed();
             }
-            Key::Named(NamedKey::Backspace) => input.backspace(),
+            key if edit_line(input, key) => {}
             _ => {
                 if let Some(text) = event.text.as_deref()
                     && !ctrl
