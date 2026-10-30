@@ -21,6 +21,10 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   with it. `companion_side = "right"` and `companion_size` (40% by default) set the place. From scripts and agents:
   `ftermctl companion -- COMMAND`, `ftermctl companion --toggle|--next`, `spawn` with `place: "companion"`, the API
   method `companion`, and the MCP tool `open_pane`. See [docs/KEYS.md](docs/KEYS.md#companions).
+- **Recent panes.** Alt+` goes back to the pane that you used before (in any tab or workspace), and again comes
+  back. Ctrl+Shift+H shows all panes, the recently used first, with their folder and agent state; type to find
+  one. A pane counts when you stay in it for a second, so a quick walk through tabs does not count.
+  See [docs/KEYS.md](docs/KEYS.md#recent-panes).
 - **Pictures in panes.** A picture (PNG, JPEG, BMP) takes a rectangle of cells in any pane and scrolls with
   the text. `ftermctl image cat.png` (`--height N`, 12 rows by default) shows one in the output of its pane; it
   works in WSL and over SSH too. Programs can show pictures with the iTerm2 sequence (OSC 1337). A picture pane
@@ -73,7 +77,8 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 
 ### Fixed
 - The box of "Connect over SSH…" (and the new command boxes of overlays and companions) now moves its cursor:
-  the arrows, Home, End, and Delete edit the text, and Ctrl+V (or Shift+Insert) pastes. Before, you could only type
+  the arrows, Home, End, and Delete edit the text, and Ctrl+V (or Shift+Insert) pastes. The box that renames a
+  workspace too. Before, you could only type
   at the end and use Backspace.
 - **Many tabs with agents do not slow fterm down.** The spinner of an agent changes the title of its pane about 10
   times a second, and each change in any tab drew the whole window again. Now a change that you do not see (another

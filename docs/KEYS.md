@@ -63,6 +63,15 @@ workspaces. To open the tabs of a profile in a workspace, give it `workspace = "
 Each pane has its own shell, history, selection, and copy mode. The active pane has a colored frame.
 When a shell ends (for example, you type `exit`), only its tab closes. The window closes after the last tab.
 
+## Recent panes
+| Key | What it does |
+|---|---|
+| Alt + ` | Go back to the pane that you used before, in any tab or workspace. Press again to come back. |
+| Ctrl + Shift + H | The list of all panes, the recently used first. Type to find one, Enter goes there. |
+
+A pane counts as used when you stay in it for a second. So a quick walk through tabs with Ctrl + Tab does not
+change where Alt + ` goes. Overlays and the scratch shell are not in the list: they have their own keys.
+
 ## Overlays and the scratch shell
 An **overlay** is a program in a box over the active pane: a file manager (yazi, Far), lazygit, htop. The layout
 does not change. The pane under the box is dim. A tab has one overlay: hide it, and its program lives on until you

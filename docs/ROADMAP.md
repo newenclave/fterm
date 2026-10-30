@@ -376,7 +376,7 @@ Still to do:
 - Colors per cell, so one scene can have many colors.
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
-### Phase 12 — Panes for a moment, and many sessions at once — in progress (overlays and scratch ✅, companions ✅, 2026-10-30)
+### Phase 12 — Panes for a moment, and many sessions at once — in progress (overlays and scratch ✅, companions ✅, recent panes ✅, 2026-10-30)
 Ideas from [agterm](https://github.com/umputun/agterm) (a macOS terminal for many agents; Swift and libghostty, so
 it cannot be ported, but its ideas can). In this order:
 - **Overlays:** run a program over a pane, on the whole pane or in a floating box (a file manager like yazi or Far,
@@ -386,7 +386,8 @@ it cannot be ported, but its ideas can). In this order:
 - **Companions** ✅: panes that belong to a pane (a `tail -f` of a log, a watcher, a second shell). They move, fold,
   and close with it. Done as a strip of the pane that hides and shows (see [KEYS.md](KEYS.md#companions)).
 - **Dashboard:** a view-only grid with the output of many panes at once (for example 4–6 agents).
-- **Recent panes:** go to a pane by recency, like Alt+Tab for tabs and panes.
+- **Recent panes** ✅: go to a pane by recency, like Alt+Tab for tabs and panes. Done as Alt+` (back) and
+  Ctrl+Shift+H (the list), see [KEYS.md](KEYS.md#recent-panes).
 
 ## Ideas (not decided yet)
 Ideas from the user. We think about them before we plan them.

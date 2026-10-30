@@ -181,6 +181,7 @@ also work on other layouts (for example, Russian).
 | `toggle_original_colors` | The colors that programs chose as they are, or fitted to the theme (`harmonize`). |
 | `harmonize_more`, `harmonize_less` (Ctrl+Shift+], Ctrl+Shift+[) | Try a stronger or weaker `harmonize` (steps of 0.1) until the config changes. |
 | `choose_workspace` (Ctrl+Alt+W), `move_tab_to_workspace` | The list of workspaces: go to one or make one, or move the active tab there. |
+| `previous_pane` (Alt+\`), `recent_panes` (Ctrl+Shift+H) | Go back to the pane that you used before; the list of panes, the recently used first (see [KEYS.md](KEYS.md#recent-panes)). |
 | `connect_ssh` | "Connect over SSH…": asks for `user@host`, then shows the panes of the mux server there. |
 | `stop_mux` | Stop the mux server: all its panes end (after a question; see [MUX.md](MUX.md)). |
 | `run_in_overlay` (Ctrl+Shift+L), `toggle_scratch` (Ctrl+`) | Run a command in an overlay over the active pane; show or hide the scratch shell (see [KEYS.md](KEYS.md#overlays-and-the-scratch-shell)). |
