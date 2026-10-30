@@ -65,6 +65,11 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   links, and asks first when a link is a file or its text does not show its URL. See docs/KEYS.md.
 
 ### Changed
+- **Many tabs are faster.** When the window, the dock, or a split changes its size, only the panes on the screen
+  get the new size at once. The panes of hidden tabs get it a moment later, a few at a time. Before, each step of
+  a drag was slow when many tabs had a long history.
+- **Less work when nothing happens.** Each tab woke up five times a second for no reason. Now it sleeps until
+  there is output.
 - **Braille in panes is round dots now.** The spinners of agents (opencode, and others) are Braille chars, and as
   square pixels they looked like little blocks. Panes with programs now draw Braille as round dots, like a font;
   scenes always draw it as square pixels. `braille_style = "pixels"` brings the pixels back to all panes. If your

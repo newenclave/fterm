@@ -1,6 +1,6 @@
 //! The app: it gets window events from winit, sends keys to the active pane, and draws the window.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -72,6 +72,10 @@ const AUTOSCROLL_TICK: Duration = Duration::from_millis(16);
 const TITLE_MESSAGE: Duration = Duration::from_millis(1500);
 /// Wait this long after the last change of the config file, then load it.
 const CONFIG_DEBOUNCE: Duration = Duration::from_millis(150);
+/// The panes of hidden tabs get their new size this long after the last resize (not on every step of a drag).
+const HIDDEN_RESIZE_DELAY: Duration = Duration::from_millis(300);
+/// The longest time for resizing hidden panes in one turn of the event loop (a reflow of a long history is slow).
+const HIDDEN_RESIZE_BUDGET: Duration = Duration::from_millis(8);
 
 /// Events from other threads to the window thread.
 #[derive(Debug)]
@@ -164,6 +168,8 @@ struct Running {
     panes: HashMap<PaneId, Pane>,
     /// The dock with the service panels.
     dock: Dock,
+    /// When the panes of hidden tabs get their new size (see `resize_all_panes`).
+    hidden_resize_at: Cell<Option<Instant>>,
 }
 
 impl Running {
@@ -258,38 +264,81 @@ impl Running {
         )
     }
 
-    /// Every pane of every tab gets the size of its own rect.
+    /// Every pane of every tab gets the size of its own rect. The panes on the screen get it now; the panes of
+    /// hidden tabs a moment later, a few at a time (a reflow of a long history is slow, and with many tabs a drag of
+    /// the window edge would stop at each step).
     fn resize_all_panes(&self) {
-        // A minimized window has no size: the programs keep theirs (else they draw for one cell).
-        let minimized = self.window.is_minimized().unwrap_or(false);
-        if !crate::gpu::panes_follow(self.window.inner_size(), minimized) {
-            return;
+        if self.resize_visible_panes() {
+            self.hidden_resize_at
+                .set(Some(Instant::now() + HIDDEN_RESIZE_DELAY));
+        }
+    }
+
+    /// The panes on the screen (the active tab, the floating panes that are shown) get the size of their rect.
+    /// `false` when the panes keep their sizes (a minimized window).
+    fn resize_visible_panes(&self) -> bool {
+        if !self.panes_follow() {
+            return false;
+        }
+        let mut rects = self.floating_rects();
+        rects.extend(self.mux.pane_rects(self.tab_area()));
+        for (id, rect) in rects {
+            self.resize_pane(id, rect);
+        }
+        true
+    }
+
+    /// The panes of hidden tabs get the size of their rect, until `budget` is over. Returns when to go on, if some
+    /// are left.
+    fn resize_hidden_panes(&self, budget: Duration) -> Option<Instant> {
+        let start = Instant::now();
+        let at = self.hidden_resize_at.get()?;
+        if start < at {
+            return Some(at);
+        }
+        self.hidden_resize_at.set(None);
+        if !self.panes_follow() {
+            return None;
         }
         let area = self.tab_area();
-        let cell = cell_px(&self.renderer);
-        // The panes of all tabs, and the floating panes that are shown (overlays, the scratch).
-        let mut rects: Vec<(PaneId, Rect)> = self.floating_rects();
         for tab in self.mux.all_tabs() {
-            rects.extend(self.mux.tab_rects(tab, area));
-        }
-        for (id, rect) in rects {
-            let size = self.grid_for(rect);
-            if let Some(pane) = self.panes.get(&id)
-                && pane.session.grid_size() != size
-            {
-                pane.session.resize(size, cell);
-                if pane.picture_pane.is_some() {
-                    mark_picture_pane(&pane.session);
-                }
-                if let Some(scene) = &pane.scene {
-                    // The picture is drawn again for the new size (zoom, a split, the window).
-                    let mut scene = scene.lock().unwrap();
-                    scene.set_aspect(dot_aspect(self.renderer.cell()));
-                    scene.resize(size.columns, size.rows);
-                    pane.session.feed(&fterm_scene::render(scene.canvas()));
+            for (id, rect) in self.mux.tab_rects(tab, area) {
+                if self.resize_pane(id, rect) && start.elapsed() >= budget {
+                    self.hidden_resize_at.set(Some(Instant::now()));
+                    return Some(Instant::now());
                 }
             }
         }
+        None
+    }
+
+    /// A minimized window has no size: the programs keep theirs (else they draw for one cell).
+    fn panes_follow(&self) -> bool {
+        let minimized = self.window.is_minimized().unwrap_or(false);
+        crate::gpu::panes_follow(self.window.inner_size(), minimized)
+    }
+
+    /// The pane gets the size of `rect`. `true` when the size changed.
+    fn resize_pane(&self, id: PaneId, rect: Rect) -> bool {
+        let size = self.grid_for(rect);
+        let Some(pane) = self.panes.get(&id) else {
+            return false;
+        };
+        if pane.session.grid_size() == size {
+            return false;
+        }
+        pane.session.resize(size, cell_px(&self.renderer));
+        if pane.picture_pane.is_some() {
+            mark_picture_pane(&pane.session);
+        }
+        if let Some(scene) = &pane.scene {
+            // The picture is drawn again for the new size (zoom, a split, the window).
+            let mut scene = scene.lock().unwrap();
+            scene.set_aspect(dot_aspect(self.renderer.cell()));
+            scene.resize(size.columns, size.rows);
+            pane.session.feed(&fterm_scene::render(scene.canvas()));
+        }
+        true
     }
 
     /// The agent badge of each tab: the most important agent state of its panes.
@@ -1873,6 +1922,7 @@ impl App {
                 config.panels.size,
                 config.panels.open.as_deref().and_then(PanelKind::from_name),
             ),
+            hidden_resize_at: Cell::new(None),
         })
     }
 
@@ -4469,6 +4519,10 @@ impl App {
     }
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        // A pane of a hidden tab may come to the screen before its new size (see `resize_all_panes`).
+        if let Some(running) = &self.running {
+            running.resize_visible_panes();
+        }
         self.draw_reviews();
         self.refresh_pictures();
         let focused = self.focused;
@@ -4636,6 +4690,7 @@ impl App {
             panes,
             window,
             dock,
+            ..
         } = running;
         let size = window.inner_size();
         let cell = renderer.cell();
@@ -5315,6 +5370,13 @@ impl ApplicationHandler<UserEvent> for App {
             } else {
                 wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
             }
+        }
+        if let Some(at) = self
+            .running
+            .as_ref()
+            .and_then(|r| r.resize_hidden_panes(HIDDEN_RESIZE_BUDGET))
+        {
+            wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
         if let Some(at) = self.expire_plan_questions(now) {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
