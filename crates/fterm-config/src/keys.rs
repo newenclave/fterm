@@ -238,13 +238,15 @@ pub enum BuiltinAction {
     RunInOverlay,
     /// Shows or hides the scratch shell (a drop-down shell of the window).
     ToggleScratch,
+    /// Shows or hides the overlay of the window (over any tab); the first time it asks for its command.
+    ToggleWindowOverlay,
     /// "Connect over SSH…": a box for `user@host`, then its panes.
     ConnectSsh,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 67] = [
+    pub const ALL: [BuiltinAction; 68] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -312,6 +314,7 @@ impl BuiltinAction {
         Self::ShowPaneScreenshot,
         Self::RunInOverlay,
         Self::ToggleScratch,
+        Self::ToggleWindowOverlay,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -383,6 +386,7 @@ impl BuiltinAction {
             Self::ShowPaneScreenshot => "show_pane_screenshot",
             Self::RunInOverlay => "run_in_overlay",
             Self::ToggleScratch => "toggle_scratch",
+            Self::ToggleWindowOverlay => "toggle_window_overlay",
             Self::ConnectSsh => "connect_ssh",
         };
         name.to_owned()
@@ -502,6 +506,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+alt+w", "choose_workspace"),
     ("ctrl+shift+l", "run_in_overlay"),
     ("ctrl+`", "toggle_scratch"),
+    ("ctrl+shift+j", "toggle_window_overlay"),
 ];
 
 impl Keymap {
@@ -770,6 +775,18 @@ mod tests {
             BuiltinAction::from_name("open_link_hints"),
             Some(BuiltinAction::OpenLinkHints)
         );
+    }
+
+    #[test]
+    fn the_window_overlay_action_and_key() {
+        let action = BuiltinAction::from_name("toggle_window_overlay").unwrap();
+        assert_eq!(action, BuiltinAction::ToggleWindowOverlay);
+        assert_eq!(action.label(), "Window overlay: show or hide");
+        assert_eq!(
+            Keymap::with_defaults().get(&chord("ctrl+shift+j")),
+            Some(&Action::Builtin(action))
+        );
+        assert!(BuiltinAction::ALL.contains(&action));
     }
 
     #[test]

@@ -512,6 +512,8 @@ pub struct Config {
     pub overlay_size: u8,
     /// The height of the scratch shell in percent of the tab (20..100).
     pub scratch_size: u8,
+    /// The command of the window overlay (for example `far`): it opens without a question the first time.
+    pub window_overlay: Option<String>,
     /// How many times a second a change off the screen (the title of a pane in another tab, for example the spinner
     /// of an agent) may redraw the window (0.1..60).
     pub background_redraws: f64,
@@ -580,6 +582,7 @@ impl Default for Config {
             pictures: Pictures::Pixels,
             overlay_size: 80,
             scratch_size: 50,
+            window_overlay: None,
             background_redraws: 1.0,
             colors: ColorConfig::default(),
             theme: crate::theme::ThemeChoice::Default,
@@ -1186,6 +1189,9 @@ impl Reader {
         }
         if let Some(size) = number_field(root, "scratch_size", "scratch_size")? {
             config.scratch_size = percent(size);
+        }
+        if let Some(command) = string_field(root, "window_overlay", "window_overlay")? {
+            config.window_overlay = Some(command.trim().to_owned()).filter(|c| !c.is_empty());
         }
         if let Some(rate) = number_field(root, "background_redraws", "background_redraws")? {
             config.background_redraws = rate.clamp(0.1, 60.0);
@@ -2425,6 +2431,24 @@ mod tests {
                 .config
                 .background_redraws,
             60.0
+        );
+    }
+
+    #[test]
+    fn the_command_of_the_window_overlay() {
+        assert_eq!(load("return {}").config.window_overlay, None);
+        assert_eq!(
+            load(r#"return { window_overlay = "far" }"#)
+                .config
+                .window_overlay
+                .as_deref(),
+            Some("far")
+        );
+        assert_eq!(
+            load(r#"return { window_overlay = "  " }"#)
+                .config
+                .window_overlay,
+            None
         );
     }
 

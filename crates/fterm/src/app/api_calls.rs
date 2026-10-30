@@ -700,6 +700,8 @@ impl App {
             "program": display_name(p.session.program()),
             "kind": if running.mux.scratch_pane() == Some(pane) {
                 "scratch"
+            } else if running.mux.window_overlay().is_some_and(|(p, _)| p == pane) {
+                "window_overlay"
             } else if running.mux.is_floating(pane) {
                 "overlay"
             } else if p.review.is_some() {
@@ -743,6 +745,7 @@ impl App {
                 let overlay = tab.overlay.map(|o| {
                     let mut pane = self.pane_json(o.pane, number);
                     pane["over"] = json!(o.over.0);
+                    pane["shown"] = json!(o.shown);
                     pane
                 });
                 let panes: Vec<Value> = tab
@@ -770,6 +773,12 @@ impl App {
             "workspace": running.mux.workspace(),
             "tabs": tabs,
         });
+        // The overlay of the window (not in a tab), and whether it is shown.
+        if let Some((pane, shown)) = running.mux.window_overlay() {
+            let mut overlay = self.pane_json(pane, 0);
+            overlay["shown"] = json!(shown);
+            out["window_overlay"] = overlay;
+        }
         // The scratch shell of the window (not in a tab), and whether it is shown.
         if let Some(pane) = running.mux.scratch_pane() {
             let mut scratch = self.pane_json(pane, 0);

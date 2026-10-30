@@ -33,6 +33,17 @@ pub struct Overlay {
     pub over: PaneId,
     /// Its size in percent of the pane under it (100 = all of it).
     pub size: u8,
+    /// It is shown; hidden, its program lives on and the pane under it has the keys.
+    pub shown: bool,
+}
+
+/// The overlay of the window: a program over the tab in front (any tab), shown or hidden.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WindowOverlay {
+    pane: PaneId,
+    shown: bool,
+    /// Its size in percent of the tab area.
+    size: u8,
 }
 
 /// The drop-down shell of the window: shown over the tab in front, or hidden (its shell lives on).
@@ -109,6 +120,7 @@ pub struct Mux {
     current: usize,
     next_id: u64,
     scratch: Option<Scratch>,
+    window_overlay: Option<WindowOverlay>,
 }
 
 impl Default for Mux {
@@ -118,6 +130,7 @@ impl Default for Mux {
             current: 0,
             next_id: 0,
             scratch: None,
+            window_overlay: None,
         }
     }
 }
@@ -238,15 +251,47 @@ impl Mux {
         self.active_tab().map(|tab| tab.active_pane)
     }
 
-    /// The pane that gets the keys: the scratch when it is shown, else the overlay of the active tab, else the
-    /// active pane.
+    /// The pane that gets the keys: the scratch when it is shown, else the window overlay when shown, else the
+    /// overlay of the active tab when shown, else the active pane.
     pub fn input_pane(&self) -> Option<PaneId> {
         if let Some(s) = self.scratch.filter(|s| s.shown) {
             return Some(s.pane);
         }
+        if let Some(w) = self.window_overlay.filter(|w| w.shown) {
+            return Some(w.pane);
+        }
         self.overlay()
+            .filter(|o| o.shown)
             .map(|o| o.pane)
             .or_else(|| self.active_pane())
+    }
+
+    /// Shows or hides the overlay of the active tab: `Some(shown)` after the change, `None` when it has none.
+    pub fn toggle_overlay(&mut self) -> Option<bool> {
+        let o = self.active_tab_mut()?.overlay.as_mut()?;
+        o.shown = !o.shown;
+        Some(o.shown)
+    }
+
+    /// Makes `pane` the overlay of the window, shown, `size` percent of the tab area.
+    pub fn set_window_overlay(&mut self, pane: PaneId, size: u8) {
+        self.window_overlay = Some(WindowOverlay {
+            pane,
+            shown: true,
+            size: size.clamp(1, 100),
+        });
+    }
+
+    /// Shows or hides the overlay of the window: `Some(shown)` after the change, `None` when there is none.
+    pub fn toggle_window_overlay(&mut self) -> Option<bool> {
+        let w = self.window_overlay.as_mut()?;
+        w.shown = !w.shown;
+        Some(w.shown)
+    }
+
+    /// The overlay of the window and whether it is shown.
+    pub fn window_overlay(&self) -> Option<(PaneId, bool)> {
+        self.window_overlay.map(|w| (w.pane, w.shown))
     }
 
     /// Opens `pane` as the overlay over the active pane. `false` when the tab has one already (or there is no tab).
@@ -261,6 +306,7 @@ impl Mux {
             pane,
             over: tab.active_pane,
             size: size.clamp(1, 100),
+            shown: true,
         });
         true
     }
@@ -281,6 +327,7 @@ impl Mux {
     /// `pane` is an overlay or the scratch (not in a layout).
     pub fn is_floating(&self, pane: PaneId) -> bool {
         self.scratch_pane() == Some(pane)
+            || self.window_overlay.is_some_and(|w| w.pane == pane)
             || self
                 .all_tabs()
                 .any(|t| t.overlay.is_some_and(|o| o.pane == pane))
@@ -307,17 +354,21 @@ impl Mux {
         Some(s.shown)
     }
 
-    /// The overlay of the active tab (over its pane, when that pane is seen) and the scratch when shown, with their
-    /// places in `area` (the scratch last: it is on top). `min` is the smallest size of a floating pane.
+    /// The shown floating panes with their places in `area`, from the bottom to the top: the overlay of the active
+    /// tab (over its pane, when that pane is seen), the overlay of the window, the scratch. `min` is the smallest
+    /// size of a floating pane.
     pub fn floating_rects(&self, area: Rect, min: (f32, f32)) -> Vec<(PaneId, Rect)> {
         let mut out = Vec::new();
-        if let Some(o) = self.overlay()
+        if let Some(o) = self.overlay().filter(|o| o.shown)
             && let Some((_, rect)) = self
                 .pane_rects(area)
                 .into_iter()
                 .find(|(p, _)| *p == o.over)
         {
             out.push((o.pane, overlay_rect(rect, o.size, min)));
+        }
+        if let Some(w) = self.window_overlay.filter(|w| w.shown) {
+            out.push((w.pane, overlay_rect(area, w.size, min)));
         }
         if let Some(s) = self.scratch.filter(|s| s.shown) {
             out.push((s.pane, scratch_rect(area, s.size, min.1)));
@@ -463,6 +514,10 @@ impl Mux {
     pub fn close_pane(&mut self, pane: PaneId) -> Closed {
         if self.scratch_pane() == Some(pane) {
             self.scratch = None;
+            return Closed::Floating;
+        }
+        if self.window_overlay.is_some_and(|w| w.pane == pane) {
+            self.window_overlay = None;
             return Closed::Floating;
         }
         let Some((w, index)) = self.find_pane(pane) else {
@@ -688,6 +743,66 @@ mod tests {
         mux.select(0);
         assert_eq!(mux.pane_tab(overlay), mux.pane_tab(over));
         assert!(mux.is_floating(overlay) && !mux.is_floating(over));
+    }
+
+    #[test]
+    fn an_overlay_hides_and_its_program_lives_on() {
+        let area = Rect::new(0.0, 0.0, 1000.0, 600.0);
+        let (mut mux, panes) = mux_with(1);
+        assert_eq!(mux.toggle_overlay(), None, "no overlay yet");
+        let overlay = mux.new_pane_id();
+        mux.open_overlay(overlay, 80);
+        assert_eq!(mux.toggle_overlay(), Some(false));
+        // Hidden: the pane under it has the keys, and it is not drawn; it is still the overlay of the tab.
+        assert_eq!(mux.input_pane(), Some(panes[0]));
+        assert!(mux.floating_rects(area, (0.0, 0.0)).is_empty());
+        assert_eq!(
+            mux.overlay().map(|o| (o.pane, o.shown)),
+            Some((overlay, false))
+        );
+        assert!(mux.is_floating(overlay));
+        assert_eq!(mux.toggle_overlay(), Some(true));
+        assert_eq!(mux.input_pane(), Some(overlay));
+        assert_eq!(mux.floating_rects(area, (0.0, 0.0)).len(), 1);
+    }
+
+    #[test]
+    fn the_window_overlay_is_over_every_tab() {
+        let area = Rect::new(0.0, 0.0, 1000.0, 600.0);
+        let (mut mux, panes) = mux_with(2);
+        assert_eq!(mux.toggle_window_overlay(), None, "no window overlay yet");
+        let far = mux.new_pane_id();
+        mux.set_window_overlay(far, 90);
+        assert_eq!(mux.input_pane(), Some(far));
+        // 90% of the tab area, in its middle.
+        assert_eq!(
+            mux.floating_rects(area, (0.0, 0.0)),
+            [(far, Rect::new(50.0, 30.0, 900.0, 540.0))]
+        );
+        mux.select(1);
+        assert_eq!(mux.input_pane(), Some(far), "the same one in another tab");
+        // A tab overlay is under it; the scratch is above it.
+        let tab_overlay = mux.new_pane_id();
+        mux.open_overlay(tab_overlay, 80);
+        assert_eq!(mux.input_pane(), Some(far));
+        let rects = mux.floating_rects(area, (0.0, 0.0));
+        assert_eq!(
+            rects.iter().map(|(p, _)| *p).collect::<Vec<_>>(),
+            [tab_overlay, far]
+        );
+        let scratch = mux.new_pane_id();
+        mux.set_scratch(scratch, 50);
+        assert_eq!(mux.input_pane(), Some(scratch));
+        mux.toggle_scratch();
+        // Hidden: the tab overlay has the keys again.
+        assert_eq!(mux.toggle_window_overlay(), Some(false));
+        assert_eq!(mux.input_pane(), Some(tab_overlay));
+        assert!(mux.is_floating(far));
+        assert_eq!(mux.window_overlay(), Some((far, false)));
+        // Its program ends: it goes.
+        assert_eq!(mux.close_pane(far), Closed::Floating);
+        assert_eq!(mux.window_overlay(), None);
+        let _ = panes;
     }
 
     #[test]

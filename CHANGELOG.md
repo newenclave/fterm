@@ -9,8 +9,9 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 ### Added
 - **Overlays and a scratch shell** (ideas from agterm). Ctrl+Shift+L runs a command in a box over the active pane:
   a file manager, lazygit, htop. The layout does not change, the pane under it is dim, and the box goes when the
-  program ends. A profile with `overlay = true` opens like this too, and `overlay_size` sets the size (80% by
-  default, 100 = the whole pane). Ctrl+` shows or hides the scratch shell: a shell that drops down over the top of
+  program ends; Ctrl+Shift+L again hides it and shows it, and the program lives on. Ctrl+Shift+J is the window
+  overlay: one for all tabs, for example a Far that you keep (`window_overlay = "far"`). A profile with
+  `overlay = true` opens as an overlay too, and `overlay_size` sets the size (80% by default, 100 = the whole pane). Ctrl+` shows or hides the scratch shell: a shell that drops down over the top of
   the tab and keeps its history while it is hidden (`scratch_size`, 50%). From scripts and agents:
   `ftermctl overlay -- COMMAND`, `ftermctl scratch`, `spawn` with `place: "overlay"`, and the MCP tool `open_pane`.
   See [docs/KEYS.md](docs/KEYS.md#overlays-and-the-scratch-shell).

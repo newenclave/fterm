@@ -68,6 +68,7 @@
     "action.toggle_original_colors": "Original colors of programs on or off",
     "action.toggle_remote_control": "Remote control on or off for this pane",
     "action.toggle_scratch": "Scratch shell: show or hide",
+    "action.toggle_window_overlay": "Window overlay: show or hide",
     "action.zoom": "Zoom pane",
     "agent.done": "{name} is done",
     "agent.done_body": "The task is finished.",
@@ -138,6 +139,7 @@
     "box.ssh": "Connect over SSH to (user@host):",
     "box.ssh_keys": "Enter = connect, Esc = cancel. The key or the ssh agent must work: there is no password question.",
     "box.tabs_and_panes": "{tabs}, {panes}.",
+    "box.window_overlay": "Run in the window overlay (over every tab):",
     "count.lines": {
       "one": "{n} line",
       "other": "{n} lines"

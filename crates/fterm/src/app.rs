@@ -265,35 +265,29 @@ impl Running {
         }
         let area = self.tab_area();
         let cell = cell_px(&self.renderer);
-        let floating = self.floating_rects();
+        // The panes of all tabs, and the floating panes that are shown (overlays, the scratch).
+        let mut rects: Vec<(PaneId, Rect)> = self.floating_rects();
         for tab in self.mux.all_tabs() {
-            let rects = match tab.zoomed {
-                Some(pane) => vec![(pane, area)],
-                None => tab.layout.rects(area),
-            };
-            let rects = rects.into_iter().chain(
-                floating
-                    .iter()
-                    .copied()
-                    .filter(|(p, _)| tab.overlay.is_some_and(|o| o.pane == *p)),
-            );
-            let rects: Vec<(PaneId, Rect)> = rects.collect();
-            for (id, rect) in rects {
-                let size = self.grid_for(rect);
-                if let Some(pane) = self.panes.get(&id)
-                    && pane.session.grid_size() != size
-                {
-                    pane.session.resize(size, cell);
-                    if pane.picture_pane.is_some() {
-                        mark_picture_pane(&pane.session);
-                    }
-                    if let Some(scene) = &pane.scene {
-                        // The picture is drawn again for the new size (zoom, a split, the window).
-                        let mut scene = scene.lock().unwrap();
-                        scene.set_aspect(dot_aspect(self.renderer.cell()));
-                        scene.resize(size.columns, size.rows);
-                        pane.session.feed(&fterm_scene::render(scene.canvas()));
-                    }
+            match tab.zoomed {
+                Some(pane) => rects.push((pane, area)),
+                None => rects.extend(tab.layout.rects(area)),
+            }
+        }
+        for (id, rect) in rects {
+            let size = self.grid_for(rect);
+            if let Some(pane) = self.panes.get(&id)
+                && pane.session.grid_size() != size
+            {
+                pane.session.resize(size, cell);
+                if pane.picture_pane.is_some() {
+                    mark_picture_pane(&pane.session);
+                }
+                if let Some(scene) = &pane.scene {
+                    // The picture is drawn again for the new size (zoom, a split, the window).
+                    let mut scene = scene.lock().unwrap();
+                    scene.set_aspect(dot_aspect(self.renderer.cell()));
+                    scene.resize(size.columns, size.rows);
+                    pane.session.feed(&fterm_scene::render(scene.canvas()));
                 }
             }
         }
@@ -501,6 +495,8 @@ pub struct App {
     spawn_command: Option<String>,
     /// "Run in an overlay…": the command that is typed.
     overlay_prompt: Option<crate::ai_chat::InputBox>,
+    /// The command in `overlay_prompt` is for the overlay of the window.
+    overlay_prompt_window: bool,
     /// The last hint: (typed text, folder, history changes) -> the rest of the command.
     hint_cache: RefCell<Option<HintCache>>,
     /// Grows when a command is saved, so the hint cache knows it is old.
@@ -643,6 +639,7 @@ impl App {
             spawn_cwd: None,
             spawn_command: None,
             overlay_prompt: None,
+            overlay_prompt_window: false,
             hint_cache: RefCell::new(None),
             history_changes: 0,
             close_stopped_at: None,
@@ -2975,7 +2972,16 @@ impl App {
             A::RenameWorkspace => return self.start_workspace_prompt(),
             A::StopMux => return self.ask_stop_mux(),
             A::ConnectSsh => return self.start_ssh_prompt(),
-            A::RunInOverlay => return self.start_overlay_prompt(),
+            // The overlay of the tab: shown or hidden; with none, a new one.
+            A::RunInOverlay => {
+                if running.mux.toggle_overlay().is_some() {
+                    running.resize_all_panes();
+                    running.window.request_redraw();
+                    return;
+                }
+                return self.start_overlay_prompt(false);
+            }
+            A::ToggleWindowOverlay => return self.toggle_window_overlay(),
             A::ToggleScratch => return self.toggle_scratch(),
             A::ToggleOriginalColors => {
                 self.original_colors = !self.original_colors;
@@ -4787,6 +4793,9 @@ impl App {
                         && let Some(under) = under_overlay
                     {
                         parts.fill(under, 0.7);
+                    }
+                    if mux.window_overlay().is_some_and(|(p, _)| p == *id) {
+                        parts.fill(area, 0.7);
                     }
                     parts.fill(*rect, 1.0);
                     let mut bars = Vec::new();

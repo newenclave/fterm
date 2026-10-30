@@ -58,6 +58,7 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `scrollback` | number | `10000` | Lines of history. New tabs and panes use it. |
 | `background_redraws` | 0.1–60 | `1` | How many times a second a change that you do not see (the title of a pane in another tab, for example the spinner of an agent) redraws the window. Changes on the screen are drawn at once. More is smoother in the tab bar, less saves work with many agents. |
 | `overlay_size` | 20–100 | `80` | The size of an overlay (a program in a box over a pane) in percent of the pane; 100 = all of it. See [KEYS.md](KEYS.md#overlays-and-the-scratch-shell). |
+| `window_overlay` | a command | none | The program of the window overlay (Ctrl+Shift+J, over any tab), for example `"far"`. With none, fterm asks for a command the first time. |
 | `scratch_size` | 20–100 | `50` | The height of the scratch shell (a drop-down shell, Ctrl+`) in percent of the tab. |
 | `pictures` | `"pixels"`, `"braille"`, or `"off"` | `"pixels"` | Pictures in panes (`ftermctl image`, OSC 1337, picture panes): real pixels, Braille dots, or none. See [PICTURES.md](PICTURES.md). |
 | `braille_style` | `"dots"` or `"pixels"` | `"dots"` | Braille chars in panes with programs: round dots (like a font; the spinners of agents look right), or square pixels with no gaps. Scenes always use pixels. |

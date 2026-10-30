@@ -102,9 +102,57 @@ impl App {
         }
     }
 
-    /// "Run in an overlay…": a box for the command.
-    pub(super) fn start_overlay_prompt(&mut self) {
+    /// The overlay of the window (over every tab): shown or hidden; the first time its command runs (`window_overlay`
+    /// of the config, or the one the user types).
+    pub(super) fn toggle_window_overlay(&mut self) {
+        let Some(running) = &mut self.running else {
+            return;
+        };
+        if running.mux.toggle_window_overlay().is_some() {
+            running.resize_all_panes();
+            running.window.request_redraw();
+            return self.update_ime();
+        }
+        match self.config.config.window_overlay.clone() {
+            Some(command) => self.run_window_overlay(command),
+            None => self.start_overlay_prompt(true),
+        }
+    }
+
+    /// Starts `command` in the overlay of the window.
+    fn run_window_overlay(&mut self, command: String) {
+        let Some(running) = &self.running else {
+            return;
+        };
+        let size = self.config.config.overlay_size;
+        let min = floating_min(running.renderer.cell(), running.renderer.padding());
+        let rect = fterm_mux::mux::overlay_rect(running.tab_area(), size, min);
+        let grid = running.grid_for(rect);
+        self.spawn_command = Some(command);
+        let id = self.spawn_pane(grid, None);
+        self.spawn_command = None;
+        match id {
+            Ok(id) => {
+                let running = self.running.as_mut().expect("the window is open");
+                running.mux.set_window_overlay(id, size);
+                running.resize_all_panes();
+                running.window.request_redraw();
+                tracing::info!(pane = id.0, size, "the window overlay opened");
+            }
+            Err(err) => self.notify(
+                None,
+                &tr!("toast.cannot_start"),
+                &format!("{err:#}"),
+                Level::Error,
+                Source::App,
+            ),
+        }
+    }
+
+    /// The box of the action `run_in_overlay` for the command (`window` = for the overlay of the window).
+    pub(super) fn start_overlay_prompt(&mut self, window: bool) {
         self.overlay_prompt = Some(crate::ai_chat::InputBox::default());
+        self.overlay_prompt_window = window;
         if let Some(running) = &self.running {
             running.window.request_redraw();
         }
@@ -113,7 +161,11 @@ impl App {
     pub(super) fn overlay_prompt_lines(&self) -> Option<Vec<String>> {
         let input = self.overlay_prompt.as_ref()?;
         Some(vec![
-            tr!("box.overlay"),
+            if self.overlay_prompt_window {
+                tr!("box.window_overlay")
+            } else {
+                tr!("box.overlay")
+            },
             format!("{}▏", input.text),
             String::new(),
             tr!("box.overlay_keys"),
@@ -130,9 +182,10 @@ impl App {
             Key::Named(NamedKey::Enter) => {
                 let command = input.take().trim().to_owned();
                 self.overlay_prompt = None;
-                if !command.is_empty()
-                    && let Err(err) = self.open_overlay(Some(command), None, None)
-                {
+                if command.is_empty() {
+                } else if self.overlay_prompt_window {
+                    self.run_window_overlay(command);
+                } else if let Err(err) = self.open_overlay(Some(command), None, None) {
                     self.notify(
                         None,
                         &tr!("toast.cannot_start"),
