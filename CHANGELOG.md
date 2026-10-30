@@ -81,6 +81,8 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   An agent or a script that asks for a review itself (`review_plan`, `ftermctl review`) still gets the tab.
 
 ### Fixed
+- A new `fterm.lua` is read at once. Before, when the config folder did not exist at the start, fterm did not see
+  a config that you made later, until you started it again. Now fterm makes the folder at the start.
 - The box of "Connect over SSH…" (and the new command boxes of overlays and companions) now moves its cursor:
   the arrows, Home, End, and Delete edit the text, and Ctrl+V (or Shift+Insert) pastes. The box that renames a
   workspace too. Before, you could only type

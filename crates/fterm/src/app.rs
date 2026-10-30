@@ -1532,7 +1532,9 @@ impl App {
         let Some(dir) = self.config_path.parent().map(std::path::Path::to_path_buf) else {
             return;
         };
-        if !dir.exists() {
+        // No folder yet (no config): make it, so a config written there later is read at once.
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            tracing::warn!("cannot make the config folder {}: {err}", dir.display());
             return;
         }
         let file = self.config_path.file_name().map(|f| f.to_owned());
