@@ -206,6 +206,8 @@ pub struct Mux {
     next_id: u64,
     scratch: Option<Scratch>,
     window_overlay: Option<WindowOverlay>,
+    /// The dashboard of the window (a scene over the whole tab area) and whether it is shown.
+    dashboard: Option<(PaneId, bool)>,
     /// Where companions are in their pane, and their size in percent.
     companion_place: (Direction, u8),
 }
@@ -218,6 +220,7 @@ impl Default for Mux {
             next_id: 0,
             scratch: None,
             window_overlay: None,
+            dashboard: None,
             companion_place: (Direction::Down, 40),
         }
     }
@@ -346,6 +349,9 @@ impl Mux {
         if let Some(s) = self.scratch.filter(|s| s.shown) {
             return Some(s.pane);
         }
+        if let Some((pane, true)) = self.dashboard {
+            return Some(pane);
+        }
         if let Some(w) = self.window_overlay.filter(|w| w.shown) {
             return Some(w.pane);
         }
@@ -376,6 +382,23 @@ impl Mux {
         let w = self.window_overlay.as_mut()?;
         w.shown = !w.shown;
         Some(w.shown)
+    }
+
+    /// Makes `pane` the dashboard of the window, shown.
+    pub fn set_dashboard(&mut self, pane: PaneId) {
+        self.dashboard = Some((pane, true));
+    }
+
+    /// Shows or hides the dashboard: `Some(shown)` after the change, `None` when there is none.
+    pub fn toggle_dashboard(&mut self) -> Option<bool> {
+        let (_, shown) = self.dashboard.as_mut()?;
+        *shown = !*shown;
+        Some(*shown)
+    }
+
+    /// The dashboard and whether it is shown.
+    pub fn dashboard(&self) -> Option<(PaneId, bool)> {
+        self.dashboard
     }
 
     /// The overlay of the window and whether it is shown.
@@ -417,6 +440,7 @@ impl Mux {
     pub fn is_floating(&self, pane: PaneId) -> bool {
         self.scratch_pane() == Some(pane)
             || self.window_overlay.is_some_and(|w| w.pane == pane)
+            || self.dashboard.is_some_and(|(p, _)| p == pane)
             || self
                 .all_tabs()
                 .any(|t| t.overlay.is_some_and(|o| o.pane == pane))
@@ -458,6 +482,9 @@ impl Mux {
         }
         if let Some(w) = self.window_overlay.filter(|w| w.shown) {
             out.push((w.pane, overlay_rect(area, w.size, min)));
+        }
+        if let Some((pane, true)) = self.dashboard {
+            out.push((pane, area));
         }
         if let Some(s) = self.scratch.filter(|s| s.shown) {
             out.push((s.pane, scratch_rect(area, s.size, min.1)));
@@ -738,6 +765,10 @@ impl Mux {
         }
         if self.window_overlay.is_some_and(|w| w.pane == pane) {
             self.window_overlay = None;
+            return Closed::Floating;
+        }
+        if self.dashboard.is_some_and(|(p, _)| p == pane) {
+            self.dashboard = None;
             return Closed::Floating;
         }
         let Some((w, index)) = self.find_pane(pane) else {
@@ -1510,6 +1541,40 @@ mod tests {
         mux.close_pane(b);
         assert_eq!(mux.pane_rects(AREA), [(panes[0], AREA)]);
         assert_eq!(mux.tabs()[0].zoomed, None);
+    }
+
+    #[test]
+    fn the_dashboard_covers_the_tab_area_and_has_the_keys() {
+        let (mut mux, panes) = mux_with(1);
+        let w = mux.new_pane_id();
+        mux.set_window_overlay(w, 80);
+        let d = mux.new_pane_id();
+        assert_eq!(mux.toggle_dashboard(), None);
+        mux.set_dashboard(d);
+        assert_eq!(mux.input_pane(), Some(d), "over the window overlay");
+        assert!(mux.is_floating(d));
+        let rects = mux.floating_rects(AREA, (0.0, 0.0));
+        assert_eq!(rects.last(), Some(&(d, AREA)), "on top, the whole area");
+        // The scratch is still above it.
+        let s = mux.new_pane_id();
+        mux.set_scratch(s, 50);
+        assert_eq!(mux.input_pane(), Some(s));
+        mux.toggle_scratch();
+        assert_eq!(mux.toggle_dashboard(), Some(false));
+        assert_eq!(
+            mux.input_pane(),
+            Some(w),
+            "hidden: the window overlay has the keys"
+        );
+        assert!(
+            !mux.floating_rects(AREA, (0.0, 0.0))
+                .iter()
+                .any(|(p, _)| *p == d)
+        );
+        assert_eq!(mux.dashboard(), Some((d, false)));
+        assert_eq!(mux.close_pane(d), Closed::Floating);
+        assert_eq!(mux.dashboard(), None);
+        let _ = panes;
     }
 
     #[test]

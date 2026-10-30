@@ -250,13 +250,15 @@ pub enum BuiltinAction {
     RecentPanes,
     /// Goes back to the pane that had the keys before (again: back here).
     PreviousPane,
+    /// Shows or hides the dashboard (tiles of panes, commands, and buttons over the window).
+    ToggleDashboard,
     /// "Connect over SSH…": a box for `user@host`, then its panes.
     ConnectSsh,
 }
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 73] = [
+    pub const ALL: [BuiltinAction; 74] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -330,6 +332,7 @@ impl BuiltinAction {
         Self::NextCompanion,
         Self::RecentPanes,
         Self::PreviousPane,
+        Self::ToggleDashboard,
     ];
 
     /// The name in the config, for example `new_tab` or `select_tab_3`.
@@ -407,6 +410,7 @@ impl BuiltinAction {
             Self::NextCompanion => "next_companion",
             Self::RecentPanes => "recent_panes",
             Self::PreviousPane => "previous_pane",
+            Self::ToggleDashboard => "toggle_dashboard",
             Self::ConnectSsh => "connect_ssh",
         };
         name.to_owned()
@@ -532,6 +536,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+shift+m", "next_companion"),
     ("ctrl+shift+h", "recent_panes"),
     ("alt+`", "previous_pane"),
+    ("ctrl+shift+d", "toggle_dashboard"),
 ];
 
 impl Keymap {
@@ -817,6 +822,12 @@ mod tests {
                 BuiltinAction::PreviousPane,
                 "Go back to the previous pane",
                 "alt+`",
+            ),
+            (
+                "toggle_dashboard",
+                BuiltinAction::ToggleDashboard,
+                "Dashboard: show or hide",
+                "ctrl+shift+d",
             ),
         ] {
             assert_eq!(BuiltinAction::from_name(name), Some(action));

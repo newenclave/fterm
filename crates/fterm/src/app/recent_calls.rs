@@ -50,7 +50,7 @@ pub(super) fn pane_row(info: &PaneInfo<'_>) -> PopupRow {
 impl App {
     /// The panes that the list may show, in the order of the tabs: the panes of each layout, then its companions
     /// (not overlays or the scratch: they go with their key).
-    fn listed_panes(&self) -> Vec<PaneId> {
+    pub(super) fn listed_panes(&self) -> Vec<PaneId> {
         let Some(running) = &self.running else {
             return Vec::new();
         };

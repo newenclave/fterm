@@ -100,11 +100,14 @@ pub enum UserEvent {
         String,
         Result<std::sync::Arc<fterm_server::client::MuxClient>, String>,
     ),
+    /// A command of the dashboard ended (a command tile or a button).
+    Dashboard(dashboard_calls::DashDone),
 }
 
 mod ai_calls;
 mod api_calls;
 mod companion_calls;
+mod dashboard_calls;
 mod link_calls;
 mod markup_calls;
 mod mux_calls;
@@ -575,6 +578,8 @@ pub struct App {
     frame_stats: crate::redraw::FrameStats,
     /// The panes that had the keys, for "go back" and the pane list.
     recent: crate::recent::Recent,
+    /// The dashboard: its tiles, the results of its commands, the activity of panes.
+    dash: dashboard_calls::DashState,
     /// The title that the window shows now (the system call only when it changes).
     window_title_shown: std::cell::RefCell<String>,
     /// `ai_ask` calls that wait for the end of the answer.
@@ -705,6 +710,7 @@ impl App {
             background: crate::redraw::Throttle::new(1.0),
             frame_stats: crate::redraw::FrameStats::default(),
             recent: crate::recent::Recent::default(),
+            dash: dashboard_calls::DashState::default(),
             window_title_shown: std::cell::RefCell::new(String::new()),
             ai_waits: Vec::new(),
             reviews: Vec::new(),
@@ -3063,6 +3069,7 @@ impl App {
             A::NextCompanion => return self.next_companion(),
             A::RecentPanes => return self.open_recent_popup(),
             A::PreviousPane => return self.go_previous_pane(),
+            A::ToggleDashboard => return self.toggle_dashboard(),
             A::ToggleScratch => return self.toggle_scratch(),
             A::ToggleOriginalColors => {
                 self.original_colors = !self.original_colors;
@@ -4193,6 +4200,13 @@ impl App {
                 }
             }
         }
+        // The dashboard: a click on a tile or a button.
+        if button == MouseButton::Left
+            && state == ElementState::Pressed
+            && self.dashboard_click(event_loop)
+        {
+            return;
+        }
         // A press in another pane gives it the focus first.
         if state == ElementState::Pressed
             && let Some(pane) = self.pane_under_mouse()
@@ -5110,6 +5124,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::AiCommand(id, event) => return self.command_event(id, event),
             UserEvent::MuxGone(remote) => return self.mux_gone(&remote),
             UserEvent::MuxConnected(remote, result) => return self.mux_connected(&remote, result),
+            UserEvent::Dashboard(done) => return self.dashboard_done(done),
             other => other,
         };
         let Some(running) = &mut self.running else {
@@ -5130,12 +5145,22 @@ impl ApplicationHandler<UserEvent> for App {
             | UserEvent::Ai(..)
             | UserEvent::AiCommand(..)
             | UserEvent::MuxGone(_)
-            | UserEvent::MuxConnected(..) => {
+            | UserEvent::MuxConnected(..)
+            | UserEvent::Dashboard(_) => {
                 return;
             }
         };
         match event {
             TermEvent::Redraw => {
+                // The activity chart of the dashboard.
+                self.dash
+                    .activity
+                    .entry(pane)
+                    .or_default()
+                    .note(Instant::now());
+                let Some(running) = &mut self.running else {
+                    return;
+                };
                 // Every pane on the screen, not only the active one (a split next to it, an overlay).
                 if running.is_visible(pane) {
                     running.window.request_redraw();
@@ -5364,6 +5389,9 @@ impl ApplicationHandler<UserEvent> for App {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
         // Changes off the screen that wait for a frame.
+        if let Some(at) = self.dashboard_tick(now) {
+            wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
+        }
         if let Some(at) = self.background.due() {
             if now >= at {
                 if let Some(running) = &self.running {
@@ -5578,6 +5606,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if let Some(action) = action {
                     self.run_action(event_loop, action);
+                    return;
+                }
+                if self.dashboard_shown().is_some() {
+                    self.dashboard_key(event_loop, &event);
                     return;
                 }
                 if self.active_review().is_some() {

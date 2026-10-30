@@ -503,6 +503,82 @@ pub struct AgentOut {
     pub calls: Vec<ApiCall>,
 }
 
+/// The dashboard (`dashboard` in the config): its tiles in order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DashboardConfig {
+    /// Columns of tiles; 0 = fterm chooses from the number of tiles and the window.
+    pub columns: usize,
+    pub tiles: Vec<DashTile>,
+}
+
+impl Default for DashboardConfig {
+    fn default() -> Self {
+        Self {
+            columns: 0,
+            tiles: vec![
+                DashTile::Panes(PaneFilter::Agents),
+                DashTile::Panes(PaneFilter::Busy),
+            ],
+        }
+    }
+}
+
+/// One entry of `dashboard.tiles`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DashTile {
+    /// A tile for each pane that matches.
+    Panes(PaneFilter),
+    /// The output of a command, run again every `every` seconds.
+    Command {
+        title: String,
+        command: String,
+        every: u64,
+    },
+    /// Buttons that run something.
+    Buttons {
+        title: String,
+        buttons: Vec<DashButton>,
+    },
+}
+
+/// Which panes a `panes` tile shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaneFilter {
+    /// Panes with an agent in them.
+    Agents,
+    /// Panes where a command runs, or the last one failed.
+    Busy,
+    All,
+    Match(PaneMatch),
+}
+
+/// A pane matches when each given text is in its program, title, workspace, or profile (lower case).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PaneMatch {
+    pub program: Option<String>,
+    pub title: Option<String>,
+    pub workspace: Option<String>,
+    pub profile: Option<String>,
+}
+
+/// A button of the dashboard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DashButton {
+    pub label: String,
+    pub press: Press,
+    /// Ask first.
+    pub confirm: bool,
+}
+
+/// What a button does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Press {
+    /// A command for the shell: its result as a toast, or in an overlay (`show = "overlay"`) to see the output.
+    Run { command: String, overlay: bool },
+    /// An action, as in `keys` and `commands`.
+    Action(Action),
+}
+
 /// A line in the command palette from the config.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserCommand {
@@ -552,6 +628,8 @@ pub struct Config {
     pub profiles: Vec<Profile>,
     pub keys: Keymap,
     pub commands: Vec<UserCommand>,
+    /// The dashboard (Ctrl+Shift+D).
+    pub dashboard: DashboardConfig,
     /// Load the shell integration script (PowerShell now; bash and zsh by hand, see the docs).
     pub shell_integration: bool,
     pub notifications: NotificationConfig,
@@ -612,6 +690,7 @@ impl Default for Config {
             profiles: Vec::new(),
             keys: Keymap::with_defaults(),
             commands: Vec::new(),
+            dashboard: DashboardConfig::default(),
             shell_integration: true,
             notifications: NotificationConfig::default(),
             panels: PanelsConfig::default(),
@@ -1431,6 +1510,9 @@ impl Reader {
                 config.keys.bind(chord, action);
             }
         }
+        if let Some(dash) = table_field(root, "dashboard", "dashboard")? {
+            config.dashboard = self.dashboard(&dash)?;
+        }
         if let Some(commands) = table_field(root, "commands", "commands")? {
             for (i, value) in list(&commands) {
                 let path = format!("commands[{i}]");
@@ -1490,6 +1572,139 @@ impl Reader {
     }
 
     /// `action` in a key or a command. `Ok(None)` = "none".
+    fn dashboard(&mut self, table: &Table) -> Result<DashboardConfig, String> {
+        let mut dash = DashboardConfig::default();
+        if let Some(n) = number_field(table, "columns", "dashboard.columns")? {
+            dash.columns = n.round().clamp(0.0, 12.0) as usize;
+        }
+        let Some(tiles) = table_field(table, "tiles", "dashboard.tiles")? else {
+            return Ok(dash);
+        };
+        dash.tiles.clear();
+        for (i, value) in list(&tiles) {
+            let path = format!("dashboard.tiles[{i}]");
+            let Value::Table(tile) = value else {
+                return Err(format!(
+                    "{path}: expected a table, got {}",
+                    value.type_name()
+                ));
+            };
+            dash.tiles.push(self.dash_tile(&tile, &path)?);
+        }
+        Ok(dash)
+    }
+
+    fn dash_tile(&mut self, tile: &Table, path: &str) -> Result<DashTile, String> {
+        let title = string_field(tile, "title", &format!("{path}.title"))?;
+        let panes: Value = tile
+            .get("panes")
+            .map_err(|err| format!("{path}.panes: {err}"))?;
+        match panes {
+            Value::Nil => {}
+            Value::String(name) => {
+                let filter = match name.to_string_lossy().as_str() {
+                    "agents" => PaneFilter::Agents,
+                    "busy" => PaneFilter::Busy,
+                    "all" => PaneFilter::All,
+                    other => {
+                        return Err(format!(
+                            "{path}.panes: must be \"agents\", \"busy\", \"all\", or a table, got `{other}`"
+                        ));
+                    }
+                };
+                return Ok(DashTile::Panes(filter));
+            }
+            Value::Table(m) => {
+                let field = |key: &str| -> Result<Option<String>, String> {
+                    Ok(string_field(&m, key, &format!("{path}.panes.{key}"))?
+                        .map(|t| t.trim().to_lowercase())
+                        .filter(|t| !t.is_empty()))
+                };
+                return Ok(DashTile::Panes(PaneFilter::Match(PaneMatch {
+                    program: field("program")?,
+                    title: field("title")?,
+                    workspace: field("workspace")?,
+                    profile: field("profile")?,
+                })));
+            }
+            other => {
+                return Err(format!(
+                    "{path}.panes: expected a name or a table, got {}",
+                    other.type_name()
+                ));
+            }
+        }
+        if let Some(command) = string_field(tile, "command", &format!("{path}.command"))? {
+            let every = match number_field(tile, "every", &format!("{path}.every"))? {
+                None => 60,
+                Some(n) if n >= 5.0 => n.round() as u64,
+                Some(n) => return Err(format!("{path}.every: at least 5 seconds, got {n}")),
+            };
+            return Ok(DashTile::Command {
+                title: title.unwrap_or_else(|| command.clone()),
+                command,
+                every,
+            });
+        }
+        if let Some(list_table) = table_field(tile, "buttons", &format!("{path}.buttons"))? {
+            let mut buttons = Vec::new();
+            for (b, value) in list(&list_table) {
+                let path = format!("{path}.buttons[{b}]");
+                let Value::Table(button) = value else {
+                    return Err(format!(
+                        "{path}: expected a table, got {}",
+                        value.type_name()
+                    ));
+                };
+                let label = string_field(&button, "label", &format!("{path}.label"))?
+                    .ok_or_else(|| format!("{path}.label: missing"))?;
+                let confirm =
+                    bool_field(&button, "confirm", &format!("{path}.confirm"))?.unwrap_or(false);
+                let press = match string_field(&button, "run", &format!("{path}.run"))? {
+                    Some(command) => {
+                        let overlay = match string_field(&button, "show", &format!("{path}.show"))?
+                            .as_deref()
+                        {
+                            None | Some("toast") => false,
+                            Some("overlay") => true,
+                            Some(other) => {
+                                return Err(format!(
+                                    "{path}.show: must be \"toast\" or \"overlay\", got `{other}`"
+                                ));
+                            }
+                        };
+                        Press::Run { command, overlay }
+                    }
+                    None => {
+                        let has_action = !matches!(
+                            button
+                                .get::<Value>("action")
+                                .map_err(|err| format!("{path}.action: {err}"))?,
+                            Value::Nil
+                        );
+                        if !has_action {
+                            return Err(format!("{path}: needs `run` (a command) or `action`"));
+                        }
+                        match self.action(&button, &format!("{path}.action"))? {
+                            Some(action) => Press::Action(action),
+                            None => return Err(format!("{path}.action: \"none\" is not a button")),
+                        }
+                    }
+                };
+                buttons.push(DashButton {
+                    label,
+                    press,
+                    confirm,
+                });
+            }
+            return Ok(DashTile::Buttons {
+                title: title.unwrap_or_default(),
+                buttons,
+            });
+        }
+        Err(format!("{path}: needs `panes`, `command`, or `buttons`"))
+    }
+
     fn action(&mut self, table: &Table, path: &str) -> Result<Option<Action>, String> {
         let value: Value = table
             .get("action")
@@ -2491,6 +2706,115 @@ mod tests {
         // Out of 20..100: the nearest end.
         let config = load("return { overlay_size = 5, scratch_size = 300 }").config;
         assert_eq!((config.overlay_size, config.scratch_size), (20, 100));
+    }
+
+    #[test]
+    fn the_dashboard_has_agents_and_busy_panes_by_default() {
+        let dash = load("return {}").config.dashboard;
+        assert_eq!(dash.columns, 0);
+        assert_eq!(
+            dash.tiles,
+            [
+                DashTile::Panes(PaneFilter::Agents),
+                DashTile::Panes(PaneFilter::Busy)
+            ]
+        );
+    }
+
+    #[test]
+    fn dashboard_tiles_from_the_config() {
+        let loaded = load(
+            r#"return { dashboard = { columns = 3, tiles = {
+                { panes = "all" },
+                { panes = { program = "cargo", workspace = "Work" } },
+                { title = "PRs", command = "gh pr list", every = 30 },
+                { title = "Log", command = "tail -n 5 x.log" },
+                { title = "Publish", buttons = {
+                    { label = "Staging", run = "gh workflow run p.yml", confirm = true },
+                    { label = "See it", run = "gh run list", show = "overlay" },
+                    { label = "Tab", action = "new_tab" },
+                } },
+            } } }"#,
+        );
+        let dash = &loaded.config.dashboard;
+        assert_eq!(dash.columns, 3);
+        assert_eq!(dash.tiles[0], DashTile::Panes(PaneFilter::All));
+        assert_eq!(
+            dash.tiles[1],
+            DashTile::Panes(PaneFilter::Match(PaneMatch {
+                program: Some("cargo".into()),
+                workspace: Some("work".into()),
+                ..Default::default()
+            })),
+            "matches have no case"
+        );
+        assert_eq!(
+            dash.tiles[2],
+            DashTile::Command {
+                title: "PRs".into(),
+                command: "gh pr list".into(),
+                every: 30
+            }
+        );
+        assert!(
+            matches!(&dash.tiles[3], DashTile::Command { every: 60, .. }),
+            "60 s by default"
+        );
+        let DashTile::Buttons { title, buttons } = &dash.tiles[4] else {
+            panic!("{:?}", dash.tiles[4]);
+        };
+        assert_eq!(title, "Publish");
+        assert_eq!(buttons.len(), 3);
+        assert_eq!(buttons[0].label, "Staging");
+        assert!(buttons[0].confirm);
+        assert_eq!(
+            buttons[0].press,
+            Press::Run {
+                command: "gh workflow run p.yml".into(),
+                overlay: false
+            }
+        );
+        assert_eq!(
+            buttons[1].press,
+            Press::Run {
+                command: "gh run list".into(),
+                overlay: true
+            }
+        );
+        assert_eq!(
+            buttons[2].press,
+            Press::Action(Action::Builtin(BuiltinAction::NewTab))
+        );
+        assert!(!buttons[2].confirm);
+    }
+
+    #[test]
+    fn bad_dashboard_tiles_say_where() {
+        for (source, want) in [
+            (
+                r#"return { dashboard = { tiles = { { panes = "some" } } } }"#,
+                "dashboard.tiles[1].panes",
+            ),
+            (
+                r#"return { dashboard = { tiles = { { title = "x" } } } }"#,
+                "dashboard.tiles[1]",
+            ),
+            (
+                r#"return { dashboard = { tiles = { { title = "x", command = "a", every = 1 } } } }"#,
+                "dashboard.tiles[1].every",
+            ),
+            (
+                r#"return { dashboard = { tiles = { { buttons = { { label = "x" } } } } } }"#,
+                "dashboard.tiles[1].buttons[1]",
+            ),
+            (
+                r#"return { dashboard = { tiles = { { buttons = { { run = "x" } } } } } }"#,
+                "dashboard.tiles[1].buttons[1].label",
+            ),
+        ] {
+            let err = error(source);
+            assert!(err.contains(want), "{source}: {err}");
+        }
     }
 
     #[test]
