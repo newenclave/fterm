@@ -697,7 +697,11 @@ impl App {
             "tab": tab,
             "workspace": running.mux.pane_place(pane).map(|(ws, _)| ws),
             "program": display_name(p.session.program()),
-            "kind": if p.review.is_some() {
+            "kind": if running.mux.scratch_pane() == Some(pane) {
+                "scratch"
+            } else if running.mux.is_floating(pane) {
+                "overlay"
+            } else if p.review.is_some() {
                 "review"
             } else if p.scene.is_some() {
                 "scene"
@@ -734,11 +738,18 @@ impl App {
                     .mux
                     .pane_place(tab.active_pane)
                     .map_or((0, ""), |(ws, i)| (i + 1, ws));
+                // An overlay is listed with its tab, after the panes, with the pane under it.
+                let overlay = tab.overlay.map(|o| {
+                    let mut pane = self.pane_json(o.pane, number);
+                    pane["over"] = json!(o.over.0);
+                    pane
+                });
                 let panes: Vec<Value> = tab
                     .layout
                     .panes()
                     .into_iter()
                     .map(|pane| self.pane_json(pane, number))
+                    .chain(overlay)
                     .collect();
                 json!({
                     "tab": number,
@@ -752,12 +763,19 @@ impl App {
                 })
             })
             .collect();
-        json!({
+        let mut out = json!({
             "pid": std::process::id(),
             "active_pane": running.mux.active_pane().map(|p| p.0),
             "workspace": running.mux.workspace(),
             "tabs": tabs,
-        })
+        });
+        // The scratch shell of the window (not in a tab), and whether it is shown.
+        if let Some(pane) = running.mux.scratch_pane() {
+            let mut scratch = self.pane_json(pane, 0);
+            scratch["shown"] = json!(running.mux.input_pane() == Some(pane));
+            out["scratch"] = scratch;
+        }
+        out
     }
 
     fn api_spawn(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {

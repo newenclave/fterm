@@ -40,6 +40,8 @@ pub struct Overlay {
 struct Scratch {
     pane: PaneId,
     shown: bool,
+    /// Its height in percent of the tab.
+    size: u8,
 }
 
 /// The place of an overlay: `size` percent of the pane under it, in its middle, at least `min` (width, height)
@@ -289,9 +291,13 @@ impl Mux {
         self.scratch.map(|s| s.pane)
     }
 
-    /// Makes `pane` the scratch, shown.
-    pub fn set_scratch(&mut self, pane: PaneId) {
-        self.scratch = Some(Scratch { pane, shown: true });
+    /// Makes `pane` the scratch, shown, `size` percent of the tab high.
+    pub fn set_scratch(&mut self, pane: PaneId, size: u8) {
+        self.scratch = Some(Scratch {
+            pane,
+            shown: true,
+            size: size.clamp(1, 100),
+        });
     }
 
     /// Shows or hides the scratch: `Some(shown)` after the change, `None` when there is no scratch yet.
@@ -303,12 +309,7 @@ impl Mux {
 
     /// The overlay of the active tab (over its pane, when that pane is seen) and the scratch when shown, with their
     /// places in `area` (the scratch last: it is on top). `min` is the smallest size of a floating pane.
-    pub fn floating_rects(
-        &self,
-        area: Rect,
-        scratch_size: u8,
-        min: (f32, f32),
-    ) -> Vec<(PaneId, Rect)> {
+    pub fn floating_rects(&self, area: Rect, min: (f32, f32)) -> Vec<(PaneId, Rect)> {
         let mut out = Vec::new();
         if let Some(o) = self.overlay()
             && let Some((_, rect)) = self
@@ -319,7 +320,7 @@ impl Mux {
             out.push((o.pane, overlay_rect(rect, o.size, min)));
         }
         if let Some(s) = self.scratch.filter(|s| s.shown) {
-            out.push((s.pane, scratch_rect(area, scratch_size, min.1)));
+            out.push((s.pane, scratch_rect(area, s.size, min.1)));
         }
         out
     }
@@ -723,7 +724,7 @@ mod tests {
             "no scratch yet: the app makes one"
         );
         let scratch = mux.new_pane_id();
-        mux.set_scratch(scratch);
+        mux.set_scratch(scratch, 50);
         assert_eq!(mux.input_pane(), Some(scratch), "a new scratch is shown");
         assert_eq!(mux.toggle_scratch(), Some(false));
         assert_eq!(mux.input_pane(), Some(panes[0]));
@@ -748,15 +749,15 @@ mod tests {
         let (mut mux, panes) = mux_with(1);
         let b = mux.new_pane_id();
         mux.split_active(b, Direction::Right);
-        assert!(mux.floating_rects(area, 50, (100.0, 60.0)).is_empty());
+        assert!(mux.floating_rects(area, (100.0, 60.0)).is_empty());
         let overlay = mux.new_pane_id();
         mux.open_overlay(overlay, 80);
         // Over b (the right half: x 500..1000): 80% of it, in the middle.
-        let rects = mux.floating_rects(area, 50, (100.0, 60.0));
+        let rects = mux.floating_rects(area, (100.0, 60.0));
         assert_eq!(rects, [(overlay, Rect::new(550.0, 60.0, 400.0, 480.0))]);
         let scratch = mux.new_pane_id();
-        mux.set_scratch(scratch);
-        let rects = mux.floating_rects(area, 50, (100.0, 60.0));
+        mux.set_scratch(scratch, 50);
+        let rects = mux.floating_rects(area, (100.0, 60.0));
         assert_eq!(rects.len(), 2);
         assert_eq!(
             rects[1],

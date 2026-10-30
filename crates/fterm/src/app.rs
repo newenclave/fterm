@@ -103,6 +103,7 @@ mod api_calls;
 mod link_calls;
 mod markup_calls;
 mod mux_calls;
+mod overlay_calls;
 mod review_calls;
 mod session_calls;
 mod workspace_calls;
@@ -165,7 +166,13 @@ struct Running {
 
 impl Running {
     fn active_pane(&self) -> Option<&Pane> {
-        self.panes.get(&self.mux.active_pane()?)
+        self.panes.get(&self.mux.input_pane()?)
+    }
+
+    /// The overlay of the active tab and the scratch (when shown), with their places.
+    fn floating_rects(&self) -> Vec<(PaneId, Rect)> {
+        let min = overlay_calls::floating_min(self.renderer.cell(), self.renderer.padding());
+        self.mux.floating_rects(self.tab_area(), min)
     }
 
     fn session(&self) -> Option<&Session> {
@@ -211,9 +218,17 @@ impl Running {
         )
     }
 
-    /// The place of the active pane in the window.
+    /// The place of the pane with the keys in the window (an overlay or the scratch when one has them).
     fn pane_area(&self) -> Rect {
         let area = self.tab_area();
+        let input = self.mux.input_pane();
+        if let Some((_, rect)) = self
+            .floating_rects()
+            .into_iter()
+            .find(|(pane, _)| Some(*pane) == input)
+        {
+            return rect;
+        }
         let active = self.mux.active_pane();
         self.mux
             .pane_rects(area)
@@ -243,11 +258,19 @@ impl Running {
         }
         let area = self.tab_area();
         let cell = cell_px(&self.renderer);
+        let floating = self.floating_rects();
         for tab in self.mux.all_tabs() {
             let rects = match tab.zoomed {
                 Some(pane) => vec![(pane, area)],
                 None => tab.layout.rects(area),
             };
+            let rects = rects.into_iter().chain(
+                floating
+                    .iter()
+                    .copied()
+                    .filter(|(p, _)| tab.overlay.is_some_and(|o| o.pane == *p)),
+            );
+            let rects: Vec<(PaneId, Rect)> = rects.collect();
             for (id, rect) in rects {
                 let size = self.grid_for(rect);
                 if let Some(pane) = self.panes.get(&id)
@@ -467,6 +490,10 @@ pub struct App {
     /// The old text of a restored pane, for the next `spawn_pane` (Phase 9b).
     spawn_intro: Vec<u8>,
     spawn_cwd: Option<String>,
+    /// A command for the next new pane: the shell runs it and ends (an overlay).
+    spawn_command: Option<String>,
+    /// "Run in an overlay…": the command that is typed.
+    overlay_prompt: Option<crate::ai_chat::InputBox>,
     /// The last hint: (typed text, folder, history changes) -> the rest of the command.
     hint_cache: RefCell<Option<HintCache>>,
     /// Grows when a command is saved, so the hint cache knows it is old.
@@ -600,6 +627,8 @@ impl App {
             history_popup: None,
             spawn_intro: Vec::new(),
             spawn_cwd: None,
+            spawn_command: None,
+            overlay_prompt: None,
             hint_cache: RefCell::new(None),
             history_changes: 0,
             close_stopped_at: None,
@@ -2118,6 +2147,18 @@ impl App {
             ..options
         };
         let socket = self.api_socket();
+        // An overlay: the shell runs the command and ends.
+        if let Some(command) = &self.spawn_command {
+            let shell = options.program.clone().unwrap_or_else(|| {
+                if cfg!(windows) {
+                    "powershell.exe".to_owned()
+                } else {
+                    std::env::var("SHELL").unwrap_or_else(|_| "sh".to_owned())
+                }
+            });
+            options.args = overlay_calls::shell_run_args(&shell, command);
+            options.program = Some(shell);
+        }
         if let Some(dir) = self.spawn_cwd.take() {
             options.cwd = Some(std::path::PathBuf::from(dir)).filter(|dir| dir.is_dir());
         }
@@ -2323,6 +2364,10 @@ impl App {
             return false;
         };
         let closed = running.panes.remove(&pane).and_then(|p| p.mux);
+        // The overlay over it ends with it.
+        if let Some(overlay) = running.mux.overlay_of(pane) {
+            running.panes.remove(&overlay);
+        }
         let alive = running.mux.close_pane(pane) != Closed::LastTab;
         self.close_mux_pane(closed);
         let Some(running) = &mut self.running else {
@@ -2715,6 +2760,19 @@ impl App {
                 },
             );
         }
+        // A profile of a program for a moment (a file manager): an overlay over the active pane.
+        if self.profile(profile).is_some_and(|p| p.overlay) {
+            if let Err(err) = self.open_overlay(None, profile, None) {
+                self.notify(
+                    None,
+                    &tr!("toast.cannot_start"),
+                    &format!("{err:#}"),
+                    Level::Error,
+                    Source::App,
+                );
+            }
+            return;
+        }
         let result = match place {
             SpawnWhere::Tab => self.new_tab(profile).map(|_| ()),
             SpawnWhere::SplitRight => self.split(Direction::Right, profile),
@@ -2888,6 +2946,8 @@ impl App {
             A::RenameWorkspace => return self.start_workspace_prompt(),
             A::StopMux => return self.ask_stop_mux(),
             A::ConnectSsh => return self.start_ssh_prompt(),
+            A::RunInOverlay => return self.start_overlay_prompt(),
+            A::ToggleScratch => return self.toggle_scratch(),
             A::ToggleOriginalColors => {
                 self.original_colors = !self.original_colors;
                 let (title, body) = if self.original_colors {
@@ -2912,7 +2972,8 @@ impl App {
                 return;
             }
             A::ClosePane => {
-                if let Some(pane) = running.mux.active_pane() {
+                // In an overlay or the scratch: that one closes, not the pane under it.
+                if let Some(pane) = running.mux.input_pane() {
                     self.close(event_loop, CloseTarget::Pane(pane));
                 }
                 return;
@@ -2966,8 +3027,6 @@ impl App {
             | A::InstallClaudeHooks
             | A::ShowClipboardPicture
             | A::ShowPaneScreenshot
-            | A::RunInOverlay
-            | A::ToggleScratch
             | A::NewScene => {}
             A::ToggleRemoteControl => {
                 let Some(pane) = running.mux.active_pane() else {
@@ -3898,6 +3957,18 @@ impl App {
     fn pane_under_mouse(&self) -> Option<PaneId> {
         let running = self.running.as_ref()?;
         let (x, y) = (self.mouse.position.0 as f32, self.mouse.position.1 as f32);
+        // An overlay or the scratch is on top; while one has the keys, the panes under it get no clicks.
+        let floating = running.floating_rects();
+        if let Some((pane, _)) = floating.iter().rev().find(|(_, r)| r.contains(x, y)) {
+            return Some(*pane);
+        }
+        if running
+            .mux
+            .input_pane()
+            .is_some_and(|p| floating.iter().any(|(f, _)| *f == p))
+        {
+            return None;
+        }
         running
             .mux
             .pane_rects(running.tab_area())
@@ -4414,6 +4485,7 @@ impl App {
             .or_else(|| self.name_prompt_lines())
             .or_else(|| self.workspace_prompt_lines())
             .or_else(|| self.ssh_prompt_lines())
+            .or_else(|| self.overlay_prompt_lines())
             .or_else(|| self.connecting_lines())
             .or_else(|| self.key_prompt_lines())
             .or_else(|| self.access_question_lines())
@@ -4484,6 +4556,7 @@ impl App {
         };
         let running = self.running.as_mut().unwrap();
         let area = running.tab_area();
+        let floating = running.floating_rects();
         let Running {
             gpu,
             renderer,
@@ -4521,6 +4594,13 @@ impl App {
             .unwrap_or(0);
         let pane_rects = mux.pane_rects(area);
         let active_pane = mux.active_pane();
+        // The pane with the keys (an overlay or the scratch when shown), and the floating panes with the pane
+        // under the overlay (it is dim).
+        let input_pane = mux.input_pane();
+        let under_overlay = mux
+            .overlay()
+            .and_then(|o| pane_rects.iter().find(|(p, _)| *p == o.over))
+            .map(|(_, r)| *r);
         let zoomed = mux.active_tab().is_some_and(|t| t.zoomed.is_some());
         let dividers: Vec<Rect> = match mux.active_tab() {
             Some(tab) if !zoomed => tab
@@ -4572,9 +4652,13 @@ impl App {
                 })?;
                 // The tool bars of picture panes: drawn above the pictures.
                 let mut picture_bars = Vec::new();
-                for (id, rect) in &pane_rects {
+                let pane_frame = |parts: &mut fterm_render::FrameParts<'_>,
+                                  id: &PaneId,
+                                  rect: &Rect,
+                                  picture_bars: &mut Vec<(String, Rect, usize, usize)>|
+                 -> Result<(), fterm_render::atlas::AtlasFull> {
                     if let Some(pane) = panes.get(id) {
-                        let is_active = Some(*id) == active_pane;
+                        let is_active = Some(*id) == input_pane;
                         let has_keys = focused && is_active && !dock_focused;
                         let harmonize = pane.harmonize && !original_colors;
                         let program_palette = pane.palette_changes.unwrap_or(palette_changes);
@@ -4641,6 +4725,10 @@ impl App {
                             })
                         })?;
                     }
+                    Ok(())
+                };
+                for (id, rect) in &pane_rects {
+                    pane_frame(parts, id, rect, &mut picture_bars)?;
                 }
                 // Hints, labels, the dock, and boxes are above the pictures of the panes.
                 parts.overlays();
@@ -4662,6 +4750,24 @@ impl App {
                     parts.labels(&link_marks.labels, *rect)?;
                 }
                 parts.pane_chrome(&dividers, active_frame);
+                // An overlay over its pane (dim under it) and the scratch on top: each in its own layer, so its
+                // pictures are above what is under it.
+                for (id, rect) in &floating {
+                    parts.layer();
+                    if mux.overlay().is_some_and(|o| o.pane == *id)
+                        && let Some(under) = under_overlay
+                    {
+                        parts.fill(under, 0.7);
+                    }
+                    parts.fill(*rect, 1.0);
+                    let mut bars = Vec::new();
+                    pane_frame(parts, id, rect, &mut bars)?;
+                    parts.pane_chrome(&[], Some(*rect));
+                    parts.layer();
+                    for (text, rect, line, columns) in &bars {
+                        parts.ghost(text, *rect, 0, *line, *columns)?;
+                    }
+                }
                 if let Some(layout) = &dock_layout {
                     parts.dock(
                         &DockView {
@@ -5050,6 +5156,10 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 };
                 running.panes.remove(&pane);
+                // The overlay over it ends with it.
+                if let Some(overlay) = running.mux.overlay_of(pane) {
+                    running.panes.remove(&overlay);
+                }
                 match running.mux.close_pane(pane) {
                     Closed::LastTab => {
                         tracing::info!("the last tab closed, closing the window");
@@ -5214,6 +5324,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if self.ssh_prompt.is_some() {
                     self.ssh_prompt_key(&event);
+                    return;
+                }
+                if self.overlay_prompt.is_some() {
+                    self.overlay_prompt_key(&event);
                     return;
                 }
                 if self.workspace_prompt.is_some() {

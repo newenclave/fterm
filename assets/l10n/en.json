@@ -122,6 +122,8 @@
       "one": "{n} pane ends (also when no window shows it).",
       "other": "{n} panes end (also the ones that no window shows)."
     },
+    "box.overlay": "Run in an overlay (over the active pane):",
+    "box.overlay_keys": "Enter runs it · Esc",
     "box.plan": "{agent} has a plan: {title}",
     "box.plan_dialog": "Esc = the dialog of {agent}",
     "box.plan_editor": "      (there Ctrl+G edits the plan in your editor)",
@@ -316,6 +318,7 @@
     "toast.plan_review_always": "Each plan of plan mode opens in a Review tab. plan_review = \"{mode}\" in fterm.lua keeps it.",
     "toast.plan_review_ask": "fterm asks first: R = review, Esc = the dialog of Claude Code. plan_review = \"{mode}\" in fterm.lua keeps it.",
     "toast.plan_review_never": "Claude Code shows its own dialog. plan_review = \"{mode}\" in fterm.lua keeps it.",
+    "toast.overlay_there": "This tab has an overlay already",
     "toast.picture_failed": "Cannot show the picture",
     "toast.program_runs": "A program runs in this pane",
     "toast.program_runs_body": "The text is copied. Paste it where you need it.",
