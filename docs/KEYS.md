@@ -88,6 +88,15 @@ failed. Which tiles there are is up to you: see `dashboard` in [CONFIG.md](CONFI
 | F5 | Run all command tiles again now. |
 | Esc | Hide the dashboard. |
 
+Enter on a command tile goes into its list (see [Lists with actions](CONFIG.md#lists-with-actions)):
+
+| Key | What it does |
+|---|---|
+| Up, Down, PageUp, PageDown, Home, End | Choose an item. |
+| Enter, a letter | The action of that key on the item (the keys are at the bottom of the tile). With no action on Enter, it opens the first link of the line. |
+| F5 | Run the command again now. |
+| Esc | Back to the tiles. |
+
 A click on a tile chooses it, a second click opens it, and a click on a button presses it. A button with
 `confirm = true` wants a second press.
 

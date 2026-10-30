@@ -25,7 +25,10 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   and a chart of its output), the output of any command (for example `gh pr list`, run again every minute), or
   buttons that run a command or an action (for example a publish workflow, with `confirm = true`). You choose the
   tiles in `dashboard` in `fterm.lua`; by default it shows the agents and the busy panes. Keys 1–9 go to a pane,
-  a–z press buttons, Esc hides it. Scripts and agents add their own tiles with `ftermctl dashboard-tile`, the API
+  a–z press buttons, Esc hides it. A command tile is also a list: Enter goes into it, the arrows choose a line,
+  and your `actions` work on it: open its link, run a program (with the parts of the line as its arguments, never
+  through a shell), or call a Lua function. So the pull requests that wait for your review can show, open, show
+  their diff, and be approved from there. `fterm.run` and `fterm.open` are new in Lua. Scripts and agents add their own tiles with `ftermctl dashboard-tile`, the API
   method `dashboard_tile`, and the MCP tool. See [docs/KEYS.md](docs/KEYS.md#the-dashboard) and
   [docs/CONFIG.md](docs/CONFIG.md#the-dashboard).
 - **Recent panes.** Alt+` goes back to the pane that you used before (in any tab or workspace), and again comes

@@ -204,6 +204,8 @@ A function gets an object `fterm` with these functions:
 | `fterm.copy("text")` | Put text into the clipboard. |
 | `fterm.set_tab_color("#f38ba8", pane)` | Give the tab of a pane a color (no `pane` = the active pane; `"none"` = no color). |
 | `fterm.action("zoom")` | Run an action from the list above. |
+| `fterm.run({ "gh", "pr", "list" })` | Run a program with its arguments (no shell), in the background; the result is a toast. `fterm.run({ { "a" }, { "b", "c" } })` runs them one after another. `{ show = "overlay" }` as the second argument: in an overlay, so you see the output. |
+| `fterm.open("https://...")` | Open a link (other kinds than http and https ask first). |
 
 ```lua
 keys = {
@@ -239,8 +241,9 @@ dashboard = {
     { panes = { program = "cargo" } },
 
     -- The output of a command, run again every `every` seconds (at least 5; 60 by default) while the dashboard
-    -- is shown. Green when it exits with 0, red when not.
-    { title = "PRs to review", command = "gh pr list --search review-requested:@me", every = 120 },
+    -- is shown. Green when it exits with 0, red when not. A text runs in the shell; a list runs the program
+    -- with no shell.
+    { title = "Disk", command = "Get-PSDrive C", every = 300 },
 
     -- Buttons. `run` runs a command and shows the result as a toast (or `show = "overlay"`: in an overlay, so you
     -- see the output). `action` is the same as in `keys` and `commands`. `confirm = true` wants a second press.
@@ -254,7 +257,46 @@ dashboard = {
 ```
 
 - Commands run with the shell of the default profile, with no window, and stop after 60 seconds. Write them for
-  that shell (PowerShell on Windows: `;` between commands).
+  that shell (PowerShell on Windows: `;` between commands). A command as a list (`{ "gh", "pr", "list" }`) runs
+  with no shell: use it when an argument has quotes (Windows PowerShell changes quotes in arguments).
+
+### Lists with actions
+A command tile is also a list: each line of its output is an item. Enter (or its number key) goes into the list:
+the arrows choose an item, and the keys of `actions` work on it. Esc goes back to the tiles. When the command
+puts tabs between parts of a line, `{1}`, `{2}`, ... are those parts (`{line}` is the whole line), and `show`
+says which part you see. After an action, the command runs again, so the list is new.
+
+The pull requests that wait for your review, in all your repositories:
+
+```lua
+{ title = "PRs to review", every = 120, show = 2, waiting_when = "output",
+  -- The link, a tab, then "owner/repo: title" (gh makes the lines with a template).
+  command = { "gh", "search", "prs", "--review-requested=@me", "--state=open",
+              "--json", "url,repository,title",
+              -- [[ ]] is a Lua text that keeps \t and \n as they are: the template of gh reads them.
+              "--template", [[{{range .}}{{.url}}{{"\t"}}{{.repository.nameWithOwner}}: {{.title}}{{"\n"}}{{end}}]] },
+  actions = {
+    { key = "enter", label = "open", open = "{1}" },
+    { key = "v", label = "view", show = "overlay",
+      run = { { "gh", "pr", "view", "{1}", "--comments" }, { "gh", "pr", "diff", "{1}" } } },
+    { key = "a", label = "approve", confirm = true, run = { "gh", "pr", "review", "--approve", "{1}" } },
+    { key = "r", label = "review with Claude", show = "overlay",
+      run = { "claude", "Review the pull request {1}: read it with gh pr view and gh pr diff, and tell me the risks." } },
+    { key = "c", label = "copy", action = function(fterm, item) fterm.copy(item.fields[1]) end },
+  } },
+```
+
+- `waiting_when = "output"`: the frame is yellow (it waits for you) when the list is not empty, and the title
+  shows how many items there are.
+- An action has a `key` (`"enter"`, or one letter or digit), a `label`, and one of:
+  - `open`: a link (http and https open at once, other kinds ask first);
+  - `run`: a program and its arguments, or a list of them that run one after another. In the background the
+    result is a toast; with `show = "overlay"` you see the output, and the overlay stays until you press Enter;
+  - `action`: an action, or a Lua function that gets `(fterm, item)`: `item.line`, and `item.fields` (the parts).
+- `confirm = true` wants a second press.
+- `run` must be a list, not a text: a part of a line goes into its argument as it is, and no shell reads it.
+  So a title like `"; rm -rf ~"` from someone else stays a title.
+- With no action on Enter, Enter opens the first link of the line.
 - With no `dashboard`, the tiles are `{ panes = "agents" }` and `{ panes = "busy" }`.
 - Scripts and agents can add their own tiles with the API (`dashboard_tile`, `ftermctl dashboard-tile`). Those
   tiles show only text and a chart: they cannot run commands or have buttons.
