@@ -201,8 +201,18 @@ pub fn grid(n: usize, cols: usize, rows: usize, columns: usize) -> (usize, usize
     (pick, n.div_ceil(pick))
 }
 
-/// `text` cut to `width` cells (an ellipsis when it was longer).
+/// `text` cut to `width` cells (an ellipsis when it was longer). A tab is a space and other control chars go: they
+/// take a cell on the screen but no width here, so they pushed the text over the frame.
 fn cut(text: &str, width: usize) -> String {
+    let text: String = text
+        .chars()
+        .filter_map(|c| match c {
+            '\t' => Some(' '),
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect();
+    let text = text.as_str();
     let mut out = String::new();
     let mut used = 0;
     let total: usize = text.chars().map(|c| c.width().unwrap_or(0)).sum();
@@ -553,6 +563,25 @@ mod tests {
         let text = rows_text(&tiles, 40, 10);
         assert!(text.iter().all(|r| r.chars().count() <= 40));
         assert!(text.iter().any(|r| r.contains('…')));
+    }
+
+    #[test]
+    fn tabs_and_control_chars_stay_inside_the_frame() {
+        // `gh` with no terminal puts tabs between the fields.
+        let line =
+            "owner/repo\t2756\topen\tCSBP-1: a long title of a pull request\t2026-10-30T13:11:00Z";
+        let tiles = [Tile {
+            lines: vec![line.into(), "bell\u{7} and\u{1b} esc".into()],
+            ..tile("PRs")
+        }];
+        let (cols, rows) = (40, 10);
+        let text = rows_text(&tiles, cols, rows);
+        let frame = |c: char| ('\u{2800}'..='\u{28ff}').contains(&c);
+        for row in &text[2..rows - 1] {
+            assert!(!row.contains(['\t', '\u{7}', '\u{1b}']), "{row:?}");
+            let last = row.chars().nth(cols - 2).unwrap_or(' ');
+            assert!(frame(last), "the right frame is still there: {row:?}");
+        }
     }
 
     #[test]
