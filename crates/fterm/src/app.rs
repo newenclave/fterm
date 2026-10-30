@@ -1848,11 +1848,16 @@ impl App {
         )?;
         renderer.set_palette(self.palette());
         renderer.set_ui(self.ui);
+        let mut mux = Mux::default();
+        mux.set_companion_place(
+            companion_calls::companion_side(config.companion_side),
+            config.companion_size,
+        );
         Ok(Running {
             window,
             gpu,
             renderer,
-            mux: Mux::default(),
+            mux,
             panes: HashMap::new(),
             dock: Dock::new(
                 dock_side(config.panels.dock),
