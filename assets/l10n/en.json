@@ -143,6 +143,7 @@
     "box.ssh_keys": "Enter = connect, Esc = cancel. The key or the ssh agent must work: there is no password question.",
     "box.tabs_and_panes": "{tabs}, {panes}.",
     "box.window_overlay": "Run in the window overlay (over every tab):",
+    "box.companion": "Run as a companion of the pane (empty = a shell):",
     "count.lines": {
       "one": "{n} line",
       "other": "{n} lines"

@@ -23,6 +23,17 @@ pub(super) fn shell_run_args(shell: &str, command: &str) -> Vec<String> {
     }
 }
 
+/// What the command box of `run_in_overlay` (and `new_companion`) is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PromptFor {
+    /// The overlay of the tab.
+    Overlay,
+    /// The overlay of the window.
+    Window,
+    /// A new companion of the active pane (no command = the shell).
+    Companion,
+}
+
 /// The smallest overlay or scratch: 20 columns and 6 rows.
 pub(super) fn floating_min(cell: fterm_render::font::CellMetrics, padding: f32) -> (f32, f32) {
     (
@@ -96,7 +107,7 @@ impl App {
     }
 
     /// The IME window follows the pane with the keys.
-    fn update_ime(&self) {
+    pub(super) fn update_ime(&self) {
         if let Some(running) = &self.running {
             Self::update_ime_area(running);
         }
@@ -115,7 +126,7 @@ impl App {
         }
         match self.config.config.window_overlay.clone() {
             Some(command) => self.run_window_overlay(command),
-            None => self.start_overlay_prompt(true),
+            None => self.start_overlay_prompt(PromptFor::Window),
         }
     }
 
@@ -149,10 +160,10 @@ impl App {
         }
     }
 
-    /// The box of the action `run_in_overlay` for the command (`window` = for the overlay of the window).
-    pub(super) fn start_overlay_prompt(&mut self, window: bool) {
+    /// The box of the actions `run_in_overlay` and `new_companion` for the command.
+    pub(super) fn start_overlay_prompt(&mut self, prompt_for: PromptFor) {
         self.overlay_prompt = Some(crate::ai_chat::InputBox::default());
-        self.overlay_prompt_window = window;
+        self.overlay_prompt_for = prompt_for;
         if let Some(running) = &self.running {
             running.window.request_redraw();
         }
@@ -161,10 +172,10 @@ impl App {
     pub(super) fn overlay_prompt_lines(&self) -> Option<Vec<String>> {
         let input = self.overlay_prompt.as_ref()?;
         Some(vec![
-            if self.overlay_prompt_window {
-                tr!("box.window_overlay")
-            } else {
-                tr!("box.overlay")
+            match self.overlay_prompt_for {
+                PromptFor::Overlay => tr!("box.overlay"),
+                PromptFor::Window => tr!("box.window_overlay"),
+                PromptFor::Companion => tr!("box.companion"),
             },
             format!("{}▏", input.text),
             String::new(),
@@ -182,10 +193,21 @@ impl App {
             Key::Named(NamedKey::Enter) => {
                 let command = input.take().trim().to_owned();
                 self.overlay_prompt = None;
-                if command.is_empty() {
-                } else if self.overlay_prompt_window {
-                    self.run_window_overlay(command);
-                } else if let Err(err) = self.open_overlay(Some(command), None, None) {
+                let opened = match self.overlay_prompt_for {
+                    _ if command.is_empty() && self.overlay_prompt_for != PromptFor::Companion => {
+                        Ok(())
+                    }
+                    PromptFor::Window => {
+                        self.run_window_overlay(command);
+                        Ok(())
+                    }
+                    PromptFor::Overlay => self.open_overlay(Some(command), None, None).map(|_| ()),
+                    // No command: the shell.
+                    PromptFor::Companion => self
+                        .open_companion((!command.is_empty()).then_some(command), None)
+                        .map(|_| ()),
+                };
+                if let Err(err) = opened {
                     self.notify(
                         None,
                         &tr!("toast.cannot_start"),

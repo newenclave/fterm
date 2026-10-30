@@ -698,7 +698,9 @@ impl App {
             "tab": tab,
             "workspace": running.mux.pane_place(pane).map(|(ws, _)| ws),
             "program": display_name(p.session.program()),
-            "kind": if running.mux.scratch_pane() == Some(pane) {
+            "kind": if running.mux.owner_of(pane).is_some() {
+                "companion"
+            } else if running.mux.scratch_pane() == Some(pane) {
                 "scratch"
             } else if running.mux.window_overlay().is_some_and(|(p, _)| p == pane) {
                 "window_overlay"
@@ -748,12 +750,22 @@ impl App {
                     pane["shown"] = json!(o.shown);
                     pane
                 });
+                // Companions after their pane, with it and whether they are shown.
+                let companions = tab.companions.iter().flat_map(|c| {
+                    c.panes.iter().map(|&pane| {
+                        let mut json = self.pane_json(pane, number);
+                        json["owner"] = json!(c.owner.0);
+                        json["shown"] = json!(running.mux.companion_shown(pane));
+                        json
+                    })
+                });
                 let panes: Vec<Value> = tab
                     .layout
                     .panes()
                     .into_iter()
                     .map(|pane| self.pane_json(pane, number))
                     .chain(overlay)
+                    .chain(companions)
                     .collect();
                 json!({
                     "tab": number,

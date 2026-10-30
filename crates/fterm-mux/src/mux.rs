@@ -563,6 +563,22 @@ impl Mux {
         self.all_tabs().find_map(|t| t.owner_of(pane))
     }
 
+    /// The lines between the panes of the active tab and their shown companions (1 pixel, at the edge of the strip).
+    pub fn companion_dividers(&self, area: Rect) -> Vec<Rect> {
+        let Some(tab) = self.active_tab() else {
+            return Vec::new();
+        };
+        let side = self.companion_place.0;
+        self.tab_rects(tab, area)
+            .into_iter()
+            .filter(|(p, _)| tab.owner_of(*p).is_some())
+            .map(|(_, r)| match side {
+                Direction::Down => Rect::new(r.x, r.y, r.width, 1.0),
+                Direction::Right => Rect::new(r.x, r.y, 1.0, r.height),
+            })
+            .collect()
+    }
+
     /// The companion is shown now.
     pub fn companion_shown(&self, pane: PaneId) -> bool {
         self.all_tabs()
@@ -1666,6 +1682,25 @@ mod tests {
         assert!(mux.open_overlay(o, 80));
         let tab = mux.pane_tab(panes[0]).unwrap();
         assert_eq!(mux.close_tab(tab), [panes[0], o, c]);
+    }
+
+    #[test]
+    fn a_line_between_a_pane_and_its_strip() {
+        let (mut mux, panes) = mux_with(1);
+        assert_eq!(mux.companion_dividers(AREA), []);
+        let c = mux.new_pane_id();
+        mux.add_companion(panes[0], c);
+        assert_eq!(
+            mux.companion_dividers(AREA),
+            [Rect::new(0.0, 360.0, 800.0, 1.0)]
+        );
+        mux.set_companion_place(Direction::Right, 50);
+        assert_eq!(
+            mux.companion_dividers(AREA),
+            [Rect::new(400.0, 0.0, 1.0, 600.0)]
+        );
+        mux.toggle_companion();
+        assert_eq!(mux.companion_dividers(AREA), [], "hidden: no line");
     }
 
     #[test]

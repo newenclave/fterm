@@ -100,6 +100,7 @@ pub enum UserEvent {
 
 mod ai_calls;
 mod api_calls;
+mod companion_calls;
 mod link_calls;
 mod markup_calls;
 mod mux_calls;
@@ -268,10 +269,7 @@ impl Running {
         // The panes of all tabs, and the floating panes that are shown (overlays, the scratch).
         let mut rects: Vec<(PaneId, Rect)> = self.floating_rects();
         for tab in self.mux.all_tabs() {
-            match tab.zoomed {
-                Some(pane) => rects.push((pane, area)),
-                None => rects.extend(tab.layout.rects(area)),
-            }
+            rects.extend(self.mux.tab_rects(tab, area));
         }
         for (id, rect) in rects {
             let size = self.grid_for(rect);
@@ -495,8 +493,8 @@ pub struct App {
     spawn_command: Option<String>,
     /// "Run in an overlay…": the command that is typed.
     overlay_prompt: Option<crate::ai_chat::InputBox>,
-    /// The command in `overlay_prompt` is for the overlay of the window.
-    overlay_prompt_window: bool,
+    /// What the command in `overlay_prompt` is for.
+    overlay_prompt_for: overlay_calls::PromptFor,
     /// The last hint: (typed text, folder, history changes) -> the rest of the command.
     hint_cache: RefCell<Option<HintCache>>,
     /// Grows when a command is saved, so the hint cache knows it is old.
@@ -639,7 +637,7 @@ impl App {
             spawn_cwd: None,
             spawn_command: None,
             overlay_prompt: None,
-            overlay_prompt_window: false,
+            overlay_prompt_for: overlay_calls::PromptFor::Overlay,
             hint_cache: RefCell::new(None),
             history_changes: 0,
             close_stopped_at: None,
@@ -1759,6 +1757,13 @@ impl App {
     fn apply_config(&mut self) {
         self.background
             .set_rate(self.config.config.background_redraws);
+        if let Some(running) = &mut self.running {
+            let side = companion_calls::companion_side(self.config.config.companion_side);
+            running
+                .mux
+                .set_companion_place(side, self.config.config.companion_size);
+            running.resize_all_panes();
+        }
         let palette = self.palette();
         let Some(running) = &mut self.running else {
             return;
@@ -2380,9 +2385,12 @@ impl App {
             return false;
         };
         let closed = running.panes.remove(&pane).and_then(|p| p.mux);
-        // The overlay over it ends with it.
+        // The overlay over it and its companions end with it.
         if let Some(overlay) = running.mux.overlay_of(pane) {
             running.panes.remove(&overlay);
+        }
+        for companion in running.mux.companions_of(pane) {
+            running.panes.remove(&companion);
         }
         let alive = running.mux.close_pane(pane) != Closed::LastTab;
         self.close_mux_pane(closed);
@@ -2979,11 +2987,14 @@ impl App {
                     running.window.request_redraw();
                     return;
                 }
-                return self.start_overlay_prompt(false);
+                return self.start_overlay_prompt(overlay_calls::PromptFor::Overlay);
             }
             A::ToggleWindowOverlay => return self.toggle_window_overlay(),
-            // Companions: the app acts on them in the next step.
-            A::NewCompanion | A::ToggleCompanion | A::NextCompanion => {}
+            A::NewCompanion => {
+                return self.start_overlay_prompt(overlay_calls::PromptFor::Companion);
+            }
+            A::ToggleCompanion => return self.toggle_companion(),
+            A::NextCompanion => return self.next_companion(),
             A::ToggleScratch => return self.toggle_scratch(),
             A::ToggleOriginalColors => {
                 self.original_colors = !self.original_colors;
@@ -4645,8 +4656,9 @@ impl App {
                 .dividers(area)
                 .into_iter()
                 .map(|d| d.rect)
+                .chain(mux.companion_dividers(area))
                 .collect(),
-            _ => Vec::new(),
+            _ => mux.companion_dividers(area),
         };
         let active_frame = (pane_rects.len() > 1)
             .then(|| {
@@ -5203,9 +5215,12 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 };
                 running.panes.remove(&pane);
-                // The overlay over it ends with it.
+                // The overlay over it and its companions end with it.
                 if let Some(overlay) = running.mux.overlay_of(pane) {
                     running.panes.remove(&overlay);
+                }
+                for companion in running.mux.companions_of(pane) {
+                    running.panes.remove(&companion);
                 }
                 match running.mux.close_pane(pane) {
                     Closed::LastTab => {
