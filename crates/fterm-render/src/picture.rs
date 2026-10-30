@@ -73,6 +73,36 @@ pub fn scissor(clip: Rect, size: (u32, u32)) -> Option<[u32; 4]> {
     (x1 > x0 && y1 > y0).then(|| [x0, y0, x1 - x0, y1 - y0])
 }
 
+/// One step of drawing a frame: a range of quads, or the pictures of a layer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Step {
+    Quads(std::ops::Range<u32>),
+    Pictures(usize),
+}
+
+/// The order of a frame of `quads` quads with layers that start at `layers` (quad indexes, in order): the quads of
+/// a layer, then its pictures, so the pictures of a layer are above its quads and below the next layer. With no
+/// layer the pictures are above all quads.
+pub fn draw_steps(quads: u32, layers: &[u32]) -> Vec<Step> {
+    let mut steps = Vec::new();
+    let mut from = 0;
+    for (i, &end) in layers.iter().enumerate() {
+        let end = end.clamp(from, quads);
+        if end > from {
+            steps.push(Step::Quads(from..end));
+        }
+        steps.push(Step::Pictures(i));
+        from = end;
+    }
+    if quads > from {
+        steps.push(Step::Quads(from..quads));
+    }
+    if layers.is_empty() {
+        steps.push(Step::Pictures(0));
+    }
+    steps
+}
+
 /// One cell of the Braille form: its Braille char and its color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BrailleCell {
@@ -330,6 +360,28 @@ mod tests {
         // Scrolled back by 3 lines: it is on the top row.
         term.scroll_display(Scroll::Delta(3));
         assert_eq!(visible_marks(&term, 1), [(7, 0, 0)]);
+    }
+
+    #[test]
+    fn layers_draw_their_pictures_above_the_quads_before_them() {
+        // No layer: all quads, then the pictures (as before).
+        assert_eq!(draw_steps(10, &[]), [Step::Quads(0..10), Step::Pictures(0)]);
+        // Panes (0..4), their pictures, an overlay (4..7), its pictures, then the rest (7..10).
+        assert_eq!(
+            draw_steps(10, &[4, 7]),
+            [
+                Step::Quads(0..4),
+                Step::Pictures(0),
+                Step::Quads(4..7),
+                Step::Pictures(1),
+                Step::Quads(7..10),
+            ]
+        );
+        // Empty ranges are left out.
+        assert_eq!(
+            draw_steps(4, &[4, 4]),
+            [Step::Quads(0..4), Step::Pictures(0), Step::Pictures(1)]
+        );
     }
 
     #[test]

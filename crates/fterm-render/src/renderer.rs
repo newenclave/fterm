@@ -12,7 +12,9 @@ use crate::color::{linear, srgb_to_linear, text_alpha};
 use crate::font::{CellMetrics, Fonts, GlyphImage, ImageKind};
 use crate::frame::{FrameInput, Instance, PaneStyle, Rect, build_frame};
 use crate::overlay::build_message_box;
-use crate::picture::{BrailleCell, PictureMode, braille, place, scissor, visible_marks};
+use crate::picture::{
+    BrailleCell, PictureMode, Step, braille, draw_steps, place, scissor, visible_marks,
+};
 use crate::tabbar::{TabBarInput, build_tab_bar};
 use crate::theme::UiColors;
 
@@ -37,6 +39,8 @@ struct PictureDraw {
     picture: fterm_term::picture::Picture,
     rect: Rect,
     clip: Rect,
+    /// The layer it belongs to: it is drawn above the quads of its layer.
+    layer: usize,
 }
 
 /// The texture of one picture.
@@ -318,7 +322,7 @@ impl Renderer {
         size: (u32, u32),
         mut build: impl FnMut(&mut FrameParts) -> Result<(), AtlasFull>,
     ) {
-        let (quads, split, pictures) = self.build(device, queue, &mut build);
+        let (quads, layers, pictures) = self.build(device, queue, &mut build);
         let pictures = self.picture_textures(device, queue, pictures);
         let background = linear(self.palette.get(
             NamedColor::Background as usize,
@@ -371,24 +375,34 @@ impl Renderer {
                     pass.draw(0..4, range);
                 }
             };
-            let split = split as u32;
-            grid(&mut pass, 0..split);
-            if let Some(buffer) = &pictures.1 {
-                pass.set_pipeline(&self.picture_pipeline);
-                pass.set_vertex_buffer(0, buffer.slice(..));
-                for (i, (key, clip)) in pictures.0.iter().enumerate() {
-                    let (Some(texture), Some([x, y, w, h])) =
-                        (self.picture_textures.get(key), scissor(*clip, size))
-                    else {
-                        continue;
-                    };
-                    pass.set_scissor_rect(x, y, w, h);
-                    pass.set_bind_group(0, &texture.bind_group, &[]);
-                    pass.draw(0..4, i as u32..i as u32 + 1);
+            for step in draw_steps(quads.len() as u32, &layers) {
+                match step {
+                    Step::Quads(range) => grid(&mut pass, range),
+                    Step::Pictures(layer) => {
+                        let Some(buffer) = &pictures.1 else {
+                            continue;
+                        };
+                        pass.set_pipeline(&self.picture_pipeline);
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        for (i, (key, clip, _)) in pictures
+                            .0
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, (_, _, l))| *l == layer)
+                        {
+                            let (Some(texture), Some([x, y, w, h])) =
+                                (self.picture_textures.get(key), scissor(*clip, size))
+                            else {
+                                continue;
+                            };
+                            pass.set_scissor_rect(x, y, w, h);
+                            pass.set_bind_group(0, &texture.bind_group, &[]);
+                            pass.draw(0..4, i as u32..i as u32 + 1);
+                        }
+                        pass.set_scissor_rect(0, 0, size.0.max(1), size.1.max(1));
+                    }
                 }
-                pass.set_scissor_rect(0, 0, size.0.max(1), size.1.max(1));
             }
-            grid(&mut pass, split..quads.len() as u32);
         }
         queue.submit([encoder.finish()]);
     }
@@ -401,7 +415,7 @@ impl Renderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         pictures: Vec<PictureDraw>,
-    ) -> (Vec<(u64, Rect)>, Option<wgpu::Buffer>) {
+    ) -> (Vec<(u64, Rect, usize)>, Option<wgpu::Buffer>) {
         let now = std::time::Instant::now();
         self.picture_textures
             .retain(|_, t| now.duration_since(t.used) < PICTURE_KEEP);
@@ -424,7 +438,7 @@ impl Renderer {
                 )
             });
             texture.used = now;
-            draws.push((draw.key, draw.clip));
+            draws.push((draw.key, draw.clip, draw.layer));
             instances.push(Instance {
                 rect: [draw.rect.x, draw.rect.y, draw.rect.width, draw.rect.height],
                 uv: [0.0, 0.0, 1.0, 1.0],
@@ -447,7 +461,7 @@ impl Renderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         build: &mut impl FnMut(&mut FrameParts) -> Result<(), AtlasFull>,
-    ) -> (Vec<Instance>, usize, Vec<PictureDraw>) {
+    ) -> (Vec<Instance>, Vec<u32>, Vec<PictureDraw>) {
         let max_texture = self.max_atlas_size;
         for _ in 0..4 {
             let (cell, padding) = (self.fonts.cell(), self.padding);
@@ -477,15 +491,15 @@ impl Renderer {
                 palette,
                 ui,
                 pictures: Vec::new(),
-                overlays_at: None,
+                layers: Vec::new(),
                 braille_forms: &mut self.braille_forms,
                 max_texture,
             };
             let result = build(&mut parts);
-            let split = parts.overlays_at.unwrap_or(parts.quads.len());
+            let layers = parts.layers.iter().map(|&i| i as u32).collect();
             let (quads, pictures) = (parts.quads, parts.pictures);
             match result {
-                Ok(()) => return (quads, split, pictures),
+                Ok(()) => return (quads, layers, pictures),
                 Err(AtlasFull) => {
                     let atlas = if full_color {
                         &mut self.color
@@ -504,7 +518,7 @@ impl Renderer {
             }
         }
         tracing::warn!("too many glyphs for the atlas, skipping this frame");
-        (Vec::new(), 0, Vec::new())
+        (Vec::new(), Vec::new(), Vec::new())
     }
 
     fn update_bind_group(&mut self, device: &wgpu::Device) {
@@ -527,9 +541,10 @@ pub struct FrameParts<'a> {
     padding: f32,
     palette: &'a Palette,
     ui: &'a UiColors,
-    /// The pictures of the panes (drawn after the quads before `overlays_at`).
+    /// The pictures of the panes, each drawn above the quads of its layer.
     pictures: Vec<PictureDraw>,
-    overlays_at: Option<usize>,
+    /// Where the layers after the first one start (quad indexes).
+    layers: Vec<usize>,
     braille_forms: &'a mut std::collections::HashMap<(u64, usize, usize), BrailleForm>,
     max_texture: u32,
 }
@@ -600,6 +615,7 @@ impl FrameParts<'_> {
                     picture: p.picture.clone(),
                     rect,
                     clip,
+                    layer: self.layers.len(),
                 });
             } else {
                 self.braille(&p, rect, clip)?;
@@ -664,7 +680,29 @@ impl FrameParts<'_> {
 
     /// Everything added after this is drawn above the pictures of the panes (call it after the panes).
     pub fn overlays(&mut self) {
-        self.overlays_at = Some(self.quads.len());
+        self.layer();
+    }
+
+    /// A new layer starts: what comes after it is above the pictures added before it (an overlay pane above the
+    /// pictures of the pane under it).
+    pub fn layer(&mut self) {
+        self.layers.push(self.quads.len());
+    }
+
+    /// A rect in the background color of the terminal: `alpha` 1 covers what is under it, less makes it dim.
+    pub fn fill(&mut self, rect: Rect, alpha: f32) {
+        let mut color = linear(self.palette.get(
+            NamedColor::Background as usize,
+            &fterm_term::alacritty_terminal::term::color::Colors::default(),
+        ));
+        color[3] = alpha.clamp(0.0, 1.0);
+        self.quads.push(Instance {
+            rect: [rect.x, rect.y, rect.width, rect.height],
+            uv: [0.0; 4],
+            color,
+            kind: crate::frame::KIND_SOLID,
+            _pad: [0; 3],
+        });
     }
 
     pub fn tab_bar(&mut self, input: &TabBarInput) -> Result<(), AtlasFull> {
