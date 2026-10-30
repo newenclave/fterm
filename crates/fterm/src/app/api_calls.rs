@@ -519,6 +519,7 @@ impl App {
             "scene_open" => self.api_scene_open(client, params),
             "show_image" => self.api_show_image(client, params),
             "scratch" => self.api_scratch(params),
+            "companion" => self.api_companion(params),
             "scene_draw" => self.api_scene_draw(client, params),
             "send_text" => self.api_send_text(client, params),
             "get_text" => self.api_get_text(client, params),
@@ -801,8 +802,10 @@ impl App {
     }
 
     fn api_spawn(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
-        if str_param(params, "place")?.as_deref() == Some("overlay") {
-            return self.api_overlay(client, params);
+        match str_param(params, "place")?.as_deref() {
+            Some("overlay") => return self.api_overlay(client, params),
+            Some("companion") => return self.api_spawn_companion(client, params),
+            _ => {}
         }
         let place = place_param(params)?;
         let profile = str_param(params, "profile")?;
@@ -861,6 +864,62 @@ impl App {
             p.opened_by = Some(client);
         }
         Ok(json!({ "pane": pane.0 }))
+    }
+
+    /// `spawn` with `place: "companion"`: `command` (or a shell) as a companion of `pane` (default: the active one).
+    fn api_spawn_companion(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
+        let command = str_param(params, "command")?;
+        let owner = pane_param(params, "pane")?.map(PaneId);
+        if let Some(owner) = owner {
+            let running = self.running.as_ref().expect("checked in api_call");
+            if !running.panes.contains_key(&owner) {
+                return Err(not_found(&format!("pane {}", owner.0)));
+            }
+        }
+        // A companion of a companion belongs to its owner.
+        let owner = owner.map(|o| {
+            let mux = &self.running.as_ref().expect("checked in api_call").mux;
+            mux.owner_of(o).unwrap_or(o)
+        });
+        if let Some(cwd) = str_param(params, "cwd")? {
+            self.spawn_cwd = Some(cwd);
+        }
+        let opened = self.open_companion(command, owner);
+        self.spawn_cwd = None;
+        let pane = opened.map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
+        if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {
+            p.opened_by = Some(client);
+        }
+        Ok(json!({ "pane": pane.0 }))
+    }
+
+    /// `companion`: `action` "toggle" (hide or show) or "next" for the companions of `pane` (default: the active one).
+    fn api_companion(&mut self, params: &Value) -> Result<Value, RpcError> {
+        let action = str_param(params, "action")?;
+        let running = self.running.as_mut().expect("checked in api_call");
+        if let Some(pane) = pane_param(params, "pane")?.map(PaneId) {
+            if !running.panes.contains_key(&pane) {
+                return Err(not_found(&format!("pane {}", pane.0)));
+            }
+            running.mux.reveal(pane);
+        }
+        let done = match action.as_deref() {
+            Some("toggle") => running.mux.toggle_companion().is_some(),
+            Some("next") => running.mux.next_companion().is_some(),
+            _ => {
+                return Err(RpcError::invalid_params(
+                    "`action` must be \"toggle\" or \"next\"",
+                ));
+            }
+        };
+        if !done {
+            return Err(not_found("a companion of this pane"));
+        }
+        self.tab_changed();
+        self.update_ime();
+        let mux = &self.running.as_ref().expect("checked in api_call").mux;
+        let shown = mux.active_pane().filter(|p| mux.companion_shown(*p));
+        Ok(json!({ "pane": shown.map(|p| p.0), "shown": shown.is_some() }))
     }
 
     /// `scratch`: shows or hides the scratch shell (`show`; no `show` = the other one).

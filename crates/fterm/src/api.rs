@@ -32,6 +32,7 @@ pub const METHODS: &[&str] = &[
     "scene_open",
     "show_image",
     "scratch",
+    "companion",
     "scene_draw",
     "screenshot",
     "set_tab_color",

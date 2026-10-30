@@ -344,6 +344,36 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             w.pane_into(&mut params)?;
             call("spawn", params)
         }
+        "companion" => {
+            let w = read(&["pane"], &["toggle", "next"])?;
+            let action = if w.flag("toggle") {
+                Some("toggle")
+            } else if w.flag("next") {
+                Some("next")
+            } else {
+                None
+            };
+            let mut params = match action {
+                Some(action) => json!({ "action": action }),
+                None => {
+                    let mut params = json!({ "place": "companion" });
+                    let command = w.text();
+                    if !command.trim().is_empty() {
+                        params["command"] = json!(command.trim());
+                    }
+                    params
+                }
+            };
+            w.pane_into(&mut params)?;
+            call(
+                if action.is_some() {
+                    "companion"
+                } else {
+                    "spawn"
+                },
+                params,
+            )
+        }
         "scratch" => {
             let w = read(&[], &["show", "hide"])?;
             let mut params = json!({});
@@ -586,6 +616,30 @@ mod tests {
         assert_eq!(cli("mux proxy").unwrap().command, Command::MuxProxy);
         assert!(cli("mux").is_err());
         assert!(cli("mux start").is_err());
+    }
+
+    #[test]
+    fn companions() {
+        assert_eq!(
+            call("companion"),
+            ("spawn".into(), json!({ "place": "companion" })),
+            "no command: a shell"
+        );
+        assert_eq!(
+            call("companion --pane 3 -- tail -f app.log"),
+            (
+                "spawn".into(),
+                json!({ "place": "companion", "command": "tail -f app.log", "pane": 3 })
+            )
+        );
+        assert_eq!(
+            call("companion --toggle"),
+            ("companion".into(), json!({ "action": "toggle" }))
+        );
+        assert_eq!(
+            call("companion --next --pane 2"),
+            ("companion".into(), json!({ "action": "next", "pane": 2 }))
+        );
     }
 
     #[test]

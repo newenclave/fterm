@@ -63,10 +63,10 @@ pub fn tools() -> Value {
         },
         {
             "name": "open_pane",
-            "description": "Open a new pane: a new tab, a split on the right or below, or an overlay (a box over a pane that runs `command` and goes when it ends, for example a file manager or htop). Returns the new pane id.",
+            "description": "Open a new pane: a new tab, a split on the right or below, an overlay (a box over a pane that runs `command` and goes when it ends, for example a file manager or htop), or a companion (a strip of the pane `next_to` that runs `command` or a shell, for example `tail -f` of a log; the user hides and shows it with a key). Returns the new pane id.",
             "inputSchema": { "type": "object", "properties": {
-                "place": { "type": "string", "enum": ["tab", "right", "down", "overlay"], "description": "Where. The default is a new tab." },
-                "command": { "type": "string", "description": "With place overlay: the command to run (the shell runs it)." },
+                "place": { "type": "string", "enum": ["tab", "right", "down", "overlay", "companion"], "description": "Where. The default is a new tab." },
+                "command": { "type": "string", "description": "With place overlay or companion: the command to run (the shell runs it)." },
                 "size": { "type": "integer", "description": "With place overlay: its size in percent of the pane (20-100)." },
                 "profile": { "type": "string", "description": "An fterm profile name (for example PowerShell). No profile = the default one." },
                 "cwd": { "type": "string", "description": "The folder to start in." },
@@ -1246,6 +1246,36 @@ mod tests {
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("closed"), "{text}");
         assert_ne!(result["isError"], json!(true));
+    }
+
+    #[test]
+    fn a_companion_of_a_pane() {
+        let mut s = server();
+        tool(
+            &mut s,
+            "open_pane",
+            json!({ "place": "companion", "command": "tail -f x.log", "next_to": 2 }),
+        );
+        assert_eq!(
+            s.backend.calls[0],
+            (
+                "spawn".into(),
+                json!({ "place": "companion", "command": "tail -f x.log", "pane": 2 })
+            )
+        );
+        let tools = tools();
+        let open = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "open_pane")
+            .unwrap();
+        assert!(
+            open["inputSchema"]["properties"]["place"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("companion"))
+        );
     }
 
     #[test]
