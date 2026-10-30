@@ -509,11 +509,21 @@ impl App {
     }
 
     pub(super) fn ssh_prompt_key(&mut self, event: &KeyEvent) {
+        use super::overlay_calls::{is_paste, one_line};
         let ctrl = self.mods.control_key();
+        let pasted = is_paste(
+            &event.logical_key,
+            event.physical_key,
+            ctrl,
+            self.mods.shift_key(),
+        )
+        .then(|| self.clipboard.paste())
+        .flatten();
         let Some(input) = &mut self.ssh_prompt else {
             return;
         };
         match &event.logical_key {
+            _ if pasted.is_some() => input.insert(&one_line(pasted.as_deref().unwrap_or(""))),
             Key::Named(NamedKey::Escape) => self.ssh_prompt = None,
             Key::Named(NamedKey::Enter) => {
                 let host = input.take().trim().to_owned();

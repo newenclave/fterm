@@ -1,7 +1,7 @@
 //! Overlays (a program over a pane for a moment) and the scratch shell (a drop-down shell of the window).
 
 use winit::event::KeyEvent;
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
 use super::*;
 
@@ -47,6 +47,27 @@ pub(super) fn edit_line(input: &mut crate::ai_chat::InputBox, key: &Key) -> bool
         _ => return false,
     }
     true
+}
+
+/// The key pastes into a small command box: Ctrl+V, Ctrl+Shift+V (by the place of V, so in any layout), or
+/// Shift+Insert.
+pub(super) fn is_paste(key: &Key, physical: PhysicalKey, ctrl: bool, shift: bool) -> bool {
+    (ctrl && crate::input::physical_letter(physical) == Some('v'))
+        || (shift && !ctrl && *key == Key::Named(NamedKey::Insert))
+}
+
+/// Pasted text for a box with one line: new lines and tabs are spaces, other control chars go.
+pub(super) fn one_line(text: &str) -> String {
+    let text = text.replace("\r\n", "\n");
+    let line: String = text
+        .chars()
+        .filter_map(|c| match c {
+            '\n' | '\r' | '\t' => Some(' '),
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect();
+    line.trim().to_owned()
 }
 
 /// The smallest overlay or scratch: 20 columns and 6 rows.
@@ -200,10 +221,19 @@ impl App {
 
     pub(super) fn overlay_prompt_key(&mut self, event: &KeyEvent) {
         let ctrl = self.mods.control_key();
+        let pasted = is_paste(
+            &event.logical_key,
+            event.physical_key,
+            ctrl,
+            self.mods.shift_key(),
+        )
+        .then(|| self.clipboard.paste())
+        .flatten();
         let Some(input) = &mut self.overlay_prompt else {
             return;
         };
         match &event.logical_key {
+            _ if pasted.is_some() => input.insert(&one_line(pasted.as_deref().unwrap_or(""))),
             Key::Named(NamedKey::Escape) => self.overlay_prompt = None,
             Key::Named(NamedKey::Enter) => {
                 let command = input.take().trim().to_owned();
@@ -277,6 +307,32 @@ mod tests {
         assert!(!key(&mut input, NamedKey::Enter));
         assert!(!key(&mut input, NamedKey::Escape));
         assert!(!edit_line(&mut input, &Key::Character("a".into())));
+    }
+
+    #[test]
+    fn a_paste_into_the_command_box() {
+        use winit::keyboard::{KeyCode, PhysicalKey};
+        let v = PhysicalKey::Code(KeyCode::KeyV);
+        let insert = Key::Named(NamedKey::Insert);
+        let letter = Key::Character("v".into());
+        assert!(is_paste(&letter, v, true, false), "Ctrl+V");
+        assert!(is_paste(&letter, v, true, true), "Ctrl+Shift+V");
+        assert!(
+            is_paste(&insert, PhysicalKey::Code(KeyCode::Insert), false, true),
+            "Shift+Insert"
+        );
+        // Another layout: the key of V still pastes.
+        assert!(is_paste(&Key::Character("м".into()), v, true, false));
+        assert!(!is_paste(&letter, v, false, false), "a plain v is typed");
+        assert!(!is_paste(
+            &insert,
+            PhysicalKey::Code(KeyCode::Insert),
+            false,
+            false
+        ));
+        // A box has one line: new lines are spaces, other control chars go.
+        assert_eq!(one_line("git log\r\n--oneline\n"), "git log --oneline");
+        assert_eq!(one_line("a\tb\u{1b}c"), "a bc");
     }
 
     #[test]
