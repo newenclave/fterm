@@ -73,6 +73,13 @@ impl InputBox {
         self.cursor = self.text.chars().count();
     }
 
+    /// The text on one line with `mark` at the place of the cursor (for a small box with one line).
+    pub fn line_with_cursor(&self, mark: char) -> String {
+        let mut line = self.text.clone();
+        line.insert(self.byte(self.cursor), mark);
+        line
+    }
+
     /// The byte place of a char index.
     fn byte(&self, chars: usize) -> usize {
         self.text
@@ -602,6 +609,27 @@ mod tests {
         b.left();
         b.delete();
         assert_eq!(b.text, "", "nothing breaks at the ends");
+    }
+
+    #[test]
+    fn one_line_with_the_cursor_in_its_place() {
+        let mut b = InputBox::default();
+        assert_eq!(b.line_with_cursor('|'), "|");
+        b.insert("ping 1");
+        assert_eq!(b.line_with_cursor('|'), "ping 1|");
+        b.home();
+        assert_eq!(b.line_with_cursor('|'), "|ping 1");
+        b.right();
+        b.right();
+        assert_eq!(b.line_with_cursor('|'), "pi|ng 1");
+        let mut b = InputBox::default();
+        b.insert("dür");
+        b.left();
+        assert_eq!(
+            b.line_with_cursor('|'),
+            "dü|r",
+            "the cursor counts chars, not bytes"
+        );
     }
 
     #[test]

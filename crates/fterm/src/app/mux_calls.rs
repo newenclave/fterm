@@ -502,7 +502,7 @@ impl App {
         let input = self.ssh_prompt.as_ref()?;
         Some(vec![
             tr!("box.ssh"),
-            format!("{}▏", input.text),
+            input.line_with_cursor('▏'),
             String::new(),
             tr!("box.ssh_keys"),
         ])
@@ -525,7 +525,7 @@ impl App {
                     self.connect_remote(&host);
                 }
             }
-            Key::Named(NamedKey::Backspace) => input.backspace(),
+            key if super::overlay_calls::edit_line(input, key) => {}
             _ => {
                 if let Some(text) = event.text.as_deref()
                     && !ctrl

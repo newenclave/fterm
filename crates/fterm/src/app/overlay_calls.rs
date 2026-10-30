@@ -34,6 +34,21 @@ pub(crate) enum PromptFor {
     Companion,
 }
 
+/// The keys that edit the line of a small command box (arrows, Home, End, Backspace, Delete). `false` = not one of
+/// them.
+pub(super) fn edit_line(input: &mut crate::ai_chat::InputBox, key: &Key) -> bool {
+    match key {
+        Key::Named(NamedKey::ArrowLeft) => input.left(),
+        Key::Named(NamedKey::ArrowRight) => input.right(),
+        Key::Named(NamedKey::Home) => input.home(),
+        Key::Named(NamedKey::End) => input.end(),
+        Key::Named(NamedKey::Backspace) => input.backspace(),
+        Key::Named(NamedKey::Delete) => input.delete(),
+        _ => return false,
+    }
+    true
+}
+
 /// The smallest overlay or scratch: 20 columns and 6 rows.
 pub(super) fn floating_min(cell: fterm_render::font::CellMetrics, padding: f32) -> (f32, f32) {
     (
@@ -177,7 +192,7 @@ impl App {
                 PromptFor::Window => tr!("box.window_overlay"),
                 PromptFor::Companion => tr!("box.companion"),
             },
-            format!("{}▏", input.text),
+            input.line_with_cursor('▏'),
             String::new(),
             tr!("box.overlay_keys"),
         ])
@@ -217,7 +232,7 @@ impl App {
                     );
                 }
             }
-            Key::Named(NamedKey::Backspace) => input.backspace(),
+            key if edit_line(input, key) => {}
             _ => {
                 if let Some(text) = event.text.as_deref()
                     && !ctrl
@@ -237,6 +252,32 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_command_box_moves_its_cursor() {
+        let key =
+            |input: &mut crate::ai_chat::InputBox, k: NamedKey| edit_line(input, &Key::Named(k));
+        let mut input = crate::ai_chat::InputBox::default();
+        input.insert("pnig");
+        assert!(key(&mut input, NamedKey::ArrowLeft));
+        assert!(key(&mut input, NamedKey::ArrowLeft));
+        assert!(key(&mut input, NamedKey::Backspace));
+        input.insert("in");
+        assert!(key(&mut input, NamedKey::Delete));
+        assert_eq!(input.text, "ping");
+        assert!(key(&mut input, NamedKey::Home));
+        input.insert(">");
+        assert!(key(&mut input, NamedKey::End));
+        input.insert("!");
+        assert!(key(&mut input, NamedKey::ArrowLeft));
+        assert!(key(&mut input, NamedKey::ArrowRight));
+        input.insert("?");
+        assert_eq!(input.text, ">ping!?");
+        // Other keys are not for the line.
+        assert!(!key(&mut input, NamedKey::Enter));
+        assert!(!key(&mut input, NamedKey::Escape));
+        assert!(!edit_line(&mut input, &Key::Character("a".into())));
+    }
 
     #[test]
     fn each_shell_runs_a_command_its_way() {
