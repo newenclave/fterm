@@ -22,6 +22,26 @@ pub struct Tab {
     pub color: Option<[u8; 3]>,
     /// A program over a pane of this tab for a moment (not in the layout).
     pub overlay: Option<Overlay>,
+    /// Panes that belong to a pane of this tab (not in the layout): a strip in the rect of their pane.
+    pub companions: Vec<Companions>,
+}
+
+/// The companions of one pane (a log, a watcher, a second shell). One of them is shown at a time, as a strip in the
+/// rect of the pane; hidden, their programs live on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Companions {
+    pub owner: PaneId,
+    pub panes: Vec<PaneId>,
+    /// The one that is shown now (an index in `panes`).
+    pub shown: Option<usize>,
+    /// The one that was shown last (it comes back on a toggle).
+    last: usize,
+}
+
+impl Companions {
+    fn shown_pane(&self) -> Option<PaneId> {
+        self.shown.and_then(|i| self.panes.get(i).copied())
+    }
 }
 
 /// A pane over another pane for a moment (a file manager, lazygit, htop). It is not in the layout; it gets the
@@ -77,6 +97,71 @@ pub fn scratch_rect(area: Rect, size: u8, min_height: f32) -> Rect {
     Rect::new(area.x, area.y, area.width, height)
 }
 
+/// The places of a pane and its shown companion: the strip is `size` percent (10–90) of `pane`, below it
+/// (`Direction::Down`) or at its right (`Direction::Right`).
+pub fn companion_rects(pane: Rect, side: Direction, size: u8) -> (Rect, Rect) {
+    let part = f32::from(size.clamp(10, 90)) / 100.0;
+    match side {
+        Direction::Down => {
+            let strip = (pane.height * part).round();
+            let owner = pane.height - strip;
+            (
+                Rect::new(pane.x, pane.y, pane.width, owner),
+                Rect::new(pane.x, pane.y + owner, pane.width, strip),
+            )
+        }
+        Direction::Right => {
+            let strip = (pane.width * part).round();
+            let owner = pane.width - strip;
+            (
+                Rect::new(pane.x, pane.y, owner, pane.height),
+                Rect::new(pane.x + owner, pane.y, strip, pane.height),
+            )
+        }
+    }
+}
+
+impl Tab {
+    /// The panes of this tab that are seen (all of them, or the zoomed one) with the shown companions, and their
+    /// places in `area`. Companions take `size` percent of their pane at the `side`.
+    pub fn rects(&self, area: Rect, side: Direction, size: u8) -> Vec<(PaneId, Rect)> {
+        let rects = match self.zoomed {
+            Some(pane) => vec![(pane, area)],
+            None => self.layout.rects(area),
+        };
+        let mut out = Vec::with_capacity(rects.len());
+        for (pane, rect) in rects {
+            match self
+                .companions
+                .iter()
+                .find(|c| c.owner == pane)
+                .and_then(Companions::shown_pane)
+            {
+                Some(companion) => {
+                    let (top, strip) = companion_rects(rect, side, size);
+                    out.push((pane, top));
+                    out.push((companion, strip));
+                }
+                None => out.push((pane, rect)),
+            }
+        }
+        out
+    }
+
+    /// The owner of a companion in this tab.
+    fn owner_of(&self, pane: PaneId) -> Option<PaneId> {
+        self.companions
+            .iter()
+            .find(|c| c.panes.contains(&pane))
+            .map(|c| c.owner)
+    }
+
+    /// The pane in the layout for `pane`: itself, or its owner when it is a companion.
+    fn layout_pane(&self, pane: PaneId) -> PaneId {
+        self.owner_of(pane).unwrap_or(pane)
+    }
+}
+
 /// What `close_pane` closed.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Closed {
@@ -121,6 +206,8 @@ pub struct Mux {
     next_id: u64,
     scratch: Option<Scratch>,
     window_overlay: Option<WindowOverlay>,
+    /// Where companions are in their pane, and their size in percent.
+    companion_place: (Direction, u8),
 }
 
 impl Default for Mux {
@@ -131,6 +218,7 @@ impl Default for Mux {
             next_id: 0,
             scratch: None,
             window_overlay: None,
+            companion_place: (Direction::Down, 40),
         }
     }
 }
@@ -178,6 +266,7 @@ impl Mux {
             custom_title: title,
             zoomed: None,
             overlay: None,
+            companions: Vec::new(),
             color: None,
         }
     }
@@ -376,6 +465,111 @@ impl Mux {
         out
     }
 
+    /// Where companions are shown in their pane (`Direction::Down` = at the bottom), and their size in percent.
+    pub fn set_companion_place(&mut self, side: Direction, size: u8) {
+        self.companion_place = (side, size.clamp(10, 90));
+    }
+
+    /// The panes of `tab` that are seen, with the shown companions, and their places in `area`.
+    pub fn tab_rects(&self, tab: &Tab, area: Rect) -> Vec<(PaneId, Rect)> {
+        let (side, size) = self.companion_place;
+        tab.rects(area, side, size)
+    }
+
+    /// Adds `pane` as a companion of `owner` (in the active tab), shows it, and gives it the keys. `false` when
+    /// `owner` is not a pane in the layout of the active tab.
+    pub fn add_companion(&mut self, owner: PaneId, pane: PaneId) -> bool {
+        let Some(tab) = self.active_tab_mut() else {
+            return false;
+        };
+        if !tab.layout.contains(owner) {
+            return false;
+        }
+        let list = match tab.companions.iter().position(|c| c.owner == owner) {
+            Some(i) => &mut tab.companions[i],
+            None => {
+                tab.companions.push(Companions {
+                    owner,
+                    panes: Vec::new(),
+                    shown: None,
+                    last: 0,
+                });
+                tab.companions.last_mut().expect("just added")
+            }
+        };
+        list.panes.push(pane);
+        let index = list.panes.len() - 1;
+        list.shown = Some(index);
+        list.last = index;
+        tab.active_pane = pane;
+        if tab.zoomed.is_some_and(|z| z != owner) {
+            tab.zoomed = None;
+        }
+        true
+    }
+
+    /// The companions of the active pane (or of its owner, when it is a companion).
+    fn active_companions(&mut self) -> Option<&mut Tab> {
+        let tab = self.active_tab_mut()?;
+        let owner = tab.layout_pane(tab.active_pane);
+        tab.companions
+            .iter()
+            .any(|c| c.owner == owner && !c.panes.is_empty())
+            .then_some(tab)
+    }
+
+    /// Shows or hides the companion of the active pane: `Some(shown)` after the change, `None` when it has none.
+    /// Shown, the companion has the keys; hidden, its pane has them.
+    pub fn toggle_companion(&mut self) -> Option<bool> {
+        let tab = self.active_companions()?;
+        let owner = tab.layout_pane(tab.active_pane);
+        let list = tab.companions.iter_mut().find(|c| c.owner == owner)?;
+        if list.shown.is_some() {
+            list.shown = None;
+            tab.active_pane = owner;
+            Some(false)
+        } else {
+            let index = list.last.min(list.panes.len() - 1);
+            list.shown = Some(index);
+            tab.active_pane = list.panes[index];
+            Some(true)
+        }
+    }
+
+    /// Shows the next companion of the active pane (the first one after the shown or the last shown one) and gives
+    /// it the keys. `None` when the pane has no companions.
+    pub fn next_companion(&mut self) -> Option<PaneId> {
+        let tab = self.active_companions()?;
+        let owner = tab.layout_pane(tab.active_pane);
+        let list = tab.companions.iter_mut().find(|c| c.owner == owner)?;
+        let index = (list.shown.unwrap_or(list.last) + 1) % list.panes.len();
+        list.shown = Some(index);
+        list.last = index;
+        tab.active_pane = list.panes[index];
+        Some(list.panes[index])
+    }
+
+    /// The companions of `owner` (in any tab), shown or not.
+    pub fn companions_of(&self, owner: PaneId) -> Vec<PaneId> {
+        self.all_tabs()
+            .flat_map(|t| t.companions.iter())
+            .find(|c| c.owner == owner)
+            .map(|c| c.panes.clone())
+            .unwrap_or_default()
+    }
+
+    /// The pane that a companion belongs to.
+    pub fn owner_of(&self, pane: PaneId) -> Option<PaneId> {
+        self.all_tabs().find_map(|t| t.owner_of(pane))
+    }
+
+    /// The companion is shown now.
+    pub fn companion_shown(&self, pane: PaneId) -> bool {
+        self.all_tabs()
+            .flat_map(|t| t.companions.iter())
+            .any(|c| c.shown_pane() == Some(pane))
+    }
+
     /// The name of the current workspace.
     pub fn workspace(&self) -> &str {
         self.ws().map_or(MAIN, |w| &w.name)
@@ -436,7 +630,11 @@ impl Mux {
         self.workspaces.iter().enumerate().find_map(|(w, ws)| {
             ws.tabs
                 .iter()
-                .position(|t| t.layout.contains(pane) || t.overlay.is_some_and(|o| o.pane == pane))
+                .position(|t| {
+                    t.layout.contains(pane)
+                        || t.overlay.is_some_and(|o| o.pane == pane)
+                        || t.owner_of(pane).is_some()
+                })
                 .map(|i| (w, i))
         })
     }
@@ -466,6 +664,12 @@ impl Mux {
         };
         self.current = w;
         self.workspaces[w].active = i;
+        let tab = &mut self.workspaces[w].tabs[i];
+        if let Some(list) = tab.companions.iter_mut().find(|c| c.panes.contains(&pane)) {
+            let index = list.panes.iter().position(|p| *p == pane).expect("found");
+            list.shown = Some(index);
+            list.last = index;
+        }
         self.focus(pane);
         true
     }
@@ -531,6 +735,25 @@ impl Mux {
         if tab.overlay.is_some_and(|o| o.over == pane) {
             tab.overlay = None;
         }
+        if let Some(list) = tab.companions.iter_mut().find(|c| c.panes.contains(&pane)) {
+            let index = list.panes.iter().position(|p| *p == pane).expect("found");
+            list.panes.remove(index);
+            // The shown one ended: none is shown. Another one: the shown index moves with the list.
+            list.shown = match list.shown {
+                Some(s) if s == index => None,
+                Some(s) if s > index => Some(s - 1),
+                s => s,
+            };
+            list.last = list.last.min(list.panes.len().saturating_sub(1));
+            let owner = list.owner;
+            tab.companions.retain(|c| !c.panes.is_empty());
+            if tab.active_pane == pane {
+                tab.active_pane = owner;
+            }
+            return Closed::Floating;
+        }
+        // The companions of the pane go with it (the app ends their programs, see `companions_of`).
+        tab.companions.retain(|c| c.owner != pane);
         if let Some(neighbor) = tab.layout.remove(pane) {
             if tab.active_pane == pane {
                 tab.active_pane = neighbor;
@@ -548,12 +771,16 @@ impl Mux {
         }
     }
 
-    /// Closes a tab and returns its panes (to stop their sessions).
+    /// Closes a tab and returns its panes (to stop their sessions): the layout, its overlay, and the companions.
     pub fn close_tab(&mut self, tab: TabId) -> Vec<PaneId> {
-        match self.find_tab(tab) {
-            Some((w, index)) => self.take_tab(w, index).layout.panes(),
-            None => Vec::new(),
-        }
+        let Some((w, index)) = self.find_tab(tab) else {
+            return Vec::new();
+        };
+        let tab = self.take_tab(w, index);
+        let mut panes = tab.layout.panes();
+        panes.extend(tab.overlay.map(|o| o.pane));
+        panes.extend(tab.companions.iter().flat_map(|c| c.panes.iter().copied()));
+        panes
     }
 
     pub fn select(&mut self, index: usize) {
@@ -594,7 +821,9 @@ impl Mux {
     /// Splits the active pane. `new` gets the second half and the focus.
     pub fn split_active(&mut self, new: PaneId, direction: Direction) {
         if let Some(tab) = self.active_tab_mut()
-            && tab.layout.split(tab.active_pane, new, direction)
+            && tab
+                .layout
+                .split(tab.layout_pane(tab.active_pane), new, direction)
         {
             tab.active_pane = new;
             tab.zoomed = None;
@@ -604,10 +833,12 @@ impl Mux {
     /// Gives the focus to `pane` (in the active tab).
     pub fn focus(&mut self, pane: PaneId) {
         if let Some(tab) = self.active_tab_mut()
-            && tab.layout.contains(pane)
+            && (tab.layout.contains(pane)
+                || tab.companions.iter().any(|c| c.shown_pane() == Some(pane)))
         {
             tab.active_pane = pane;
-            if tab.zoomed.is_some_and(|z| z != pane) {
+            let owner = tab.layout_pane(pane);
+            if tab.zoomed.is_some_and(|z| z != owner) {
                 tab.zoomed = None;
             }
         }
@@ -618,7 +849,10 @@ impl Mux {
         let Some(tab) = self.active_tab() else {
             return;
         };
-        if let Some(neighbor) = tab.layout.neighbor(tab.active_pane, edge, area) {
+        if let Some(neighbor) = tab
+            .layout
+            .neighbor(tab.layout_pane(tab.active_pane), edge, area)
+        {
             self.focus(neighbor);
         }
     }
@@ -628,7 +862,7 @@ impl Mux {
         if let Some(tab) = self.active_tab_mut() {
             tab.zoomed = match tab.zoomed {
                 Some(_) => None,
-                None if tab.layout.panes().len() > 1 => Some(tab.active_pane),
+                None if tab.layout.panes().len() > 1 => Some(tab.layout_pane(tab.active_pane)),
                 None => None,
             };
         }
@@ -637,10 +871,7 @@ impl Mux {
     /// The panes of the active tab that are seen now, and their places in `area`.
     pub fn pane_rects(&self, area: Rect) -> Vec<(PaneId, Rect)> {
         match self.active_tab() {
-            Some(tab) => match tab.zoomed {
-                Some(pane) => vec![(pane, area)],
-                None => tab.layout.rects(area),
-            },
+            Some(tab) => self.tab_rects(tab, area),
             None => Vec::new(),
         }
     }
@@ -1263,5 +1494,199 @@ mod tests {
         mux.close_pane(b);
         assert_eq!(mux.pane_rects(AREA), [(panes[0], AREA)]);
         assert_eq!(mux.tabs()[0].zoomed, None);
+    }
+
+    #[test]
+    fn companion_places() {
+        let pane = Rect::new(0.0, 0.0, 100.0, 200.0);
+        assert_eq!(
+            companion_rects(pane, Direction::Down, 40),
+            (
+                Rect::new(0.0, 0.0, 100.0, 120.0),
+                Rect::new(0.0, 120.0, 100.0, 80.0)
+            )
+        );
+        assert_eq!(
+            companion_rects(pane, Direction::Right, 40),
+            (
+                Rect::new(0.0, 0.0, 60.0, 200.0),
+                Rect::new(60.0, 0.0, 40.0, 200.0)
+            )
+        );
+        // The size is cut to 10..=90, so both always have a part.
+        assert_eq!(companion_rects(pane, Direction::Down, 100).1.height, 180.0);
+        assert_eq!(companion_rects(pane, Direction::Down, 0).1.height, 20.0);
+    }
+
+    #[test]
+    fn a_companion_slides_out_inside_its_pane() {
+        let (mut mux, panes) = mux_with(1);
+        let a = panes[0];
+        let b = mux.new_pane_id();
+        mux.split_active(b, Direction::Right);
+        mux.focus(a);
+        let before = mux.pane_rects(AREA);
+        let c = mux.new_pane_id();
+        assert!(mux.add_companion(a, c));
+        assert_eq!(mux.active_pane(), Some(c), "the new companion has the keys");
+        assert_eq!(mux.owner_of(c), Some(a));
+        assert_eq!(mux.pane_tab(c), mux.pane_tab(a));
+        let rects = mux.pane_rects(AREA);
+        let rect = |p| rects.iter().find(|(id, _)| *id == p).map(|(_, r)| *r);
+        let owner = before.iter().find(|(id, _)| *id == a).unwrap().1;
+        assert_eq!(
+            (rect(a), rect(c)),
+            {
+                let (top, strip) = companion_rects(owner, Direction::Down, 40);
+                (Some(top), Some(strip))
+            },
+            "the strip is in the rect of its pane"
+        );
+        assert_eq!(
+            rect(b),
+            before.iter().find(|(id, _)| *id == b).map(|(_, r)| *r),
+            "the layout does not change"
+        );
+        // Hide: the program lives on, the pane is whole again and has the keys.
+        assert_eq!(mux.toggle_companion(), Some(false));
+        assert_eq!(mux.pane_rects(AREA), before);
+        assert_eq!(mux.active_pane(), Some(a));
+        assert_eq!(mux.companions_of(a), [c]);
+        // Show it again from the owner.
+        assert_eq!(mux.toggle_companion(), Some(true));
+        assert_eq!(mux.active_pane(), Some(c));
+        // The keys from the companion: it hides.
+        assert_eq!(mux.toggle_companion(), Some(false));
+        // A pane with no companions.
+        mux.focus(b);
+        assert_eq!(mux.toggle_companion(), None);
+        assert_eq!(mux.next_companion(), None);
+    }
+
+    #[test]
+    fn the_side_and_size_of_companions_can_change() {
+        let (mut mux, panes) = mux_with(1);
+        let c = mux.new_pane_id();
+        mux.add_companion(panes[0], c);
+        mux.set_companion_place(Direction::Right, 25);
+        assert_eq!(
+            mux.pane_rects(AREA),
+            [
+                (panes[0], Rect::new(0.0, 0.0, 600.0, 600.0)),
+                (c, Rect::new(600.0, 0.0, 200.0, 600.0))
+            ]
+        );
+    }
+
+    #[test]
+    fn several_companions_one_at_a_time() {
+        let (mut mux, panes) = mux_with(1);
+        let a = panes[0];
+        let (c1, c2) = (mux.new_pane_id(), mux.new_pane_id());
+        mux.add_companion(a, c1);
+        mux.add_companion(a, c2);
+        let shown = |mux: &Mux| {
+            mux.pane_rects(AREA)
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shown(&mux), [a, c2], "the new one is shown");
+        assert_eq!(mux.next_companion(), Some(c1));
+        assert_eq!(shown(&mux), [a, c1]);
+        assert_eq!(mux.active_pane(), Some(c1));
+        assert_eq!(mux.next_companion(), Some(c2), "it wraps around");
+        // Hidden, `next` shows the next one.
+        mux.toggle_companion();
+        assert_eq!(mux.next_companion(), Some(c1));
+        assert_eq!(shown(&mux), [a, c1]);
+        // Hide and show again: the last shown one comes back.
+        mux.toggle_companion();
+        mux.toggle_companion();
+        assert_eq!(shown(&mux), [a, c1]);
+    }
+
+    #[test]
+    fn companions_close_alone_or_with_their_pane() {
+        let (mut mux, panes) = mux_with(1);
+        let a = panes[0];
+        let b = mux.new_pane_id();
+        mux.split_active(b, Direction::Down);
+        mux.focus(a);
+        let (c1, c2) = (mux.new_pane_id(), mux.new_pane_id());
+        mux.add_companion(a, c1);
+        mux.add_companion(a, c2);
+        // The shown one ends: the owner has the keys, the other one is hidden.
+        assert_eq!(mux.close_pane(c2), Closed::Floating);
+        assert_eq!(mux.active_pane(), Some(a));
+        assert_eq!(mux.companions_of(a), [c1]);
+        assert!(!mux.pane_rects(AREA).iter().any(|(p, _)| *p == c1));
+        // A hidden one ends: nothing else changes.
+        mux.add_companion(a, c2);
+        mux.toggle_companion();
+        assert_eq!(mux.close_pane(c1), Closed::Floating);
+        assert_eq!(mux.companions_of(a), [c2]);
+        assert_eq!(mux.toggle_companion(), Some(true));
+        // The owner closes: its companions go with it.
+        assert_eq!(mux.close_pane(a), Closed::Pane);
+        assert_eq!(mux.companions_of(a), []);
+        assert_eq!(mux.owner_of(c2), None);
+        assert_eq!(mux.pane_tab(c2), None);
+        assert_eq!(mux.pane_rects(AREA), [(b, AREA)]);
+    }
+
+    #[test]
+    fn a_companion_zooms_and_moves_with_its_pane() {
+        let (mut mux, panes) = mux_with(1);
+        let a = panes[0];
+        let b = mux.new_pane_id();
+        mux.split_active(b, Direction::Right);
+        mux.focus(a);
+        mux.toggle_zoom();
+        let c = mux.new_pane_id();
+        mux.add_companion(a, c);
+        let (top, strip) = companion_rects(AREA, Direction::Down, 40);
+        assert_eq!(mux.pane_rects(AREA), [(a, top), (c, strip)]);
+        // A split from the companion splits its owner.
+        let d = mux.new_pane_id();
+        mux.split_active(d, Direction::Right);
+        assert_eq!(mux.active_tab().unwrap().layout.panes(), [a, d, b]);
+        // The tab moves: the companion goes with it.
+        let tab = mux.pane_tab(a).unwrap();
+        mux.move_tab_to(tab, "work");
+        assert_eq!(mux.pane_place(c).map(|(w, _)| w), Some("work"));
+    }
+
+    #[test]
+    fn closing_a_tab_gives_its_overlay_and_companions_too() {
+        let (mut mux, panes) = mux_with(2);
+        let (o, c) = (mux.new_pane_id(), mux.new_pane_id());
+        mux.add_companion(panes[0], c);
+        mux.toggle_companion();
+        assert!(mux.open_overlay(o, 80));
+        let tab = mux.pane_tab(panes[0]).unwrap();
+        assert_eq!(mux.close_tab(tab), [panes[0], o, c]);
+    }
+
+    #[test]
+    fn focus_and_reveal_of_a_companion() {
+        let (mut mux, panes) = mux_with(2);
+        let a = panes[0];
+        let c = mux.new_pane_id();
+        mux.add_companion(a, c);
+        mux.focus(a);
+        // A shown one takes the focus (a click on it).
+        mux.focus(c);
+        assert_eq!(mux.active_pane(), Some(c));
+        // A hidden one is shown by `reveal` (from another tab too).
+        mux.toggle_companion();
+        mux.select(1);
+        assert!(mux.reveal(c));
+        assert_eq!(mux.active_pane(), Some(c));
+        assert!(mux.pane_rects(AREA).iter().any(|(p, _)| *p == c));
+        // `focus` of a hidden one does nothing.
+        mux.toggle_companion();
+        mux.focus(c);
+        assert_eq!(mux.active_pane(), Some(a));
     }
 }
