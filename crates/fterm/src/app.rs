@@ -5054,7 +5054,7 @@ impl ApplicationHandler<UserEvent> for App {
                         event_loop.exit();
                     }
                     Closed::Nothing => {}
-                    Closed::Pane | Closed::Tab => {
+                    Closed::Pane | Closed::Tab | Closed::Floating => {
                         running.resize_all_panes();
                         self.tab_changed();
                     }
