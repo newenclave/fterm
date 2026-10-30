@@ -56,6 +56,8 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `font.size` | number | `14` | Font size in pixels (it is made bigger on HiDPI screens). |
 | `padding` | number | `6` | Empty space around the text, in pixels. |
 | `scrollback` | number | `10000` | Lines of history. New tabs and panes use it. |
+| `overlay_size` | 20–100 | `80` | The size of an overlay (a program in a box over a pane) in percent of the pane; 100 = all of it. See [KEYS.md](KEYS.md#overlays-and-the-scratch-shell). |
+| `scratch_size` | 20–100 | `50` | The height of the scratch shell (a drop-down shell, Ctrl+`) in percent of the tab. |
 | `pictures` | `"pixels"`, `"braille"`, or `"off"` | `"pixels"` | Pictures in panes (`ftermctl image`, OSC 1337, picture panes): real pixels, Braille dots, or none. See [PICTURES.md](PICTURES.md). |
 | `braille_style` | `"dots"` or `"pixels"` | `"dots"` | Braille chars in panes with programs: round dots (like a font; the spinners of agents look right), or square pixels with no gaps. Scenes always use pixels. |
 | `gpu` | table | `{ backend = "auto", power = "high" }` | The GPU that draws the window. See "The GPU". |
@@ -118,6 +120,8 @@ profiles = {
 | `wsl` | A WSL distro (for example `"Ubuntu"`). fterm starts `wsl.exe -d Ubuntu --cd ~` and knows that the pane has Linux folders. |
 | `palette_changes` | `true` / `false`: may its programs change the 16 colors (default: the value of the config). |
 | `remote` | The `name` of a `remotes` machine: its tabs open there (see [MUX.md](MUX.md#panes-on-other-machines-ssh)). |
+| `overlay` | `true`: it opens as an overlay over the active pane, not as a tab or a split (for example `{ name = "yazi", command = "yazi", overlay = true }`). |
+| `overlay_size` | The size of its overlay in percent (default: `overlay_size` of the config). |
 | `mux` | `true` / `false`: its panes live in the mux server (default: the value of the config; see [MUX.md](MUX.md)). |
 | `workspace` | The workspace of the tabs that it opens, for example `"agents"` (made when it is not there; see [KEYS.md](KEYS.md#workspaces)). |
 | `harmonize` | `false`: the programs of this profile keep their exact colors (see [THEMES.md](THEMES.md#the-colors-of-programs-harmonize)). |
@@ -175,6 +179,7 @@ also work on other layouts (for example, Russian).
 | `choose_workspace` (Ctrl+Alt+W), `move_tab_to_workspace` | The list of workspaces: go to one or make one, or move the active tab there. |
 | `connect_ssh` | "Connect over SSH…": asks for `user@host`, then shows the panes of the mux server there. |
 | `stop_mux` | Stop the mux server: all its panes end (after a question; see [MUX.md](MUX.md)). |
+| `run_in_overlay` (Ctrl+Shift+L), `toggle_scratch` (Ctrl+`) | Run a command in an overlay over the active pane; show or hide the scratch shell (see [KEYS.md](KEYS.md#overlays-and-the-scratch-shell)). |
 | `show_clipboard_picture`, `show_pane_screenshot` | A picture pane with the picture in the clipboard, or with a screenshot of the active pane (see [PICTURES.md](PICTURES.md)). |
 | `next_workspace`, `prev_workspace`, `rename_workspace` | The next / the previous workspace, a new name for this one. |
 | `open_link_hints` (Ctrl+Shift+U) | Labels on the links of the screen: a label opens its link, Shift + label copies it. |

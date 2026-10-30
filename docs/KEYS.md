@@ -63,6 +63,23 @@ workspaces. To open the tabs of a profile in a workspace, give it `workspace = "
 Each pane has its own shell, history, selection, and copy mode. The active pane has a colored frame.
 When a shell ends (for example, you type `exit`), only its tab closes. The window closes after the last tab.
 
+## Overlays and the scratch shell
+An **overlay** is a program in a box over the active pane for a moment: a file manager (yazi, Far), lazygit, htop.
+The layout does not change. The pane under the box is dim. When the program ends, the box goes.
+
+A **scratch shell** is a shell that drops down over the top of the tab, like a console in a game. Hide it, and
+its shell lives on: it comes back with its history, also in another tab. There is one per window.
+
+| Key | What it does |
+|---|---|
+| Ctrl + Shift + L | Run in an overlay: type a command, Enter runs it in a box over the active pane. |
+| Ctrl + ` | Show or hide the scratch shell. `exit` in it ends it. |
+| Ctrl + Shift + W | In an overlay or the scratch: close only that one. |
+
+While an overlay or the scratch is shown, it gets the keys and the mouse; the panes under it get no clicks.
+The sizes are `overlay_size` and `scratch_size` in the config (see [CONFIG.md](CONFIG.md)). A profile with
+`overlay = true` opens as an overlay too.
+
 ## Scroll
 | Key or mouse | What it does |
 |---|---|

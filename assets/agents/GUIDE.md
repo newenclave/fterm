@@ -22,7 +22,9 @@ whether a command runs, the last command and its exit code, and the agent state.
 ## Recipes
 
 **Run tests or a build in another pane, and read the result**
-1. `open_pane` with `place: "right"` (`ftermctl spawn --right`) gives a new pane id.
+1. `open_pane` with `place: "right"` (`ftermctl spawn --right`) gives a new pane id. (`place: "overlay"` with
+   `command` opens a box over a pane for the user, for example a file manager; it goes when the program ends.
+   Do not use an overlay for your own commands: they need a pane that stays.)
 2. `run_command` with `pane` and `command` (`ftermctl run --pane N --wait "cargo test"`) waits for the end
    and gives the exit code and the output.
 

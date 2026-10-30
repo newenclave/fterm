@@ -376,7 +376,7 @@ Still to do:
 - Colors per cell, so one scene can have many colors.
 - **Check:** an agent draws a live chart (for example, CPU or token use) in a Braille pane.
 
-### Phase 12 — Panes for a moment, and many sessions at once — in progress
+### Phase 12 — Panes for a moment, and many sessions at once — in progress (overlays and scratch ✅, 2026-10-30)
 Ideas from [agterm](https://github.com/umputun/agterm) (a macOS terminal for many agents; Swift and libghostty, so
 it cannot be ported, but its ideas can). In this order:
 - **Overlays:** run a program over a pane, on the whole pane or in a floating box (a file manager like yazi or Far,
