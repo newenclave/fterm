@@ -331,6 +331,29 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             w.pane_into(&mut params)?;
             call("spawn", params)
         }
+        "overlay" => {
+            let w = read(&["size", "pane"], &[])?;
+            let command = w.text();
+            if command.trim().is_empty() {
+                return Err("overlay needs a command".to_owned());
+            }
+            let mut params = json!({ "place": "overlay", "command": command.trim() });
+            if let Some(size) = w.number("size")? {
+                params["size"] = json!(size);
+            }
+            w.pane_into(&mut params)?;
+            call("spawn", params)
+        }
+        "scratch" => {
+            let w = read(&[], &["show", "hide"])?;
+            let mut params = json!({});
+            if w.flag("show") {
+                params["show"] = json!(true);
+            } else if w.flag("hide") {
+                params["show"] = json!(false);
+            }
+            call("scratch", params)
+        }
         "scene" => {
             let w = read(&["pane"], &["right", "down"])?;
             let place = if w.flag("down") { "down" } else { "right" };
@@ -563,6 +586,35 @@ mod tests {
         assert_eq!(cli("mux proxy").unwrap().command, Command::MuxProxy);
         assert!(cli("mux").is_err());
         assert!(cli("mux start").is_err());
+    }
+
+    #[test]
+    fn overlays_and_the_scratch() {
+        assert_eq!(
+            call("overlay htop"),
+            (
+                "spawn".into(),
+                json!({ "place": "overlay", "command": "htop" })
+            )
+        );
+        assert_eq!(
+            // `--` ends the flags of ftermctl: the rest is the command with its own flags.
+            call("overlay --size 100 --pane 4 -- lazygit --all"),
+            (
+                "spawn".into(),
+                json!({ "place": "overlay", "command": "lazygit --all", "size": 100, "pane": 4 })
+            )
+        );
+        assert!(cli("overlay").is_err(), "no command");
+        assert_eq!(call("scratch"), ("scratch".into(), json!({})));
+        assert_eq!(
+            call("scratch --show"),
+            ("scratch".into(), json!({ "show": true }))
+        );
+        assert_eq!(
+            call("scratch --hide"),
+            ("scratch".into(), json!({ "show": false }))
+        );
     }
 
     #[test]

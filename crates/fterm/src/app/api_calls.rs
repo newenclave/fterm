@@ -518,6 +518,7 @@ impl App {
             "spawn" => self.api_spawn(client, params),
             "scene_open" => self.api_scene_open(client, params),
             "show_image" => self.api_show_image(client, params),
+            "scratch" => self.api_scratch(params),
             "scene_draw" => self.api_scene_draw(client, params),
             "send_text" => self.api_send_text(client, params),
             "get_text" => self.api_get_text(client, params),
@@ -779,6 +780,9 @@ impl App {
     }
 
     fn api_spawn(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
+        if str_param(params, "place")?.as_deref() == Some("overlay") {
+            return self.api_overlay(client, params);
+        }
         let place = place_param(params)?;
         let profile = str_param(params, "profile")?;
         if let Some(cwd) = str_param(params, "cwd")? {
@@ -804,6 +808,52 @@ impl App {
             p.opened_by = Some(client);
         }
         Ok(json!({ "pane": pane.map(|p| p.0) }))
+    }
+
+    /// `spawn` with `place: "overlay"`: `command` (or the program of `profile`) in a box over a pane.
+    fn api_overlay(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
+        let command = str_param(params, "command")?;
+        let profile = str_param(params, "profile")?;
+        if command.is_none() && profile.is_none() {
+            return Err(RpcError::invalid_params(
+                "an overlay needs `command` (or a `profile`)",
+            ));
+        }
+        let size = params
+            .get("size")
+            .and_then(Value::as_f64)
+            .map(|s| s.round().clamp(20.0, 100.0) as u8);
+        if let Some(over) = pane_param(params, "pane")?.map(PaneId) {
+            let running = self.running.as_mut().expect("checked in api_call");
+            if !running.panes.contains_key(&over) {
+                return Err(not_found(&format!("pane {}", over.0)));
+            }
+            running.mux.reveal(over);
+        }
+        if let Some(cwd) = str_param(params, "cwd")? {
+            self.spawn_cwd = Some(cwd);
+        }
+        let opened = self.open_overlay(command, profile.as_deref(), size);
+        self.spawn_cwd = None;
+        let pane = opened.map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
+        if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {
+            p.opened_by = Some(client);
+        }
+        Ok(json!({ "pane": pane.0 }))
+    }
+
+    /// `scratch`: shows or hides the scratch shell (`show`; no `show` = the other one).
+    fn api_scratch(&mut self, params: &Value) -> Result<Value, RpcError> {
+        let want = params.get("show").and_then(Value::as_bool);
+        let shown = |app: &Self| {
+            let mux = &app.running.as_ref().expect("checked in api_call").mux;
+            mux.scratch_pane().is_some() && mux.input_pane() == mux.scratch_pane()
+        };
+        if want != Some(shown(self)) {
+            self.toggle_scratch();
+        }
+        let mux = &self.running.as_ref().expect("checked in api_call").mux;
+        Ok(json!({ "pane": mux.scratch_pane().map(|p| p.0), "shown": shown(self) }))
     }
 
     /// `scene_open`: a Braille scene next to a pane (Phase 11). The client may draw in it at once.

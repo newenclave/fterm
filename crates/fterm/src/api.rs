@@ -31,6 +31,7 @@ pub const METHODS: &[&str] = &[
     "read_messages",
     "scene_open",
     "show_image",
+    "scratch",
     "scene_draw",
     "screenshot",
     "set_tab_color",

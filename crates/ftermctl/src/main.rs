@@ -38,6 +38,10 @@ Panes and tabs:
   panel [events|agents]                  show a panel of the dock (no name = close the dock)
 
 Braille scenes (2x4 dots in each cell):
+  overlay [--size N] [--pane N] [--] COMMAND
+                                         run COMMAND in a box over a pane (N percent of it); the box goes
+                                         when the program ends (`--` before a command with its own flags)
+  scratch [--show|--hide]                show or hide the drop-down scratch shell (no flag = the other one)
   scene [--right|--down] [--pane N]      open a scene pane; prints its id and its size in dots
   draw [--pane N] JSON|-                 draw commands (one or a list; `-` = read them from stdin), for example
                                          '[{\"op\":\"line\",\"x0\":0,\"y0\":0,\"x1\":20,\"y1\":10}]' (see docs/SCENE.md)

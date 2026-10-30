@@ -63,9 +63,11 @@ pub fn tools() -> Value {
         },
         {
             "name": "open_pane",
-            "description": "Open a new pane: a new tab, or a split on the right or below. Returns the new pane id.",
+            "description": "Open a new pane: a new tab, a split on the right or below, or an overlay (a box over a pane that runs `command` and goes when it ends, for example a file manager or htop). Returns the new pane id.",
             "inputSchema": { "type": "object", "properties": {
-                "place": { "type": "string", "enum": ["tab", "right", "down"], "description": "Where. The default is a new tab." },
+                "place": { "type": "string", "enum": ["tab", "right", "down", "overlay"], "description": "Where. The default is a new tab." },
+                "command": { "type": "string", "description": "With place overlay: the command to run (the shell runs it)." },
+                "size": { "type": "integer", "description": "With place overlay: its size in percent of the pane (20-100)." },
                 "profile": { "type": "string", "description": "An fterm profile name (for example PowerShell). No profile = the default one." },
                 "cwd": { "type": "string", "description": "The folder to start in." },
                 "next_to": { "type": "integer", "description": "Split next to this pane." }
@@ -378,6 +380,8 @@ impl<B: Backend> Server<B> {
                         ("profile", "profile"),
                         ("cwd", "cwd"),
                         ("next_to", "pane"),
+                        ("command", "command"),
+                        ("size", "size"),
                     ]),
                 )
                 .map(|v| format!("Opened pane {}.", v["pane"])),
@@ -1242,6 +1246,23 @@ mod tests {
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("closed"), "{text}");
         assert_ne!(result["isError"], json!(true));
+    }
+
+    #[test]
+    fn a_program_in_an_overlay() {
+        let mut s = server();
+        tool(
+            &mut s,
+            "open_pane",
+            json!({ "place": "overlay", "command": "lazygit", "size": 90 }),
+        );
+        assert_eq!(
+            s.backend.calls[0],
+            (
+                "spawn".into(),
+                json!({ "place": "overlay", "command": "lazygit", "size": 90 })
+            )
+        );
     }
 
     #[test]
