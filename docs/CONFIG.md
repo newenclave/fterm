@@ -60,6 +60,8 @@ If the file has an error, fterm shows it in a box and keeps the last good config
 | `overlay_size` | 20–100 | `80` | The size of an overlay (a program in a box over a pane) in percent of the pane; 100 = all of it. See [KEYS.md](KEYS.md#overlays-and-the-scratch-shell). |
 | `window_overlay` | a command | none | The program of the window overlay (Ctrl+Shift+J, over any tab), for example `"far"`. With none, fterm asks for a command the first time. |
 | `scratch_size` | 20–100 | `50` | The height of the scratch shell (a drop-down shell, Ctrl+`) in percent of the tab. |
+| `companion_side` | `"bottom"`, `"right"` | `"bottom"` | Where a companion shows in its pane. See [KEYS.md](KEYS.md#companions). |
+| `companion_size` | 10–90 | `40` | The size of a companion in percent of its pane. |
 | `pictures` | `"pixels"`, `"braille"`, or `"off"` | `"pixels"` | Pictures in panes (`ftermctl image`, OSC 1337, picture panes): real pixels, Braille dots, or none. See [PICTURES.md](PICTURES.md). |
 | `braille_style` | `"dots"` or `"pixels"` | `"dots"` | Braille chars in panes with programs: round dots (like a font; the spinners of agents look right), or square pixels with no gaps. Scenes always use pixels. |
 | `gpu` | table | `{ backend = "auto", power = "high" }` | The GPU that draws the window. See "The GPU". |
@@ -182,6 +184,7 @@ also work on other layouts (for example, Russian).
 | `connect_ssh` | "Connect over SSH…": asks for `user@host`, then shows the panes of the mux server there. |
 | `stop_mux` | Stop the mux server: all its panes end (after a question; see [MUX.md](MUX.md)). |
 | `run_in_overlay` (Ctrl+Shift+L), `toggle_scratch` (Ctrl+`) | Run a command in an overlay over the active pane; show or hide the scratch shell (see [KEYS.md](KEYS.md#overlays-and-the-scratch-shell)). |
+| `new_companion` (Ctrl+Shift+N), `toggle_companion` (Ctrl+Shift+K), `next_companion` (Ctrl+Shift+M) | A new companion of the active pane; hide or show it; show the next one (see [KEYS.md](KEYS.md#companions)). |
 | `show_clipboard_picture`, `show_pane_screenshot` | A picture pane with the picture in the clipboard, or with a screenshot of the active pane (see [PICTURES.md](PICTURES.md)). |
 | `next_workspace`, `prev_workspace`, `rename_workspace` | The next / the previous workspace, a new name for this one. |
 | `open_link_hints` (Ctrl+Shift+U) | Labels on the links of the screen: a label opens its link, Shift + label copies it. |

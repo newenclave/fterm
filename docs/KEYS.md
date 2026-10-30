@@ -85,6 +85,23 @@ While an overlay or the scratch is shown, it gets the keys and the mouse; the pa
 The sizes are `overlay_size` and `scratch_size` in the config (see [CONFIG.md](CONFIG.md)). A profile with
 `overlay = true` opens as an overlay too.
 
+## Companions
+A **companion** is a pane that belongs to another pane: the log of a server (`tail -f`), a watcher, a second shell.
+It is not in the layout. When it is shown, it takes a strip of its pane (at the bottom or at the right). When it
+is hidden, its program lives on and the pane gets all its place back. A pane can have many companions; one is
+shown at a time. Companions close with their pane, and they move and zoom with it.
+
+| Key | What it does |
+|---|---|
+| Ctrl + Shift + N | Type a command, and Enter runs it as a new companion of the active pane. An empty command opens a shell. |
+| Ctrl + Shift + K | Hide or show the companion of the active pane. With none, it asks for a command, like Ctrl + Shift + N. |
+| Ctrl + Shift + M | Show the next companion of the active pane. |
+| Ctrl + Shift + W | In a companion: close only the companion (its program ends). |
+
+A shown companion gets the keys. Click its pane, or hide the companion, to type in the pane again. `exit` in a
+companion ends it. The place and the size are `companion_side` and `companion_size` in the config (see
+[CONFIG.md](CONFIG.md)). Companions are not saved in sessions.
+
 ## Scroll
 | Key or mouse | What it does |
 |---|---|

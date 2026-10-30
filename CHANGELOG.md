@@ -15,6 +15,12 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   the tab and keeps its history while it is hidden (`scratch_size`, 50%). From scripts and agents:
   `ftermctl overlay -- COMMAND`, `ftermctl scratch`, `spawn` with `place: "overlay"`, and the MCP tool `open_pane`.
   See [docs/KEYS.md](docs/KEYS.md#overlays-and-the-scratch-shell).
+- **Companions:** panes that belong to a pane, for example the log of a server or a second shell. Ctrl+Shift+N runs
+  a command (or a shell) as a strip at the bottom of the active pane. Ctrl+Shift+K hides it and shows it again (the
+  program lives on), and Ctrl+Shift+M goes to the next one. They close with their pane, and they move and zoom
+  with it. `companion_side = "right"` and `companion_size` (40% by default) set the place. From scripts and agents:
+  `ftermctl companion -- COMMAND`, `ftermctl companion --toggle|--next`, `spawn` with `place: "companion"`, the API
+  method `companion`, and the MCP tool `open_pane`. See [docs/KEYS.md](docs/KEYS.md#companions).
 - **Pictures in panes.** A picture (PNG, JPEG, BMP) takes a rectangle of cells in any pane and scrolls with
   the text. `ftermctl image cat.png` (`--height N`, 12 rows by default) shows one in the output of its pane; it
   works in WSL and over SSH too. Programs can show pictures with the iTerm2 sequence (OSC 1337). A picture pane
