@@ -1872,7 +1872,8 @@ impl App {
             .and_then(|p| p.wsl.clone());
         match distro {
             Some(distro) => crate::history_popup::World::Wsl(distro),
-            None => crate::history_popup::World::Windows,
+            None if cfg!(windows) => crate::history_popup::World::Windows,
+            None => crate::history_popup::World::Native,
         }
     }
 

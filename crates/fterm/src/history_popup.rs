@@ -205,18 +205,22 @@ pub fn dir_rows(entries: &[DirEntry], now: u64, exists: impl Fn(&str) -> bool) -
         .collect()
 }
 
-/// Where a pane lives: Windows, or a WSL distro (its folders are Linux paths). The history popups
-/// and hints show only the folders and commands of the pane's world.
+/// Where a pane lives: Windows, a WSL distro (its folders are Linux paths), or Linux and macOS (one kind of
+/// folders). The history popups and hints show only the folders and commands of the pane's world.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum World {
     Windows,
     Wsl(String),
+    Native,
 }
 
 impl World {
     /// The folder belongs to this world.
     pub fn has(&self, dir: &str) -> bool {
-        dir.starts_with('/') == matches!(self, World::Wsl(_))
+        match self {
+            World::Native => true,
+            _ => dir.starts_with('/') == matches!(self, World::Wsl(_)),
+        }
     }
 
     /// A command (with the folder where it ran) belongs to this world.
@@ -319,6 +323,13 @@ mod tests {
         // A command without a folder is for every world.
         assert!(windows.has_command(None) && ubuntu.has_command(None));
         assert!(ubuntu.has_command(Some("/tmp")) && !ubuntu.has_command(Some("C:/x")));
+    }
+
+    #[test]
+    fn on_linux_and_macos_every_folder_is_ours() {
+        let native = World::Native;
+        assert!(native.has("/home/me") && native.has_command(Some("/tmp")));
+        assert_eq!(native.host_path("/home/me"), "/home/me");
     }
 
     #[test]
