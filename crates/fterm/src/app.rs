@@ -104,6 +104,7 @@ pub enum UserEvent {
     Dashboard(dashboard_calls::DashDone),
 }
 
+mod agent_calls;
 mod ai_calls;
 mod api_calls;
 mod companion_calls;
@@ -1169,7 +1170,7 @@ impl App {
                         }
                     }
                 }
-                agent_rows(&entries, now, &self.ui)
+                agent_rows(&entries, now, &self.ui, &self.config.config.agents)
             }
         }
     }
@@ -1272,7 +1273,12 @@ impl App {
                 messages: self.inbox.unread(pane),
                 info: &p.agent_info,
             };
-            let lines = crate::panels::agent_lines(&entry, Instant::now(), width);
+            let lines = crate::panels::agent_lines(
+                &entry,
+                Instant::now(),
+                width,
+                &self.config.config.agents,
+            );
             return Some((lines, fterm_render::dock::reader_rows(&layout, cell)));
         }
         if running.dock.active != PanelKind::Events {
@@ -1331,6 +1337,12 @@ impl App {
             {
                 let pane = dock.reading().map(PaneId);
                 return self.agent_diff(pane);
+            }
+            Key::Character(c)
+                if dock.active == PanelKind::Agents && c.eq_ignore_ascii_case("h") =>
+            {
+                let pane = dock.reading().map(PaneId);
+                return self.open_conversations(pane);
             }
             Key::Character(c)
                 if ctrl && c.eq_ignore_ascii_case("c") && dock.active == PanelKind::Agents =>
@@ -1426,6 +1438,13 @@ impl App {
                 let index = dock.selected();
                 let pane = self.dock_rows().get(index).and_then(|(_, p)| *p);
                 return self.agent_diff(pane);
+            }
+            Key::Character(c)
+                if dock.active == PanelKind::Agents && c.eq_ignore_ascii_case("h") =>
+            {
+                let index = dock.selected();
+                let pane = self.dock_rows().get(index).and_then(|(_, p)| *p);
+                return self.open_conversations(pane);
             }
             Key::Character(c) if dock.active == PanelKind::Events => match c.as_str() {
                 "f" | "F" => {
@@ -3382,6 +3401,9 @@ impl App {
         if kind == PopupKind::Panes {
             return self.recent_popup_rows();
         }
+        if kind == PopupKind::Conversations {
+            return self.conversation_rows(here);
+        }
         let Some(history) = &self.history else {
             return Vec::new();
         };
@@ -3391,7 +3413,8 @@ impl App {
             | PopupKind::Themes
             | PopupKind::Workspaces
             | PopupKind::MoveTab
-            | PopupKind::Panes => Vec::new(),
+            | PopupKind::Panes
+            | PopupKind::Conversations => Vec::new(),
             PopupKind::Commands => {
                 let filter = CommandFilter {
                     cwd: if only_here {
@@ -3507,6 +3530,9 @@ impl App {
         if popup.kind == PopupKind::Panes {
             return self.accept_recent_popup(&row.key);
         }
+        if popup.kind == PopupKind::Conversations {
+            return self.resume_conversation(&row.key, popup.here.clone());
+        }
         let busy = self
             .running
             .as_ref()
@@ -3514,7 +3540,10 @@ impl App {
             .is_some_and(|pane| pane.shell.is_running());
         match popup.kind {
             // Handled above.
-            PopupKind::Workspaces | PopupKind::MoveTab | PopupKind::Panes => return,
+            PopupKind::Workspaces
+            | PopupKind::MoveTab
+            | PopupKind::Panes
+            | PopupKind::Conversations => return,
             PopupKind::Sessions => return self.restore_entry(&row.key),
             PopupKind::Themes => {
                 // An error was shown as a toast.
@@ -3655,7 +3684,8 @@ impl App {
                         | PopupKind::Themes
                         | PopupKind::Workspaces
                         | PopupKind::MoveTab
-                        | PopupKind::Panes => Ok(()),
+                        | PopupKind::Panes
+                        | PopupKind::Conversations => Ok(()),
                     };
                     if let Err(err) = result {
                         tracing::warn!("cannot change the history: {err}");

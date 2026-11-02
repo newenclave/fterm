@@ -21,6 +21,8 @@ pub enum PopupKind {
     MoveTab,
     /// The panes, the recently used first: Enter goes to one.
     Panes,
+    /// The past conversations of agents in a folder: Enter brings one back.
+    Conversations,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -129,6 +131,7 @@ impl HistoryPopup {
             PopupKind::Workspaces => tr!("popup.workspaces"),
             PopupKind::MoveTab => tr!("popup.move_tab"),
             PopupKind::Panes => tr!("popup.panes"),
+            PopupKind::Conversations => tr!("popup.conversations"),
             PopupKind::Commands => {
                 let mut title = tr!("popup.commands");
                 if self.only_here {
@@ -157,6 +160,7 @@ impl HistoryPopup {
             PopupKind::Workspaces => tr!("popup.workspaces_keys"),
             PopupKind::MoveTab => tr!("popup.move_tab_keys"),
             PopupKind::Panes => tr!("popup.panes_keys"),
+            PopupKind::Conversations => tr!("popup.conversations_keys"),
         }
     }
 }

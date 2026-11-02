@@ -3,6 +3,7 @@
 
 mod access;
 mod agent;
+mod agent_history;
 mod agent_info;
 mod ai_chat;
 mod api;

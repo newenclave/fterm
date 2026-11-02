@@ -950,6 +950,10 @@ impl App {
             p.agent_session = Some(id);
         }
         p.agent_info.apply(&event, Instant::now());
+        let counts = matches!(
+            event,
+            crate::agent_info::AgentEvent::Prompt(_) | crate::agent_info::AgentEvent::Done(_)
+        );
         let (state, message) = match &event {
             crate::agent_info::AgentEvent::Prompt(_) => ("working", String::new()),
             crate::agent_info::AgentEvent::Tool { .. } => {
@@ -961,6 +965,9 @@ impl App {
             }
         };
         self.agent_state(event_loop, pane, state, &message);
+        if counts {
+            self.remember_conversation(pane);
+        }
         Ok(json!({ "pane": pane.0 }))
     }
 

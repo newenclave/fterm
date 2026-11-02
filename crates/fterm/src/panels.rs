@@ -359,6 +359,7 @@ pub fn agent_rows(
     entries: &[AgentEntry],
     now: Instant,
     ui: &UiColors,
+    parts: &fterm_config::load::AgentsConfig,
 ) -> Vec<(DockRow, Option<PaneId>)> {
     let mut order: Vec<&AgentEntry> = entries.iter().collect();
     let rank = |k: AgentKind| match k {
@@ -376,14 +377,13 @@ pub fn agent_rows(
                 .info
                 .question
                 .as_ref()
-                .filter(|_| e.state.kind == AgentKind::Waiting);
-            let todos = e
-                .info
-                .todo_progress()
-                .map(|(done, total, current)| match current {
+                .filter(|_| e.state.kind == AgentKind::Waiting && parts.shows("question"));
+            let todos = e.info.todo_progress().filter(|_| parts.shows("todos")).map(
+                |(done, total, current)| match current {
                     Some(c) => format!("{done}/{total} · {c}"),
                     None => format!("{done}/{total}"),
-                });
+                },
+            );
             let detail = if let Some(q) = question {
                 q.clone()
             } else if let Some(t) = todos.filter(|_| e.state.kind == AgentKind::Working) {
@@ -403,11 +403,17 @@ pub fn agent_rows(
             } else {
                 e.name.to_owned()
             };
-            if let Some(cost) = usage.and_then(|u| u.cost_usd) {
+            if let Some(cost) = usage
+                .and_then(|u| u.cost_usd)
+                .filter(|_| parts.shows("cost"))
+            {
                 title.push_str(&format!(" · {}", money(cost)));
             }
             let mut right = short_ago(now.saturating_duration_since(e.state.since));
-            if let Some(ctx) = usage.and_then(|u| u.context_pct) {
+            if let Some(ctx) = usage
+                .and_then(|u| u.context_pct)
+                .filter(|_| parts.shows("context"))
+            {
                 right.push_str(&format!(" · {ctx:.0}%"));
             }
             let row = DockRow {
@@ -428,6 +434,7 @@ pub fn agent_lines(
     e: &AgentEntry,
     now: Instant,
     width: usize,
+    parts: &fterm_config::load::AgentsConfig,
 ) -> Vec<fterm_render::dock::ChatLine> {
     use fterm_render::dock::{ChatLine, ChatStyle};
     let width = width.max(8);
@@ -457,11 +464,11 @@ pub fn agent_lines(
         ),
         ChatStyle::Note,
     );
-    if let Some(q) = &e.info.question {
+    if let Some(q) = e.info.question.as_ref().filter(|_| parts.shows("question")) {
         put("", ChatStyle::Note);
         put(q, ChatStyle::Answer);
     }
-    if !e.info.todos.is_empty() {
+    if !e.info.todos.is_empty() && parts.shows("todos") {
         put("", ChatStyle::Note);
         put(&fterm_config::tr!("agent.todos"), ChatStyle::Note);
         for t in &e.info.todos {
@@ -474,31 +481,36 @@ pub fn agent_lines(
             put(&format!("{mark} {text}"), ChatStyle::Answer);
         }
     }
-    if let Some(u) = &e.info.usage {
-        let mut parts = Vec::new();
-        if let Some(c) = u.cost_usd {
-            parts.push(money(c));
+    if let Some(u) = e
+        .info
+        .usage
+        .as_ref()
+        .filter(|_| parts.shows("cost") || parts.shows("context"))
+    {
+        let mut items = Vec::new();
+        if let Some(c) = u.cost_usd.filter(|_| parts.shows("cost")) {
+            items.push(money(c));
         }
         if let (Some(a), Some(r)) = (u.lines_added, u.lines_removed) {
-            parts.push(format!("+{a} −{r}"));
+            items.push(format!("+{a} −{r}"));
         }
-        if let Some(c) = u.context_pct {
-            parts.push(fterm_config::tr!("agent.context", pct = format!("{c:.0}")));
+        if let Some(c) = u.context_pct.filter(|_| parts.shows("context")) {
+            items.push(fterm_config::tr!("agent.context", pct = format!("{c:.0}")));
         }
         if let Some(m) = &u.model {
-            parts.push(m.clone());
+            items.push(m.clone());
         }
         if let Some(p) = u.five_hour_pct {
-            parts.push(format!("5 h {p:.0}%"));
+            items.push(format!("5 h {p:.0}%"));
         }
         if let Some(p) = u.seven_day_pct {
-            parts.push(format!("7 d {p:.0}%"));
+            items.push(format!("7 d {p:.0}%"));
         }
         put("", ChatStyle::Note);
         put(&fterm_config::tr!("agent.usage"), ChatStyle::Note);
-        put(&parts.join(" · "), ChatStyle::Answer);
+        put(&items.join(" · "), ChatStyle::Answer);
     }
-    if !e.info.files.is_empty() {
+    if !e.info.files.is_empty() && parts.shows("files") {
         put("", ChatStyle::Note);
         put(
             &fterm_config::tr!("agent.files", n = e.info.files.len()),
@@ -513,7 +525,7 @@ pub fn agent_lines(
             put(&text, ChatStyle::Answer);
         }
     }
-    if !e.info.timeline.is_empty() {
+    if !e.info.timeline.is_empty() && parts.shows("last") {
         put("", ChatStyle::Note);
         put(&fterm_config::tr!("agent.steps"), ChatStyle::Note);
         for step in e.info.timeline.iter().rev().take(30) {
@@ -725,7 +737,12 @@ mod tests {
                 info: &empty,
             },
         ];
-        let rows = agent_rows(&entries, t0 + Duration::from_secs(30), &UiColors::default());
+        let rows = agent_rows(
+            &entries,
+            t0 + Duration::from_secs(30),
+            &UiColors::default(),
+            &Default::default(),
+        );
         assert_eq!(rows.len(), 2);
         let (row, pane) = &rows[0];
         assert_eq!(row.title, "claude");
@@ -840,7 +857,7 @@ mod tests {
                 info: &asking,
             },
         ];
-        let rows = agent_rows(&entries, now, &UiColors::default());
+        let rows = agent_rows(&entries, now, &UiColors::default(), &Default::default());
         let panes: Vec<_> = rows.iter().map(|(_, p)| p.unwrap().0).collect();
         assert_eq!(
             panes,
@@ -858,6 +875,40 @@ mod tests {
     }
 
     #[test]
+    fn the_config_picks_the_parts() {
+        let t0 = Instant::now();
+        let info = info_with(t0);
+        let working = state(AgentKind::Working, t0);
+        let entry = AgentEntry {
+            pane: PaneId(2),
+            name: "busy",
+            state: &working,
+            messages: 0,
+            info: &info,
+        };
+        let parts = fterm_config::load::AgentsConfig {
+            history: true,
+            show: vec!["todos".into()],
+        };
+        let rows = agent_rows(
+            std::slice::from_ref(&entry),
+            t0,
+            &UiColors::default(),
+            &parts,
+        );
+        assert_eq!(rows[0].0.title, "busy", "no cost");
+        assert_eq!(rows[0].0.detail, "1/3 · Writing tests");
+        let all: String = agent_lines(&entry, t0, 60, &parts)
+            .into_iter()
+            .map(|l| l.text + "\n")
+            .collect();
+        assert!(
+            all.contains("Writing tests") && !all.contains("$0.42") && !all.contains("login.rs"),
+            "{all}"
+        );
+    }
+
+    #[test]
     fn the_details_of_an_agent() {
         let t0 = Instant::now();
         let info = info_with(t0);
@@ -869,10 +920,15 @@ mod tests {
             messages: 0,
             info: &info,
         };
-        let text: Vec<String> = agent_lines(&entry, t0 + Duration::from_secs(90), 60)
-            .into_iter()
-            .map(|l| l.text)
-            .collect();
+        let text: Vec<String> = agent_lines(
+            &entry,
+            t0 + Duration::from_secs(90),
+            60,
+            &Default::default(),
+        )
+        .into_iter()
+        .map(|l| l.text)
+        .collect();
         let all = text.join("\n");
         for want in [
             "busy",

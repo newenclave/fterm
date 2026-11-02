@@ -159,8 +159,11 @@
       "one": "{n} tab",
       "other": "{n} tabs"
     },
-    "dock.agents_keys": "Enter go · Space details · D diff · Tab next panel · Esc back",
-    "dock.agent_reader_keys": "Enter go · D diff · Ctrl+C copy · Esc back",
+    "dock.agents_keys": "Enter go · Space details · D diff · H history · Tab · Esc",
+    "dock.agent_reader_keys": "Enter go · D diff · H history · Ctrl+C copy · Esc",
+    "popup.conversations": "Past conversations here",
+    "popup.conversations_keys": "Enter brings it back in a new tab · type to find · Esc",
+    "popup.no_title": "(no title) {id}",
     "agent.todos": "Todos",
     "agent.usage": "Usage",
     "agent.context": "context {pct}%",

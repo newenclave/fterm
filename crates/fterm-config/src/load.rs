@@ -503,6 +503,33 @@ pub struct AgentOut {
     pub calls: Vec<ApiCall>,
 }
 
+/// The parts that the Agents panel can show (`agents.show`).
+pub const AGENT_PARTS: [&str; 6] = ["question", "todos", "cost", "context", "files", "last"];
+
+/// `agents = { ... }`: the Agents panel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentsConfig {
+    /// Keep past conversations in `agents.jsonl` (H in the panel lists them).
+    pub history: bool,
+    /// The parts that the rows and the details show (see `AGENT_PARTS`).
+    pub show: Vec<String>,
+}
+
+impl Default for AgentsConfig {
+    fn default() -> Self {
+        Self {
+            history: true,
+            show: AGENT_PARTS.iter().map(|p| (*p).to_owned()).collect(),
+        }
+    }
+}
+
+impl AgentsConfig {
+    pub fn shows(&self, part: &str) -> bool {
+        self.show.iter().any(|p| p == part)
+    }
+}
+
 /// The dashboard (`dashboard` in the config): its tiles in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DashboardConfig {
@@ -670,6 +697,8 @@ pub struct Config {
     pub commands: Vec<UserCommand>,
     /// The dashboard (Ctrl+Shift+D).
     pub dashboard: DashboardConfig,
+    /// The Agents panel.
+    pub agents: AgentsConfig,
     /// Load the shell integration script (PowerShell now; bash and zsh by hand, see the docs).
     pub shell_integration: bool,
     pub notifications: NotificationConfig,
@@ -731,6 +760,7 @@ impl Default for Config {
             keys: Keymap::with_defaults(),
             commands: Vec::new(),
             dashboard: DashboardConfig::default(),
+            agents: AgentsConfig::default(),
             shell_integration: true,
             notifications: NotificationConfig::default(),
             panels: PanelsConfig::default(),
@@ -1644,6 +1674,31 @@ impl Reader {
                 let chord = KeyChord::parse(&key).map_err(|err| format!("{path}.key: {err}"))?;
                 let action = self.action(&table, &format!("{path}.action"))?;
                 config.keys.bind(chord, action);
+            }
+        }
+        if let Some(agents) = table_field(root, "agents", "agents")? {
+            if let Some(history) = bool_field(&agents, "history", "agents.history")? {
+                config.agents.history = history;
+            }
+            if let Some(show) = table_field(&agents, "show", "agents.show")? {
+                let mut parts = Vec::new();
+                for (i, value) in list(&show) {
+                    let Value::String(part) = value else {
+                        return Err(format!(
+                            "agents.show[{i}]: expected a text, got {}",
+                            value.type_name()
+                        ));
+                    };
+                    let part = part.to_string_lossy();
+                    if !AGENT_PARTS.contains(&part.as_str()) {
+                        return Err(format!(
+                            "agents.show[{i}]: `{part}` is not a part; the parts are {}",
+                            AGENT_PARTS.join(", ")
+                        ));
+                    }
+                    parts.push(part);
+                }
+                config.agents.show = parts;
             }
         }
         if let Some(dash) = table_field(root, "dashboard", "dashboard")? {
@@ -3047,6 +3102,21 @@ mod tests {
             Press::Action(Action::Builtin(BuiltinAction::NewTab))
         );
         assert!(!buttons[2].confirm);
+    }
+
+    #[test]
+    fn the_agents_panel_settings() {
+        let agents = load("return {}").config.agents;
+        assert!(agents.history);
+        assert_eq!(agents.show, AgentsConfig::default().show);
+        assert!(agents.shows("question") && agents.shows("cost"));
+        let agents =
+            load(r#"return { agents = { history = false, show = { "question", "todos" } } }"#)
+                .config
+                .agents;
+        assert!(!agents.history);
+        assert!(agents.shows("todos") && !agents.shows("cost"));
+        assert!(error(r#"return { agents = { show = { "money" } } }"#).contains("agents.show[1]"));
     }
 
     #[test]
