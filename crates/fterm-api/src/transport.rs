@@ -4,6 +4,33 @@ use std::io;
 
 use interprocess::local_socket::{Listener, ListenerOptions, Stream, prelude::*};
 
+/// One side of a stream (to read or to write), so a thread reads while another one writes. Both sides share the
+/// stream; it closes when both are gone. (`Stream::split` of interprocess is deprecated: `&Stream` reads and writes.)
+#[derive(Clone)]
+pub struct Half(std::sync::Arc<Stream>);
+
+impl io::Read for Half {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        (&*self.0).read(buf)
+    }
+}
+
+impl io::Write for Half {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        (&*self.0).write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        (&*self.0).flush()
+    }
+}
+
+/// The two sides of a stream: (to read, to write).
+pub fn halves(stream: Stream) -> (Half, Half) {
+    let shared = std::sync::Arc::new(stream);
+    (Half(shared.clone()), Half(shared))
+}
+
 /// The socket name of the fterm window with this process id.
 /// Windows: a pipe name (`fterm-<user>-<pid>`); Linux and macOS: a file path in a private folder.
 pub fn socket_name(pid: u32) -> String {

@@ -60,7 +60,6 @@ pub fn spawn_detached(exe: &std::path::Path, args: &[&str]) -> std::io::Result<(
 /// `ftermctl mux proxy`: stdin → the mux server of this machine → stdout (the server is started when it is not
 /// there, with `start`). It ends when stdin or the server ends; the server and its panes stay.
 pub fn proxy(start: impl Fn() -> std::io::Result<()>) -> std::io::Result<()> {
-    use interprocess::local_socket::prelude::*;
     use std::io::{Read, Write};
 
     let name = socket_name();
@@ -80,7 +79,7 @@ pub fn proxy(start: impl Fn() -> std::io::Result<()>) -> std::io::Result<()> {
             }
         }
     };
-    let (mut recv, mut send) = stream.split();
+    let (mut recv, mut send) = fterm_api::transport::halves(stream);
     // stdin → the server.
     std::thread::Builder::new()
         .name("mux proxy in".into())

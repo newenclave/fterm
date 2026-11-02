@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use fterm_term::session::RemoteLink;
 use fterm_term::size::GridSize;
-use interprocess::local_socket::prelude::*;
 
 use crate::frame::{self, CONTROL, DATA, SNAPSHOT};
 use crate::proto::{Meta, PaneInfo, Reply, Request, ServerMsg, Spawn};
@@ -56,7 +55,7 @@ pub struct MuxClient {
 impl MuxClient {
     /// Connects to the server at `name`. `gone` runs when the connection ends (the server stopped).
     pub fn connect(name: &str, gone: impl Fn() + Send + 'static) -> io::Result<Arc<Self>> {
-        let (recv, send) = fterm_api::transport::connect(name)?.split();
+        let (recv, send) = fterm_api::transport::halves(fterm_api::transport::connect(name)?);
         Self::over(Box::new(recv), Box::new(send), None, gone)
     }
 

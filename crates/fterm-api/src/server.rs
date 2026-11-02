@@ -63,7 +63,7 @@ impl Server {
                         continue;
                     };
                     let id = inner.next_id.fetch_add(1, Ordering::SeqCst);
-                    let (recv, send) = stream.split();
+                    let (recv, send) = crate::transport::halves(stream);
                     let writer: Arc<Mutex<Box<dyn Write + Send>>> =
                         Arc::new(Mutex::new(Box::new(send)));
                     if let Ok(mut clients) = inner.clients.lock() {

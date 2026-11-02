@@ -108,7 +108,7 @@ impl Server {
     }
 
     fn serve(&self, stream: interprocess::local_socket::Stream) {
-        let (recv, send) = stream.split();
+        let (recv, send) = fterm_api::transport::halves(stream);
         let client = Client {
             id: self.inner.next_client.fetch_add(1, Ordering::SeqCst) + 1,
             writer: Arc::new(Mutex::new(Box::new(send))),

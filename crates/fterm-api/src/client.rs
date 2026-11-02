@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
 
-use interprocess::local_socket::{RecvHalf, SendHalf, prelude::*};
+use crate::transport::Half;
 use serde_json::Value;
 
 use crate::protocol::{Notification, Request, RpcError, encode};
@@ -37,8 +37,8 @@ impl From<io::Error> for ClientError {
 }
 
 pub struct Client {
-    reader: BufReader<RecvHalf>,
-    writer: SendHalf,
+    reader: BufReader<Half>,
+    writer: Half,
     next_id: u64,
     /// Events that came while we waited for an answer.
     events: VecDeque<Notification>,
@@ -63,7 +63,7 @@ impl Client {
     }
 
     pub fn connect(name: &str) -> io::Result<Self> {
-        let (recv, send) = connect(name)?.split();
+        let (recv, send) = crate::transport::halves(connect(name)?);
         Ok(Self {
             reader: BufReader::new(recv),
             writer: send,
