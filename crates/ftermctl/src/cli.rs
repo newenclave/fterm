@@ -40,6 +40,9 @@ pub enum Command {
         path: String,
     },
     Mcp,
+    /// `agent-session --hook`: the SessionStart hook of Claude Code. It tells fterm the conversation id of the
+    /// pane (from the hook JSON on stdin), so the pane comes back to it after a restore.
+    AgentSessionHook,
     /// `steps JSON`: runs programs one after another here (an overlay of the dashboard), then waits for Enter so
     /// the output stays. JSON: `[["gh", "pr", "view", "URL"], ["gh", "pr", "diff", "URL"]]`.
     Steps {
@@ -197,6 +200,15 @@ fn pane_word(word: Option<&String>, what: &str) -> Result<u64, String> {
         .map_err(|_| format!("{what} needs a pane id (a number), got `{word}`"))
 }
 
+/// The params of `agent_session` from the hook JSON of Claude Code (stdin) and `FTERM_PANE_ID`. `None` when it is
+/// not in an fterm pane or the JSON has no `session_id`.
+pub fn session_hook_params(stdin: &str, pane: Option<&str>) -> Option<Value> {
+    let pane: u64 = pane?.trim().parse().ok()?;
+    let hook: Value = serde_json::from_str(stdin.trim_start_matches('\u{feff}')).ok()?;
+    let id = hook.get("session_id")?.as_str()?;
+    Some(json!({ "pane": pane, "session_id": id }))
+}
+
 fn call(method: &str, params: Value) -> Command {
     Command::Call {
         method: method.to_owned(),
@@ -301,6 +313,12 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
                 path: path.trim().to_owned(),
                 params,
             }
+        }
+        "agent-session" => {
+            if !read(&[], &["hook"])?.flag("hook") {
+                return Err("agent-session works as a hook: agent-session --hook".to_owned());
+            }
+            Command::AgentSessionHook
         }
         "steps" => {
             let json = args.first().ok_or("steps needs a JSON list of programs")?;
@@ -679,6 +697,28 @@ mod tests {
         assert_eq!(cli("mux proxy").unwrap().command, Command::MuxProxy);
         assert!(cli("mux").is_err());
         assert!(cli("mux start").is_err());
+    }
+
+    #[test]
+    fn the_session_hook_of_claude() {
+        assert_eq!(
+            cli("agent-session --hook").unwrap().command,
+            Command::AgentSessionHook
+        );
+        assert!(cli("agent-session").is_err(), "only as a hook for now");
+        // The hook JSON of Claude Code and the pane of the hook.
+        let stdin = r#"{"session_id":"3f2a-9c","hook_event_name":"SessionStart","source":"resume","cwd":"C:/x"}"#;
+        assert_eq!(
+            session_hook_params(stdin, Some("7")),
+            Some(json!({ "pane": 7, "session_id": "3f2a-9c" }))
+        );
+        assert_eq!(session_hook_params(stdin, None), None, "not in fterm");
+        assert_eq!(session_hook_params(stdin, Some("x")), None);
+        assert_eq!(session_hook_params("not json", Some("7")), None);
+        assert_eq!(
+            session_hook_params(r#"{"source":"startup"}"#, Some("7")),
+            None
+        );
     }
 
     #[test]

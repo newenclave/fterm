@@ -150,6 +150,18 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         }
         Command::Mcp => mcp::serve(cli.window).map(|()| ExitCode::SUCCESS),
         Command::Steps { steps } => Ok(run_steps(steps)),
+        Command::AgentSessionHook => {
+            // A hook never stops Claude, and SessionStart output goes into its context: say nothing, end with 0.
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut text);
+            let pane = std::env::var("FTERM_PANE_ID").ok();
+            if let Some(params) = cli::session_hook_params(&text, pane.as_deref())
+                && let Ok(mut client) = connect(cli.window)
+            {
+                let _ = client.call("agent_session", params);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Mux { stop } => run_mux(*stop, cli.json),
         Command::MuxServe { idle } => fterm_server::run(*idle)
             .map(|()| ExitCode::SUCCESS)

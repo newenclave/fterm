@@ -168,6 +168,7 @@ impl App {
                 | "ai_read"
                 | "ai_ask"
                 | "ai_clear"
+                | "agent_session"
         );
         if !gated {
             return Verdict::Allow;
@@ -522,6 +523,7 @@ impl App {
             "companion" => self.api_companion(params),
             "dashboard" => self.api_dashboard(params),
             "dashboard_tile" => self.api_dashboard_tile(params),
+            "agent_session" => self.api_agent_session(client, params),
             "scene_draw" => self.api_scene_draw(client, params),
             "send_text" => self.api_send_text(client, params),
             "get_text" => self.api_get_text(client, params),
@@ -724,6 +726,7 @@ impl App {
             "running": p.shell.is_running(),
             "at_prompt": p.shell.at_prompt(),
             "agent": p.agent.as_ref().map(|a| json!({ "state": a.kind.name(), "message": a.message })),
+            "agent_session": p.agent_session,
             "remote": p.remote,
             "messages": self.inbox.unread(pane),
             "last_command": p.last_command.as_ref().map(|c| json!({
@@ -864,6 +867,25 @@ impl App {
         let pane = opened.map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
         if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {
             p.opened_by = Some(client);
+        }
+        Ok(json!({ "pane": pane.0 }))
+    }
+
+    /// `agent_session`: the conversation id of the agent in a pane (the SessionStart hook of Claude Code), so the
+    /// pane comes back to it after a restore.
+    fn api_agent_session(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
+        let pane = self.target_pane(client, params)?;
+        let id = str_param(params, "session_id")?
+            .ok_or_else(|| RpcError::invalid_params("`session_id` is missing"))?;
+        if !crate::session_state::valid_session_id(&id) {
+            return Err(RpcError::invalid_params(
+                "`session_id`: letters, digits, `-`, and `_` only (at most 128)",
+            ));
+        }
+        let running = self.running.as_mut().expect("checked in api_call");
+        if let Some(p) = running.panes.get_mut(&pane) {
+            tracing::info!(pane = pane.0, session = %id, "the agent conversation of a pane");
+            p.agent_session = Some(id);
         }
         Ok(json!({ "pane": pane.0 }))
     }

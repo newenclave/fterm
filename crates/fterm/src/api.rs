@@ -35,6 +35,7 @@ pub const METHODS: &[&str] = &[
     "companion",
     "dashboard",
     "dashboard_tile",
+    "agent_session",
     "scene_draw",
     "screenshot",
     "set_tab_color",

@@ -31,15 +31,25 @@ pub fn fterm_hooks(states: &Value, ftermctl: Option<&Path>) -> Value {
             "timeout": 3600
         }]
     }]);
+    // The conversation id of the pane (start, resume, /clear, compact), so a restore brings it back.
+    all["hooks"]["SessionStart"] = serde_json::json!([{
+        "hooks": [{
+            "type": "command",
+            "command": format!("\"{path}\" agent-session --hook"),
+            "timeout": 10
+        }]
+    }]);
     all
 }
 
 /// An entry of a hook event is from fterm: one of its commands sends the fterm agent sequence.
 fn is_ours(entry: &Value) -> bool {
     entry["hooks"].as_array().into_iter().flatten().any(|hook| {
-        hook["command"]
-            .as_str()
-            .is_some_and(|c| c.contains("fterm-agent") || c.ends_with("review --hook"))
+        hook["command"].as_str().is_some_and(|c| {
+            c.contains("fterm-agent")
+                || c.ends_with("review --hook")
+                || c.ends_with("agent-session --hook")
+        })
     })
 }
 
@@ -175,9 +185,22 @@ mod tests {
         assert_eq!(all["hooks"]["Stop"], ours()["hooks"]["Stop"]);
         // No ftermctl: only the states.
         assert_eq!(fterm_hooks(&ours(), None), ours());
+        // The conversation of the pane: SessionStart tells fterm its id.
+        let start = &all["hooks"]["SessionStart"][0]["hooks"][0];
+        let command = start["command"].as_str().unwrap();
+        assert!(
+            command.starts_with('"') && command.ends_with(" agent-session --hook"),
+            "{command}"
+        );
+        assert!(
+            fterm_hooks(&ours(), None)["hooks"]
+                .get("SessionStart")
+                .is_none()
+        );
         // Installed once, the review hook is known as ours.
         let (once, added) = merge_hooks(&json!({}), &all).unwrap();
         assert!(added.contains(&"PreToolUse".to_owned()));
+        assert!(added.contains(&"SessionStart".to_owned()));
         let (twice, added) = merge_hooks(&once, &all).unwrap();
         assert_eq!(twice, once);
         assert!(added.is_empty());
