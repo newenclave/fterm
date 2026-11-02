@@ -7,8 +7,9 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 ## [Unreleased]
 
 ### Added
-- **Resize the scratch shell and overlays** with Alt+Shift+arrows, like split panes. In the scratch, Down makes it
-  higher and Up lower. In an overlay, Right or Down make it bigger, Left or Up smaller. See
+- **Resize the scratch shell, overlays, and companions** with Alt+Shift+arrows, like split panes. In the scratch,
+  Down makes it higher and Up lower. In an overlay, Right or Down make it bigger, Left or Up smaller. In a
+  companion, the arrows move the line between it and its pane. See
   [docs/KEYS.md](docs/KEYS.md#overlays-and-the-scratch-shell).
 - **Overlays and a scratch shell** (ideas from agterm). Ctrl+Shift+L runs a command in a box over the active pane:
   a file manager, lazygit, htop. The layout does not change, the pane under it is dim, and the box goes when the

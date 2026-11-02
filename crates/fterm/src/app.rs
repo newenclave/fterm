@@ -72,7 +72,7 @@ const AUTOSCROLL_TICK: Duration = Duration::from_millis(16);
 const TITLE_MESSAGE: Duration = Duration::from_millis(1500);
 /// Wait this long after the last change of the config file, then load it.
 const CONFIG_DEBOUNCE: Duration = Duration::from_millis(150);
-/// How much Alt+Shift+arrows change the size of the scratch or an overlay, in percent.
+/// How much Alt+Shift+arrows change the size of the scratch, an overlay, or the companions, in percent.
 const FLOATING_RESIZE_STEP: u8 = 5;
 /// The panes of hidden tabs get their new size this long after the last resize (not on every step of a drag).
 const HIDDEN_RESIZE_DELAY: Duration = Duration::from_millis(300);
@@ -3182,14 +3182,16 @@ impl App {
                     running
                         .mux
                         .resize_floating(pane, edge, FLOATING_RESIZE_STEP);
-                } else {
+                } else if !running.mux.resize_companion(edge, FLOATING_RESIZE_STEP) {
                     let area = running.tab_area();
                     let cell = running.renderer.cell();
                     let step = match edge {
                         Edge::Left | Edge::Right => cell.width,
                         Edge::Up | Edge::Down => cell.height,
                     };
+                    // In a companion, across its strip: the lines of its pane move.
                     if let Some(pane) = running.mux.active_pane()
+                        && let pane = running.mux.owner_of(pane).unwrap_or(pane)
                         && let Some(layout) = running.mux.active_layout_mut()
                     {
                         layout.move_divider(pane, edge, step, area);

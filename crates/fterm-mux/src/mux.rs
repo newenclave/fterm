@@ -646,6 +646,32 @@ impl Mux {
             .collect()
     }
 
+    /// The active pane is a companion: its strip gets bigger or smaller by `step` percent, as if the line between
+    /// it and its pane moved to `edge` (Alt+Shift+arrows). The size is the same for all companions. `true` when
+    /// the keys are for the strip (also at its smallest or biggest size); `false` when the active pane is no
+    /// companion, or `edge` does not cross its strip.
+    pub fn resize_companion(&mut self, edge: Edge, step: u8) -> bool {
+        let Some(tab) = self.active_tab() else {
+            return false;
+        };
+        if tab.owner_of(tab.active_pane).is_none() {
+            return false;
+        }
+        let (side, size) = self.companion_place;
+        let grow = match (side, edge) {
+            (Direction::Down, Edge::Up) | (Direction::Right, Edge::Left) => true,
+            (Direction::Down, Edge::Down) | (Direction::Right, Edge::Right) => false,
+            _ => return false,
+        };
+        let new = if grow {
+            size.saturating_add(step).min(90)
+        } else {
+            size.saturating_sub(step).max(10)
+        };
+        self.companion_place.1 = new;
+        true
+    }
+
     /// The companion is shown now.
     pub fn companion_shown(&self, pane: PaneId) -> bool {
         self.all_tabs()
@@ -1677,6 +1703,41 @@ mod tests {
         // The size is cut to 10..=90, so both always have a part.
         assert_eq!(companion_rects(pane, Direction::Down, 100).1.height, 180.0);
         assert_eq!(companion_rects(pane, Direction::Down, 0).1.height, 20.0);
+    }
+
+    #[test]
+    fn alt_shift_arrows_resize_the_companions() {
+        let (mut mux, panes) = mux_with(1);
+        let a = panes[0];
+        // Not in a companion: nothing changes here.
+        assert!(!mux.resize_companion(Edge::Up, 5));
+        let c = mux.new_pane_id();
+        assert!(mux.add_companion(a, c));
+        let strip = |mux: &Mux| {
+            mux.pane_rects(AREA)
+                .into_iter()
+                .find(|(p, _)| *p == c)
+                .map(|(_, r)| r.height / AREA.height)
+        };
+        let before = strip(&mux).unwrap();
+        // A strip at the bottom: Up moves its line up, so it gets higher.
+        assert!(mux.resize_companion(Edge::Up, 10));
+        assert!(strip(&mux).unwrap() > before);
+        assert!(mux.resize_companion(Edge::Down, 10));
+        assert_eq!(strip(&mux), Some(before));
+        // Left and Right do not cross a strip at the bottom.
+        assert!(!mux.resize_companion(Edge::Right, 10));
+        // Not bigger than 90%; at the limit the keys still go to the strip, not to the lines of its pane.
+        for _ in 0..20 {
+            mux.resize_companion(Edge::Up, 10);
+        }
+        let biggest = strip(&mux);
+        assert!(mux.resize_companion(Edge::Up, 10));
+        assert_eq!(strip(&mux), biggest);
+        // A strip at the right: Left makes it wider.
+        mux.set_companion_place(Direction::Right, 40);
+        assert!(mux.resize_companion(Edge::Left, 5));
+        assert!(!mux.resize_companion(Edge::Up, 5));
     }
 
     #[test]

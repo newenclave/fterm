@@ -135,9 +135,10 @@ shown at a time. Companions close with their pane, and they move and zoom with i
 | Ctrl + Shift + K | Hide or show the companion of the active pane. With none, it asks for a command, like Ctrl + Shift + N. |
 | Ctrl + Shift + M | Show the next companion of the active pane. |
 | Ctrl + Shift + W | In a companion: close only the companion (its program ends). |
+| Alt + Shift + arrows | In a companion: move the line between it and its pane, so the strip gets bigger or smaller (5% for each press, for all companions). The other two arrows move the lines of its pane. |
 
 A shown companion gets the keys. Click its pane, or hide the companion, to type in the pane again. `exit` in a
-companion ends it. The place and the size are `companion_side` and `companion_size` in the config (see
+companion ends it. The place and the size at the start are `companion_side` and `companion_size` in the config (see
 [CONFIG.md](CONFIG.md)). Companions are not saved in sessions.
 
 ## Scroll
