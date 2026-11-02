@@ -175,6 +175,8 @@ impl App {
                 | "ai_ask"
                 | "ai_clear"
                 | "agent_session"
+                | "agent_event"
+                | "agent_usage"
         );
         if !gated {
             return Verdict::Allow;
@@ -541,6 +543,8 @@ impl App {
             "dashboard" => self.api_dashboard(params),
             "dashboard_tile" => self.api_dashboard_tile(params),
             "agent_session" => self.api_agent_session(client, params),
+            "agent_event" => self.api_agent_event(event_loop, client, params),
+            "agent_usage" => self.api_agent_usage(client, params),
             "scene_draw" => self.api_scene_draw(client, params),
             "send_text" => self.api_send_text(client, params),
             "get_text" => self.api_get_text(client, params),
@@ -917,6 +921,67 @@ impl App {
         let pane = opened.map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
         if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {
             p.opened_by = Some(client);
+        }
+        Ok(json!({ "pane": pane.0 }))
+    }
+
+    /// `agent_event`: what the agent of a pane did (the hooks of Claude Code, through `ftermctl agent-event --hook`).
+    /// The Agents panel shows it, and the state of the agent follows it (working, waiting with the real question,
+    /// done), the same way as the state sequence.
+    fn api_agent_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        client: ClientId,
+        params: &Value,
+    ) -> Result<Value, RpcError> {
+        let pane = self.target_pane(client, params)?;
+        let event = crate::agent_info::event_from_json(params).ok_or_else(|| {
+            RpcError::invalid_params("`kind` must be prompt, tool, question, or done")
+        })?;
+        let running = self.running.as_mut().expect("checked in api_call");
+        let Some(p) = running.panes.get_mut(&pane) else {
+            return Err(not_found(&format!("pane {}", pane.0)));
+        };
+        // Hooks tell the state: no guessing from the title.
+        p.agent_hooks = true;
+        if let Some(id) =
+            str_param(params, "session_id")?.filter(|id| crate::session_state::valid_session_id(id))
+        {
+            p.agent_session = Some(id);
+        }
+        p.agent_info.apply(&event, Instant::now());
+        let (state, message) = match &event {
+            crate::agent_info::AgentEvent::Prompt(_) => ("working", String::new()),
+            crate::agent_info::AgentEvent::Tool { .. } => {
+                ("working", p.agent_info.last_step().unwrap_or("").to_owned())
+            }
+            crate::agent_info::AgentEvent::Question(text) => ("waiting", text.clone()),
+            crate::agent_info::AgentEvent::Done(_) | crate::agent_info::AgentEvent::Usage(_) => {
+                ("done", String::new())
+            }
+        };
+        self.agent_state(event_loop, pane, state, &message);
+        Ok(json!({ "pane": pane.0 }))
+    }
+
+    /// `agent_usage`: the cost, the context, and the model of the agent of a pane (`ftermctl statusline`).
+    fn api_agent_usage(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
+        let pane = self.target_pane(client, params)?;
+        let num = |key: &str| params.get(key).and_then(Value::as_f64);
+        let usage = crate::agent_info::Usage {
+            cost_usd: num("cost"),
+            lines_added: params.get("lines_added").and_then(Value::as_u64),
+            lines_removed: params.get("lines_removed").and_then(Value::as_u64),
+            context_pct: num("context"),
+            model: str_param(params, "model")?.map(|m| crate::agent_info::clean(&m, 100)),
+            five_hour_pct: num("five_hour"),
+            seven_day_pct: num("seven_day"),
+        };
+        let running = self.running.as_mut().expect("checked in api_call");
+        if let Some(p) = running.panes.get_mut(&pane) {
+            p.agent_info
+                .apply(&crate::agent_info::AgentEvent::Usage(usage), Instant::now());
+            running.window.request_redraw();
         }
         Ok(json!({ "pane": pane.0 }))
     }

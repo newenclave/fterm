@@ -36,6 +36,8 @@ pub const METHODS: &[&str] = &[
     "dashboard",
     "dashboard_tile",
     "agent_session",
+    "agent_event",
+    "agent_usage",
     "scene_draw",
     "screenshot",
     "set_tab_color",

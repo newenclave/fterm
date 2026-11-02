@@ -136,6 +136,8 @@ struct Pane {
     agent_hooks: bool,
     /// The conversation of the agent (Claude Code's `session_id`), from its SessionStart hook.
     agent_session: Option<String>,
+    /// What the agent did and does (the Agents panel), from the hooks and the status line of Claude Code.
+    agent_info: crate::agent_info::AgentInfo,
     /// The last command that ended (from shell integration).
     last_command: Option<LastCommand>,
     /// API clients may read and type into it (with the user's yes). `toggle_remote_control` changes it.
@@ -476,6 +478,8 @@ struct HooksQuestion {
     path: std::path::PathBuf,
     text: String,
     lines: Vec<String>,
+    /// The user's old status line, to keep in this file (ours runs it).
+    chain: Option<(std::path::PathBuf, String)>,
 }
 
 /// "Close the tab? A program is running."
@@ -2010,6 +2014,7 @@ impl App {
                 agent: None,
                 agent_hooks: false,
                 agent_session: None,
+                agent_info: Default::default(),
                 pictures: Default::default(),
                 picture_pane: None,
                 last_command: None,
@@ -2060,6 +2065,7 @@ impl App {
                 agent: None,
                 agent_hooks: false,
                 agent_session: None,
+                agent_info: Default::default(),
                 pictures: Default::default(),
                 picture_pane: Some(Box::new(markup_calls::PicturePane::new(picture, origin))),
                 last_command: None,
@@ -2398,6 +2404,7 @@ impl App {
                 agent: None,
                 agent_hooks: false,
                 agent_session: None,
+                agent_info: Default::default(),
                 pictures: Default::default(),
                 picture_pane: None,
                 last_command: None,
@@ -3760,7 +3767,7 @@ impl App {
             path.is_file().then_some(path)
         });
         let ours = crate::claude_hooks::fterm_hooks(&states, ftermctl.as_deref());
-        let (merged, added) = match crate::claude_hooks::merge_hooks(&settings, &ours) {
+        let (merged, mut added) = match crate::claude_hooks::merge_hooks(&settings, &ours) {
             Ok(result) => result,
             Err(err) => {
                 let body = tr!("toast.not_changed", path = shown, error = err);
@@ -3773,6 +3780,25 @@ impl App {
                 );
             }
         };
+        // The status line of fterm (cost, context): the user's own one goes into a file next to the config.
+        let chain_file = self
+            .config_path
+            .parent()
+            .map(|d| d.join("claude-statusline.json"));
+        let mut merged = merged;
+        let mut chain = None;
+        if let (Some(ctl), Some(file)) = (ftermctl.as_deref(), chain_file)
+            && let Some(plan) = crate::claude_hooks::wrap_statusline(&merged, ctl, &file)
+        {
+            merged = plan.settings;
+            if let Some(saved) = plan.saved {
+                chain = Some((
+                    file,
+                    serde_json::to_string_pretty(&saved).expect("JSON") + "\n",
+                ));
+            }
+            added.push("statusLine".to_owned());
+        }
         if added.is_empty() {
             return self.notify(
                 None,
@@ -3798,6 +3824,7 @@ impl App {
             ],
             path,
             text,
+            chain,
         });
         if let Some(running) = &self.running {
             running.window.request_redraw();
@@ -3816,6 +3843,10 @@ impl App {
                         }
                         if q.path.exists() {
                             std::fs::copy(&q.path, q.path.with_extension("json.bak-fterm"))?;
+                        }
+                        // The user's old status line first: ours runs it from this file.
+                        if let Some((file, text)) = &q.chain {
+                            std::fs::write(file, text)?;
                         }
                         std::fs::write(&q.path, &q.text)
                     })();

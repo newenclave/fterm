@@ -115,6 +115,45 @@ fn main() -> ExitCode {
     }
 }
 
+/// The status line of the user, saved by "Install Claude Code hooks" in `file` (its `statusLine` object): its
+/// command gets the same JSON on stdin, through the shell that Claude Code uses (Git Bash on Windows, else sh).
+/// `None` when there is no such file or the command fails, so the short line of fterm shows.
+fn chained_status_line(file: &str, stdin: &str) -> Option<String> {
+    use std::io::Write;
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+    let command = saved.get("command")?.as_str()?.to_owned();
+    let shell = if cfg!(windows) {
+        std::env::var("CLAUDE_CODE_GIT_BASH_PATH")
+            .ok()
+            .filter(|p| std::path::Path::new(p).is_file())
+            .or_else(|| {
+                let git = r"C:\Program Files\Git\bin\bash.exe";
+                std::path::Path::new(git).is_file().then(|| git.to_owned())
+            })?
+    } else {
+        "sh".to_owned()
+    };
+    let mut cmd = std::process::Command::new(shell);
+    cmd.args(["-c", &command])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd.spawn().ok()?;
+    if let Some(mut input) = child.stdin.take() {
+        let _ = input.write_all(stdin.as_bytes());
+    }
+    let out = child.wait_with_output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim_end().to_owned())
+}
+
 /// `steps`: each program in turn, here, with this terminal (colors, a pager). Then it waits for Enter, so the
 /// output stays until the user has read it.
 fn run_steps(steps: &[Vec<String>]) -> ExitCode {
@@ -151,6 +190,44 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         }
         Command::Mcp => mcp::serve(cli.window).map(|()| ExitCode::SUCCESS),
         Command::Steps { steps } => Ok(run_steps(steps)),
+        Command::Statusline { chain } => {
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut text);
+            // To fterm on a thread: the status line must come at once, even when fterm is slow.
+            let pane = std::env::var("FTERM_PANE_ID").ok();
+            let window = cli.window;
+            let sent = cli::usage_params(&text, pane.as_deref()).map(|params| {
+                std::thread::spawn(move || {
+                    if let Ok(mut client) = connect(window) {
+                        let _ = client.call("agent_usage", params);
+                    }
+                })
+            });
+            let line = chain
+                .as_deref()
+                .and_then(|file| chained_status_line(file, &text))
+                .unwrap_or_else(|| cli::status_text(&text));
+            println!("{line}");
+            if let Some(sent) = sent {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+                while !sent.is_finished() && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::AgentEventHook => {
+            // Like the session hook: never stop Claude, say nothing, end with 0.
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut text);
+            let pane = std::env::var("FTERM_PANE_ID").ok();
+            if let Some(params) = cli::event_hook_params(&text, pane.as_deref())
+                && let Ok(mut client) = connect(cli.window)
+            {
+                let _ = client.call("agent_event", params);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Command::AgentSessionHook => {
             // A hook never stops Claude, and SessionStart output goes into its context: say nothing, end with 0.
             let mut text = String::new();

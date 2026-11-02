@@ -43,6 +43,14 @@ pub enum Command {
     /// `agent-session --hook`: the SessionStart hook of Claude Code. It tells fterm the conversation id of the
     /// pane (from the hook JSON on stdin), so the pane comes back to it after a restore.
     AgentSessionHook,
+    /// `agent-event --hook`: the hooks of Claude Code for its prompts, tools, questions, and stops. It sends fterm
+    /// what the Agents panel shows (never file contents), so a pane shows what its agent does.
+    AgentEventHook,
+    /// `statusline [--chain FILE]`: the status line of Claude Code. It sends fterm the cost, the context, and the
+    /// model, then prints the user's own status line (its command is in FILE) or a short one.
+    Statusline {
+        chain: Option<String>,
+    },
     /// `steps JSON`: runs programs one after another here (an overlay of the dashboard), then waits for Enter so
     /// the output stays. JSON: `[["gh", "pr", "view", "URL"], ["gh", "pr", "diff", "URL"]]`.
     Steps {
@@ -209,6 +217,125 @@ pub fn session_hook_params(stdin: &str, pane: Option<&str>) -> Option<Value> {
     Some(json!({ "pane": pane, "session_id": id }))
 }
 
+/// `text` cut to `max` chars.
+fn cut(text: &str, max: usize) -> String {
+    text.chars().take(max).collect()
+}
+
+/// The params of `agent_event` from a hook JSON of Claude Code: only what the Agents panel needs (the prompt, the
+/// tool and its file or command, the todos, the question, the last message), cut short. `None` when it is not in an
+/// fterm pane, or for an event that fterm does not use.
+pub fn event_hook_params(stdin: &str, pane: Option<&str>) -> Option<Value> {
+    let pane: u64 = pane?.trim().parse().ok()?;
+    let hook: Value = serde_json::from_str(stdin.trim_start_matches('\u{feff}')).ok()?;
+    let text = |key: &str, max: usize| hook.get(key).and_then(Value::as_str).map(|t| cut(t, max));
+    let mut out = match hook.get("hook_event_name")?.as_str()? {
+        "UserPromptSubmit" => json!({ "kind": "prompt", "text": text("prompt", 500) }),
+        "PostToolUse" => {
+            let tool = hook.get("tool_name")?.as_str()?;
+            let input = hook.get("tool_input").cloned().unwrap_or(Value::Null);
+            let mut out = json!({ "kind": "tool", "tool": cut(tool, 100) });
+            if let Some(file) = input
+                .get("file_path")
+                .or_else(|| input.get("notebook_path"))
+                .and_then(Value::as_str)
+            {
+                out["file"] = json!(cut(file, 500));
+            }
+            if let Some(command) = input.get("command").and_then(Value::as_str) {
+                out["command"] = json!(cut(command, 300));
+            }
+            if let Some(todos) = input.get("todos").and_then(Value::as_array) {
+                let todos: Vec<Value> = todos
+                    .iter()
+                    .take(50)
+                    .map(|t| {
+                        let field = |k: &str| cut(t.get(k).and_then(Value::as_str).unwrap_or(""), 200);
+                        json!({ "content": field("content"), "status": field("status"), "active": field("activeForm") })
+                    })
+                    .collect();
+                out["todos"] = json!(todos);
+            }
+            out
+        }
+        "Notification" => json!({ "kind": "question", "text": text("message", 500) }),
+        "Stop" => json!({ "kind": "done", "text": text("last_assistant_message", 500) }),
+        _ => return None,
+    };
+    out["pane"] = json!(pane);
+    for key in ["session_id", "cwd"] {
+        if let Some(v) = hook.get(key).and_then(Value::as_str) {
+            out[key] = json!(cut(v, 500));
+        }
+    }
+    if out.get("text").is_some_and(Value::is_null) {
+        out.as_object_mut().map(|o| o.remove("text"));
+    }
+    Some(out)
+}
+
+/// The params of `agent_usage` from the status line JSON of Claude Code. `None` when it is not in an fterm pane.
+pub fn usage_params(stdin: &str, pane: Option<&str>) -> Option<Value> {
+    let pane: u64 = pane?.trim().parse().ok()?;
+    let s: Value = serde_json::from_str(stdin.trim_start_matches('\u{feff}')).ok()?;
+    let mut out = json!({ "pane": pane });
+    let mut put = |key: &str, value: Option<Value>| {
+        if let Some(v) = value.filter(|v| !v.is_null()) {
+            out[key] = v;
+        }
+    };
+    let num = |v: &Value| v.as_f64().map(|n| json!(n));
+    put("session_id", s.get("session_id").cloned());
+    put("cost", s.pointer("/cost/total_cost_usd").and_then(num));
+    put("lines_added", s.pointer("/cost/total_lines_added").cloned());
+    put(
+        "lines_removed",
+        s.pointer("/cost/total_lines_removed").cloned(),
+    );
+    put(
+        "context",
+        s.pointer("/context_window/used_percentage").and_then(num),
+    );
+    put(
+        "model",
+        s.pointer("/model/display_name")
+            .and_then(Value::as_str)
+            .map(|m| json!(cut(m, 100))),
+    );
+    put(
+        "five_hour",
+        s.pointer("/rate_limits/five_hour/used_percentage")
+            .and_then(num),
+    );
+    put(
+        "seven_day",
+        s.pointer("/rate_limits/seven_day/used_percentage")
+            .and_then(num),
+    );
+    Some(out)
+}
+
+/// The short status line of fterm: `Opus · $0.42 · ctx 37%` (the parts that are there).
+pub fn status_text(stdin: &str) -> String {
+    let Ok(s) = serde_json::from_str::<Value>(stdin.trim_start_matches('\u{feff}')) else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    if let Some(model) = s.pointer("/model/display_name").and_then(Value::as_str) {
+        parts.push(model.to_owned());
+    }
+    if let Some(cost) = s.pointer("/cost/total_cost_usd").and_then(Value::as_f64) {
+        parts.push(format!("${cost:.2}"));
+    }
+    if let Some(ctx) = s
+        .pointer("/context_window/used_percentage")
+        .and_then(Value::as_f64)
+    {
+        parts.push(format!("ctx {ctx:.0}%"));
+    }
+    parts.join(" · ")
+}
+
 fn call(method: &str, params: Value) -> Command {
     Command::Call {
         method: method.to_owned(),
@@ -313,6 +440,15 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
                 path: path.trim().to_owned(),
                 params,
             }
+        }
+        "statusline" => Command::Statusline {
+            chain: read(&["chain"], &[])?.value("chain").map(str::to_owned),
+        },
+        "agent-event" => {
+            if !read(&[], &["hook"])?.flag("hook") {
+                return Err("agent-event works as a hook: agent-event --hook".to_owned());
+            }
+            Command::AgentEventHook
         }
         "agent-session" => {
             if !read(&[], &["hook"])?.flag("hook") {
@@ -700,6 +836,107 @@ mod tests {
         assert_eq!(cli("mux proxy").unwrap().command, Command::MuxProxy);
         assert!(cli("mux").is_err());
         assert!(cli("mux start").is_err());
+    }
+
+    #[test]
+    fn the_event_hook_of_claude_keeps_only_what_fterm_needs() {
+        assert_eq!(
+            cli("agent-event --hook").unwrap().command,
+            Command::AgentEventHook
+        );
+        let pane = Some("4");
+        let common = r#""session_id":"s-1","cwd":"C:/w","transcript_path":"C:/t.jsonl""#;
+        let prompt = format!(
+            r#"{{{common},"hook_event_name":"UserPromptSubmit","prompt":"Fix the tests"}}"#
+        );
+        assert_eq!(
+            event_hook_params(&prompt, pane),
+            Some(
+                json!({ "pane": 4, "session_id": "s-1", "cwd": "C:/w", "kind": "prompt", "text": "Fix the tests" })
+            )
+        );
+        // An edit: the file, never its old or new text.
+        let edit = format!(
+            r#"{{{common},"hook_event_name":"PostToolUse","tool_name":"Edit",
+               "tool_input":{{"file_path":"C:/w/a.rs","old_string":"SECRET","new_string":"x"}},
+               "tool_response":{{"filePath":"C:/w/a.rs"}}}}"#
+        );
+        let p = event_hook_params(&edit, pane).unwrap();
+        assert_eq!(
+            (p["kind"].as_str(), p["tool"].as_str(), p["file"].as_str()),
+            (Some("tool"), Some("Edit"), Some("C:/w/a.rs"))
+        );
+        assert!(!p.to_string().contains("SECRET"), "{p}");
+        // A command is cut.
+        let long = "x".repeat(1000);
+        let bash = format!(
+            r#"{{{common},"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{{"command":"{long}"}},"tool_response":{{"stdout":"out"}}}}"#
+        );
+        let p = event_hook_params(&bash, pane).unwrap();
+        assert!(p["command"].as_str().unwrap().chars().count() <= 300);
+        assert!(!p.to_string().contains("\"out\""), "no output: {p}");
+        // Todos.
+        let todo = format!(
+            r#"{{{common},"hook_event_name":"PostToolUse","tool_name":"TodoWrite","tool_input":{{"todos":[
+               {{"content":"Write tests","status":"in_progress","activeForm":"Writing tests"}}]}}}}"#
+        );
+        assert_eq!(
+            event_hook_params(&todo, pane).unwrap()["todos"],
+            json!([{ "content": "Write tests", "status": "in_progress", "active": "Writing tests" }])
+        );
+        // The real question, and the last message.
+        let note = format!(
+            r#"{{{common},"hook_event_name":"Notification","message":"Claude needs your permission to use Bash","notification_type":"permission_prompt"}}"#
+        );
+        assert_eq!(
+            event_hook_params(&note, pane).unwrap()["text"],
+            "Claude needs your permission to use Bash"
+        );
+        let stop =
+            format!(r#"{{{common},"hook_event_name":"Stop","last_assistant_message":"Done."}}"#);
+        assert_eq!(event_hook_params(&stop, pane).unwrap()["kind"], "done");
+        // Not in fterm, bad JSON, or an event fterm does not use.
+        assert_eq!(event_hook_params(&prompt, None), None);
+        assert_eq!(event_hook_params("nope", pane), None);
+        assert_eq!(
+            event_hook_params(r#"{"hook_event_name":"PreCompact"}"#, pane),
+            None
+        );
+    }
+
+    #[test]
+    fn the_status_line_of_claude() {
+        assert_eq!(
+            cli("statusline").unwrap().command,
+            Command::Statusline { chain: None }
+        );
+        assert_eq!(
+            cli("statusline --chain C:/f/claude-statusline.json")
+                .unwrap()
+                .command,
+            Command::Statusline {
+                chain: Some("C:/f/claude-statusline.json".into())
+            }
+        );
+        let stdin = r#"{"session_id":"s-1","model":{"id":"claude-opus","display_name":"Opus"},  "cost":{"total_cost_usd":0.4231,"total_lines_added":120,"total_lines_removed":7},  "context_window":{"used_percentage":37.4},  "rate_limits":{"five_hour":{"used_percentage":12},"seven_day":{"used_percentage":40.5}}}"#;
+        assert_eq!(
+            usage_params(stdin, Some("4")),
+            Some(json!({
+                "pane": 4, "session_id": "s-1", "cost": 0.4231, "lines_added": 120, "lines_removed": 7,
+                "context": 37.4, "model": "Opus", "five_hour": 12.0, "seven_day": 40.5
+            }))
+        );
+        assert_eq!(
+            usage_params(stdin, None),
+            None,
+            "not in fterm: nothing to send"
+        );
+        assert_eq!(status_text(stdin), "Opus · $0.42 · ctx 37%");
+        assert_eq!(
+            status_text(r#"{"model":{"display_name":"Sonnet"}}"#),
+            "Sonnet"
+        );
+        assert_eq!(status_text("bad"), "");
     }
 
     #[test]
