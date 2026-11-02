@@ -490,6 +490,37 @@ Taken already: the conversation of each Claude pane, an overlay that waits, agen
 - Bigger: screen readers (UIA for Narrator and NVDA); fterm as the default terminal of Windows; admin and normal
   tabs side by side; a side bar of tabs.
 
+### Admin and normal panes in one window, through the mux (an idea from the user)
+A second mux server runs as administrator (a UAC question when it starts), with its own pipe name
+(`fterm-<user>-mux-admin`), and the normal window connects to it like to a remote. Its panes are admin shells; the
+window itself stays a normal process and only draws what the server gives.
+
+How others do it:
+- **ConEmu:** the same idea. A console server (ConEmuC) for each console, paired with the GUI; an admin tab
+  (`-new_console:a`) gets a shield on its tab.
+- **agwinterm:** the other way round. The whole window runs as administrator, and it starts the normal shells with
+  a lowered token (SAFER `SaferComputeTokenFromLevel`, the integrity set to Medium by hand, `CreateProcessAsUserW`).
+  The minus: all of the UI (fonts, pictures, the parser of untrusted output) runs as administrator, and Explorer
+  cannot drag files into the window.
+
+The mux way keeps only the shell and its server elevated. The big risk: the admin pipe must let the normal window
+in, so any other program of the user could connect too and run commands as administrator with no UAC question.
+The rules, so this does not become a UAC bypass:
+1. Off by default: only with `admin = true` in a profile.
+2. The pipe lets in only the user (its SID), and the server checks the client: `GetNamedPipeClientProcessId`, and
+   the client must be `fterm.exe` from the folder of the server. (Not a full guard: a program can get into the
+   fterm process, but simple attacks stop.)
+3. The API and agents never read or type into admin panes: they are always "no remote control", and no setting
+   turns that on (else any agent gets admin rights).
+4. Easy to see: a red line and an ADMIN mark on the tab.
+5. The server lives only while it has panes: it ends with its last admin pane.
+6. A threat model (STRIDE) before the code.
+
+No code needed for a start: Windows 11 24H2 has `sudo`; in its "inline" mode a profile with
+`command = "sudo powershell"` gives an admin shell in a normal pane. Microsoft says that mode too lets any program
+of the user use the admin shell.
+
+### Plugins
 ### Plugins
 The user is thinking about it. One plugin idea:
 - **git:** for example the branch and the state (changed files, ahead/behind) of the pane's folder in the tab bar,
