@@ -74,6 +74,13 @@ The hooks and their states:
 | `Stop` | `done` |
 | `StopFailure` | `error` |
 | `SessionEnd` | `idle` (no dot) |
+| `SessionStart` | not a state: it tells fterm the conversation of the pane (`ftermctl agent-session --hook`) |
+
+**The conversation of each pane.** The `SessionStart` hook (when Claude starts, resumes, `/clear`, or compacts)
+tells fterm the id of the conversation in that pane. When fterm restores a session, the pane gets
+`claude --resume <id>`, so two Claude panes in one folder each get their own conversation back. It needs
+ftermctl next to fterm; it says nothing to Claude and never stops it. Installed the hooks before? Run
+**Install Claude Code hooks** again: it adds this one and keeps the others.
 
 `PostToolUse` runs after every tool, so it starts a small shell each time. If you do not want that, delete it.
 Then the dot stays yellow after a permission question until Claude finishes.

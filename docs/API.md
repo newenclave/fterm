@@ -69,9 +69,10 @@ A missing `pane` means: the pane of the client (from `hello`), else the active p
 | Method | Params | Answer |
 |---|---|---|
 | `hello` | `name`, `pane` (your `FTERM_PANE_ID`) | `api_version`, `fterm`, `pid`, `methods`, `events`, `pane` |
-| `list` | | `workspace` (the one in use); `tabs` (of all workspaces): each with `tab` (its number in its workspace), `workspace`, `title`, `active`, `zoomed`, `panes` (each pane has `workspace` too) |
-| `spawn` | `place`: `"tab"` (default), `"right"`, `"down"`, `"overlay"`, or `"companion"`; `profile`; `cwd`; `pane` (split next to it; with `"overlay"`: the pane to cover); with `"overlay"`: `command` (the shell runs it; the box goes when it ends) and `size` (percent); `"companion"`: a strip of `pane` (default: the active pane) that runs `command` (no command = a shell) | `pane` |
+| `list` | | `config` (the path of the config file); `workspace` (the one in use); `tabs` (of all workspaces): each with `tab` (its number in its workspace), `workspace`, `title`, `active`, `zoomed`, `panes` (each pane has `workspace` too) |
+| `spawn` | `place`: `"tab"` (default), `"right"`, `"down"`, `"overlay"`, or `"companion"`; `profile`; `cwd`; `pane` (split next to it; with `"overlay"`: the pane to cover); with `"overlay"`: `command` (the shell runs it; the box goes when it ends), `size` (percent), and `wait: true` (the answer comes when the program ends, with `exit`, its exit code; `timeout_ms`, 24 hours at most); `"companion"`: a strip of `pane` (default: the active pane) that runs `command` (no command = a shell) | `pane` |
 | `scratch` | `show`: `true` / `false` (no `show` = the other state) | `pane`, `shown` |
+| `agent_session` | `session_id` (letters, digits, `-`, `_`); `pane` (default: your own) | `pane`. The conversation of the agent in the pane: a restore brings it back (`claude --resume`). The SessionStart hook calls it (`ftermctl agent-session --hook`). |
 | `dashboard` | `show`: `true` / `false` (no `show` = the other state) | `shown` |
 | `dashboard_tile` | `id`; `title`, `status`, `state` (`working`, `waiting`, `done`, `error`, `idle`), `lines` (texts), `values` (numbers for a chart); `remove: true` takes it away. The same `id` changes the tile. Text and numbers only (at most 32 tiles, 50 lines, 500 values) | `tiles` |
 | `companion` | `action`: `"toggle"` (hide or show) or `"next"`; `pane` (default: the active pane; its companions) | `pane` (the shown companion or `null`), `shown` |

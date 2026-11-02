@@ -59,7 +59,7 @@ When FTERM_PANE_ID is set, you run in the fterm terminal: run `ftermctl guide` o
 | Tool | What it does |
 |---|---|
 | `list_panes` | All tabs and panes (of all workspaces): ids, programs, folders, agent states, the last command and its exit code. |
-| `open_pane` | A new tab, a split on the right or below, an overlay over a pane (`place: "overlay"` with `command` and `size`: a box that goes when the program ends, for example a file manager for you), or a companion of the pane `next_to` (`place: "companion"` with `command`: a strip of that pane, for example the log of a server). `profile`, `cwd`, `next_to`. Gives the new pane id. |
+| `open_pane` | A new tab, a split on the right or below, an overlay over a pane (`place: "overlay"` with `command` and `size`: a box that goes when the program ends, for example a file manager for you; with `wait: true` the answer comes when it ends, with its exit code), or a companion of the pane `next_to` (`place: "companion"` with `command`: a strip of that pane, for example the log of a server). `profile`, `cwd`, `next_to`. Gives the new pane id. |
 | `run_command` | Types a command into a pane, waits for its end, and gives the exit code and the output. |
 | `send_text` | Types text into a pane (for example an answer to a program). |
 | `read_pane` | The screen, the history, or the output of the last command of a pane. With `styled`, also the colors and styles of the text (for example: which lines are red). |

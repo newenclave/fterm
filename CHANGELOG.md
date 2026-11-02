@@ -21,6 +21,16 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   with it. `companion_side = "right"` and `companion_size` (40% by default) set the place. From scripts and agents:
   `ftermctl companion -- COMMAND`, `ftermctl companion --toggle|--next`, `spawn` with `place: "companion"`, the API
   method `companion`, and the MCP tool `open_pane`. See [docs/KEYS.md](docs/KEYS.md#companions).
+- **Each Claude conversation comes back in its own pane.** A new `SessionStart` hook tells fterm the conversation
+  of each pane, so a restored session gives each pane `claude --resume <id>`. Before, every Claude pane of a
+  folder got `claude --continue` and so the same, newest conversation. Run "Install Claude Code hooks" again to
+  get the hook. See [docs/CLAUDE.md](docs/CLAUDE.md).
+- **An overlay can wait.** `ftermctl overlay --wait -- lazygit` shows the program to the user and ends with its
+  exit code when it is closed (also `wait` in the API `spawn` and in the MCP tool `open_pane`). Through
+  PowerShell an overlay now gives the real exit code of its program, not 1.
+- **Agents can set up fterm for you.** The agent guide tells how to change `fterm.lua` safely (keys, commands,
+  dashboard tiles), and `list_panes` gives the path of the config. Ask Claude "add a dashboard tile with my
+  failed runs".
 - **The dashboard** (Ctrl+Shift+D): tiles over the window, in a grid. A tile shows a pane (its state, its last lines,
   and a chart of its output), the output of any command (for example `gh pr list`, run again every minute), or
   buttons that run a command or an action (for example a publish workflow, with `confirm = true`). You choose the

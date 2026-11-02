@@ -478,6 +478,18 @@ needed for the shell and the programs. What can help, to check with numbers firs
 6. **`performance = "low"`:** one setting that turns off the heavy parts (pictures, color harmonize, history
    hints) and takes the GL backend and the low-power GPU.
 
+### More ideas from agwinterm
+[agwinterm](https://github.com/yeroo/agwinterm) is a Windows terminal with the agterm ideas (C#, Win32, Direct2D).
+Taken already: the conversation of each Claude pane, an overlay that waits, agents that set up fterm. Next:
+- **Reopen a closed tab or pane:** its folder, its profile, and the command that ran (not the shell itself).
+- **Status hooks for Codex and other agents,** not only for Claude Code (today they are found from the window
+  title only).
+- **Leader chords in `keys`:** `ctrl+a` then `c`, as in tmux.
+- **The Kitty keyboard protocol:** modern TUIs (helix, neovim) can then tell Ctrl+I from Tab, see key releases,
+  and more.
+- Bigger: screen readers (UIA for Narrator and NVDA); fterm as the default terminal of Windows; admin and normal
+  tabs side by side; a side bar of tabs.
+
 ### Plugins
 The user is thinking about it. One plugin idea:
 - **git:** for example the branch and the state (changed files, ahead/behind) of the pane's folder in the tab bar,
