@@ -404,6 +404,40 @@ on_agent = function(a, fterm)
 end,
 ```
 
+### The Agents panel
+```lua
+agents = {
+  history = true,   -- keep past conversations (H in the panel); false = no file is written
+  show = { "question", "todos", "cost", "context", "files", "last" },   -- the parts that rows and details show
+},
+```
+
+### on_agent_row
+This function makes the row of an agent in the Agents panel. It gets `pane`, `name`, `state`, `question`,
+`todos` (`done`, `total`, `current`), `cost`, `context` (percent), `files` (how many changed), and `last` (the newest
+step). It returns a table with `title`, `detail`, and `right`; a part that it does not set stays as it is, and `nil`
+keeps the whole row. It runs when the agent changes, not on every frame.
+
+```lua
+on_agent_row = function(a)
+  if a.context and a.context > 80 then
+    return { right = "ctx " .. math.floor(a.context) .. "% - compact soon" }
+  end
+end,
+```
+
+### on_agent_event
+This function runs for every step of an agent: `kind` is `prompt`, `tool`, `question`, `done`, or `usage`, with
+`pane`, `tool`, `file`, `command`, `text`, `cost`, and `context`. It can call `fterm.notify` and the other functions.
+
+```lua
+on_agent_event = function(e, fterm)
+  if e.kind == "usage" and e.cost and e.cost > 5 then
+    fterm.notify({ title = "Expensive session", body = string.format("$%.2f", e.cost), level = "warning" })
+  end
+end,
+```
+
 ## Tab colors
 A tab can have a color: a line at the top of the tab, so you see it from other tabs. The text of the tab
 does not change. On the active tab, the color takes the place of the usual accent line.

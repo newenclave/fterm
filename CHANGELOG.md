@@ -21,6 +21,14 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   with it. `companion_side = "right"` and `companion_size` (40% by default) set the place. From scripts and agents:
   `ftermctl companion -- COMMAND`, `ftermctl companion --toggle|--next`, `spawn` with `place: "companion"`, the API
   method `companion`, and the MCP tool `open_pane`. See [docs/KEYS.md](docs/KEYS.md#companions).
+- **The Agents panel tells what each agent does.** The agents that wait for you come first, with their real
+  question; a working one shows its todo ("1/3 · Writing tests"), the cost of its session, and the context used.
+  Space opens the details (todos, cost, lines, context, model, the 5 h and 7 d limits, the changed files, and the
+  steps), D shows the changes of its folder in an overlay, and H lists the past conversations of the folder
+  (fterm's own list and the files of Claude Code) and brings one back with `claude --resume`. It comes from new
+  hooks (`ftermctl agent-event --hook`) and a status line wrapper (`ftermctl statusline`, your own status line
+  stays): run "Install Claude Code hooks" again. In the config: `agents = { show = ..., history = ... }`,
+  `on_agent_row` (your own row), and `on_agent_event` (react to every step, for example a warning over $5).
 - **Each Claude conversation comes back in its own pane.** A new `SessionStart` hook tells fterm the conversation
   of each pane, so a restored session gives each pane `claude --resume <id>`. Before, every Claude pane of a
   folder got `claude --continue` and so the same, newest conversation. Run "Install Claude Code hooks" again to

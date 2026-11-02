@@ -256,6 +256,9 @@ It has service panels: **Events** (all notifications) and **Agents** (every pane
 | Tab, Left / Right, click on a panel name | The other panel. (In Events, Right reads the event.) |
 | Space, Right | Events: read the whole event (its title, where it came from, and all its text). There Up / Down, PageUp / PageDown, Space, and the mouse wheel scroll it, Enter goes to its pane, Ctrl + C copies its text, and Esc, Left, or Backspace go back to the list. |
 | F | Events: show only important events (warnings, errors, attention), or all again. |
+| Space, Right | Agents: the details of the agent: its question, its todos, its cost and context, the files it changed, and its steps (the newest first). Ctrl + C copies them. |
+| D | Agents: the changes in the folder of the agent (`git diff HEAD`) in an overlay over its pane. |
+| H | Agents: the past conversations of the folder of the agent (fterm's own list, then the files of Claude Code). Enter brings one back in a new tab (`claude --resume`). |
 | M | Events: mark all as read. |
 | Esc, click in the terminal | The keyboard goes back to the terminal. The dock stays. |
 | Drag the dock edge | Make the dock bigger or smaller. |
@@ -263,6 +266,11 @@ It has service panels: **Events** (all notifications) and **Agents** (every pane
 | Click the number in the tab bar corner | It shows unread events (when the Events panel is not on the screen). The click opens the panel. |
 
 New events have a bright title. They count as read when the Events panel goes away (or fterm goes to the back).
+
+In the Agents panel the agents that wait for you come first, with their question. A working agent shows its todo
+("1/3 · Writing tests"), the title shows the cost of the session, and the right side the context used. This needs
+the hooks and the status line of fterm (see [CLAUDE.md](CLAUDE.md#set-up-the-hooks)); what shows can be changed
+with `agents` and `on_agent_row` in [CONFIG.md](CONFIG.md#the-agents-panel).
 
 ## The AI panel
 | Key | What it does |

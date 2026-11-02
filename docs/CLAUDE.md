@@ -38,6 +38,19 @@ Claude Code tells fterm its state with **hooks**. Each hook prints one line of J
 fterm shows which file and which hooks change, and asks first. It adds the hooks to `settings.json` in
 `CLAUDE_CONFIG_DIR` or in `~/.claude`. Your other settings and hooks stay, and the old file is kept as
 `settings.json.bak-fterm`. A second time changes nothing. Then start `claude` again.
+Installed the hooks with an older fterm? Run it again: fterm puts its new hooks in the place of its old ones.
+
+When `ftermctl` is next to fterm (as in the release archive), the easy way sets up more than the states:
+- `UserPromptSubmit`, `PostToolUse`, `Notification`, and `Stop` run `ftermctl agent-event --hook` instead of
+  the `echo` line. It tells fterm the prompt, the tool and its file or command, the todos, the real question, and
+  the last message, for the [Agents panel](KEYS.md#the-dock-and-its-panels). It sends no file contents (not the
+  text of an edit), it cuts long texts, it prints nothing, and it never stops Claude.
+- **The status line** runs `ftermctl statusline`: it tells fterm the cost of the session, the lines changed, the
+  context used, the model, and the 5-hour and 7-day limits, and then prints your own status line. Your old status
+  line is kept in `claude-statusline.json` next to `fterm.lua` (ftermctl runs it the way Claude Code does: Git
+  Bash on Windows, `sh` elsewhere). With no status line of yours, it prints a short one: `Opus · $0.42 · ctx 37%`.
+- The cost is what Claude Code counts (list prices), not your bill. Claude Code does not tell the balance of the
+  account.
 
 **By hand:**
 1. In fterm, open the command palette (`Ctrl+Shift+P`) and run **Copy Claude Code hooks (settings.json)**.
