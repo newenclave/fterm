@@ -72,6 +72,8 @@ const AUTOSCROLL_TICK: Duration = Duration::from_millis(16);
 const TITLE_MESSAGE: Duration = Duration::from_millis(1500);
 /// Wait this long after the last change of the config file, then load it.
 const CONFIG_DEBOUNCE: Duration = Duration::from_millis(150);
+/// How much Alt+Shift+arrows change the size of the scratch or an overlay, in percent.
+const FLOATING_RESIZE_STEP: u8 = 5;
 /// The panes of hidden tabs get their new size this long after the last resize (not on every step of a drag).
 const HIDDEN_RESIZE_DELAY: Duration = Duration::from_millis(300);
 /// The longest time for resizing hidden panes in one turn of the event loop (a reflow of a long history is slow).
@@ -3173,16 +3175,25 @@ impl App {
             }
             A::ResizeLeft | A::ResizeRight | A::ResizeUp | A::ResizeDown => {
                 let edge = edge_of(action);
-                let area = running.tab_area();
-                let cell = running.renderer.cell();
-                let step = match edge {
-                    Edge::Left | Edge::Right => cell.width,
-                    Edge::Up | Edge::Down => cell.height,
-                };
-                if let Some(pane) = running.mux.active_pane()
-                    && let Some(layout) = running.mux.active_layout_mut()
+                // The scratch or an overlay has the keys: it gets bigger or smaller, the splits stay.
+                if let Some(pane) = running.mux.input_pane()
+                    && running.mux.is_floating(pane)
                 {
-                    layout.move_divider(pane, edge, step, area);
+                    running
+                        .mux
+                        .resize_floating(pane, edge, FLOATING_RESIZE_STEP);
+                } else {
+                    let area = running.tab_area();
+                    let cell = running.renderer.cell();
+                    let step = match edge {
+                        Edge::Left | Edge::Right => cell.width,
+                        Edge::Up | Edge::Down => cell.height,
+                    };
+                    if let Some(pane) = running.mux.active_pane()
+                        && let Some(layout) = running.mux.active_layout_mut()
+                    {
+                        layout.move_divider(pane, edge, step, area);
+                    }
                 }
             }
             A::Zoom => running.mux.toggle_zoom(),

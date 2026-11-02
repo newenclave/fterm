@@ -75,6 +75,9 @@ struct Scratch {
     size: u8,
 }
 
+/// The smallest size of a scratch or an overlay that Alt+Shift+arrows makes, in percent.
+const FLOATING_MIN_SIZE: u8 = 10;
+
 /// The place of an overlay: `size` percent of the pane under it, in its middle, at least `min` (width, height)
 /// and at most the pane.
 pub fn overlay_rect(pane: Rect, size: u8, min: (f32, f32)) -> Rect {
@@ -465,6 +468,43 @@ impl Mux {
         let s = self.scratch.as_mut()?;
         s.shown = !s.shown;
         Some(s.shown)
+    }
+
+    /// Makes the shown scratch or overlay `pane` bigger or smaller by `step` percent, as if its `edge` moved
+    /// (Alt+Shift+arrows). The scratch is at the top, so only its bottom edge moves: Down makes it higher, Up lower.
+    /// An overlay is in the middle: Right and Down make it bigger, Left and Up smaller. `false` when `pane` is
+    /// none of them, or the edge does not move it.
+    pub fn resize_floating(&mut self, pane: PaneId, edge: Edge, step: u8) -> bool {
+        let grow = matches!(edge, Edge::Right | Edge::Down);
+        let scratch = self.scratch.as_mut().filter(|s| s.shown && s.pane == pane);
+        let size = if let Some(s) = scratch {
+            if matches!(edge, Edge::Left | Edge::Right) {
+                return false;
+            }
+            &mut s.size
+        } else if let Some(w) = self
+            .window_overlay
+            .as_mut()
+            .filter(|w| w.shown && w.pane == pane)
+        {
+            &mut w.size
+        } else if let Some(o) = self
+            .active_tab_mut()
+            .and_then(|t| t.overlay.as_mut())
+            .filter(|o| o.shown && o.pane == pane)
+        {
+            &mut o.size
+        } else {
+            return false;
+        };
+        let new = if grow {
+            size.saturating_add(step).min(100)
+        } else {
+            size.saturating_sub(step).max(FLOATING_MIN_SIZE)
+        };
+        let changed = new != *size;
+        *size = new;
+        changed
     }
 
     /// The shown floating panes with their places in `area`, from the bottom to the top: the overlay of the active
@@ -1158,6 +1198,46 @@ mod tests {
             "the scratch is on top"
         );
         let _ = panes;
+    }
+
+    #[test]
+    fn alt_shift_arrows_resize_the_scratch_and_overlays() {
+        let (mut mux, panes) = mux_with(1);
+        let area = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let overlay = mux.new_pane_id();
+        mux.open_overlay(overlay, 50);
+        assert!(mux.resize_floating(overlay, Edge::Right, 5));
+        assert_eq!(mux.overlay().map(|o| o.size), Some(55));
+        assert!(mux.resize_floating(overlay, Edge::Up, 10));
+        assert_eq!(mux.overlay().map(|o| o.size), Some(45));
+        // A pane of the layout is not floating: its dividers move (in the app), not this.
+        assert!(!mux.resize_floating(panes[0], Edge::Down, 5));
+
+        let scratch = mux.new_pane_id();
+        mux.set_scratch(scratch, 50);
+        // The scratch has the whole width: only its bottom edge moves.
+        assert!(!mux.resize_floating(scratch, Edge::Right, 5));
+        assert!(mux.resize_floating(scratch, Edge::Down, 10));
+        let height = |mux: &Mux| {
+            mux.floating_rects(area, (0.0, 0.0))
+                .into_iter()
+                .find(|(p, _)| *p == scratch)
+                .map(|(_, r)| r.height.round())
+        };
+        assert_eq!(height(&mux), Some(60.0));
+        // Not bigger than the tab, not smaller than the minimum.
+        for _ in 0..20 {
+            mux.resize_floating(scratch, Edge::Down, 10);
+        }
+        assert_eq!(height(&mux), Some(100.0));
+        assert!(!mux.resize_floating(scratch, Edge::Down, 10));
+        for _ in 0..20 {
+            mux.resize_floating(scratch, Edge::Up, 10);
+        }
+        assert_eq!(height(&mux), Some(f32::from(FLOATING_MIN_SIZE)));
+        // A hidden scratch does not change.
+        mux.toggle_scratch();
+        assert!(!mux.resize_floating(scratch, Edge::Down, 10));
     }
 
     #[test]

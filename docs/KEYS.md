@@ -117,9 +117,10 @@ its shell lives on: it comes back with its history, also in another tab. There i
 | Ctrl + Shift + J | The window overlay: show or hide it. The first time it runs `window_overlay` of the config, or asks for a command. |
 | Ctrl + ` | Show or hide the scratch shell. `exit` in it ends it. |
 | Ctrl + Shift + W | In an overlay or the scratch: close only that one (its program ends). |
+| Alt + Shift + arrows | In the scratch: Down makes it higher, Up lower. In an overlay: Right or Down make it bigger, Left or Up smaller. 5% for each press. |
 
 While an overlay or the scratch is shown, it gets the keys and the mouse; the panes under it get no clicks.
-The sizes are `overlay_size` and `scratch_size` in the config (see [CONFIG.md](CONFIG.md)). A profile with
+The sizes at the start are `overlay_size` and `scratch_size` in the config (see [CONFIG.md](CONFIG.md)). A profile with
 `overlay = true` opens as an overlay too.
 
 ## Companions
