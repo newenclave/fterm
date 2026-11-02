@@ -1014,7 +1014,7 @@ impl App {
 
     /// Programs with their arguments, one after another and with no shell: in the background (a toast at the end),
     /// or in an overlay that stays until Enter (through `ftermctl steps`).
-    fn run_steps(
+    pub(super) fn run_steps(
         &mut self,
         steps: Vec<Vec<String>>,
         overlay: bool,

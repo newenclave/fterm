@@ -1156,13 +1156,15 @@ impl App {
                 let mut entries = Vec::new();
                 for (tab, title) in running.mux.all_tabs().zip(&titles) {
                     for pane in tab.layout.panes() {
-                        if let Some(state) = running.panes.get(&pane).and_then(|p| p.agent.as_ref())
+                        if let Some(p) = running.panes.get(&pane)
+                            && let Some(state) = p.agent.as_ref()
                         {
                             entries.push(AgentEntry {
                                 pane,
                                 name: title,
                                 state,
                                 messages: self.inbox.unread(pane),
+                                info: &p.agent_info,
                             });
                         }
                     }
@@ -1206,6 +1208,42 @@ impl App {
         }
     }
 
+    /// `D` in the Agents panel: the changes in the folder of the agent (`git diff HEAD`) in an overlay over its pane.
+    fn agent_diff(&mut self, pane: Option<PaneId>) {
+        let Some(pane) = pane else {
+            return;
+        };
+        let cwd = self
+            .running
+            .as_ref()
+            .and_then(|r| r.panes.get(&pane))
+            .and_then(|p| p.shell.cwd.clone());
+        let Some(cwd) = cwd else {
+            return self.notify(None, &tr!("toast.no_folder"), "", Level::Info, Source::App);
+        };
+        // Outside git, `git diff` prints its help: say so instead.
+        let args = ["-C", cwd.as_str(), "rev-parse", "--is-inside-work-tree"];
+        if !crate::runner::run("git", &args.map(str::to_owned), Duration::from_secs(5)).ok() {
+            return self.notify(None, &tr!("toast.no_git"), &cwd, Level::Info, Source::App);
+        }
+        if let Some(running) = &mut self.running {
+            running.dock.focused = false;
+        }
+        self.go_to_pane(pane);
+        self.run_steps(
+            vec![vec![
+                "git".into(),
+                "-C".into(),
+                cwd,
+                "diff".into(),
+                "HEAD".into(),
+            ]],
+            true,
+            None,
+            "diff".into(),
+        );
+    }
+
     /// The event of row `index` in the Events panel.
     fn event_of_row(&self, index: usize) -> Option<u64> {
         let filter = self.running.as_ref()?.dock.filter;
@@ -1218,6 +1256,25 @@ impl App {
     /// (or its event is gone from the history).
     fn reader_lines(&self) -> Option<(Vec<fterm_render::dock::ChatLine>, usize)> {
         let running = self.running.as_ref()?;
+        if running.dock.active == PanelKind::Agents {
+            // The details of an agent: `reading` is its pane.
+            let pane = PaneId(running.dock.reading()?);
+            let p = running.panes.get(&pane)?;
+            let state = p.agent.as_ref()?;
+            let name = running.pane_tab_title(pane).unwrap_or_default();
+            let layout = self.dock_layout()?;
+            let cell = running.renderer.cell();
+            let width = ((layout.list.width / cell.width) as usize).saturating_sub(2);
+            let entry = AgentEntry {
+                pane,
+                name: &name,
+                state,
+                messages: self.inbox.unread(pane),
+                info: &p.agent_info,
+            };
+            let lines = crate::panels::agent_lines(&entry, Instant::now(), width);
+            return Some((lines, fterm_render::dock::reader_rows(&layout, cell)));
+        }
         if running.dock.active != PanelKind::Events {
             return None;
         }
@@ -1269,6 +1326,19 @@ impl App {
                 dock.close_reader();
                 return self.open_dock_row(index);
             }
+            Key::Character(c)
+                if dock.active == PanelKind::Agents && c.eq_ignore_ascii_case("d") =>
+            {
+                let pane = dock.reading().map(PaneId);
+                return self.agent_diff(pane);
+            }
+            Key::Character(c)
+                if ctrl && c.eq_ignore_ascii_case("c") && dock.active == PanelKind::Agents =>
+            {
+                let text: Vec<String> = lines.into_iter().map(|l| l.text).collect();
+                self.copy_text(text.join("\n"));
+                return;
+            }
             Key::Character(c) if ctrl && c.eq_ignore_ascii_case("c") => {
                 let id = dock.reading();
                 let text = self.center.history().find(|n| Some(n.id) == id).map(|n| {
@@ -1290,11 +1360,10 @@ impl App {
 
     /// A key while the dock has the keyboard. The keys never go to the terminal.
     fn dock_key(&mut self, event: &KeyEvent) {
-        if self
-            .running
-            .as_ref()
-            .is_some_and(|r| r.dock.active == PanelKind::Events && r.dock.reading().is_some())
-        {
+        if self.running.as_ref().is_some_and(|r| {
+            matches!(r.dock.active, PanelKind::Events | PanelKind::Agents)
+                && r.dock.reading().is_some()
+        }) {
             return self.reader_key(event);
         }
         if self
@@ -1330,6 +1399,19 @@ impl App {
                 }
                 return;
             }
+            Key::Named(NamedKey::Space | NamedKey::ArrowRight)
+                if dock.active == PanelKind::Agents && rows > 0 =>
+            {
+                let index = dock.selected();
+                let pane = self.dock_rows().get(index).and_then(|(_, p)| *p);
+                if let Some(pane) = pane
+                    && let Some(running) = &mut self.running
+                {
+                    running.dock.open_reader(pane.0);
+                    running.window.request_redraw();
+                }
+                return;
+            }
             Key::Named(NamedKey::Tab | NamedKey::ArrowLeft | NamedKey::ArrowRight) => {
                 dock.next_panel()
             }
@@ -1337,6 +1419,13 @@ impl App {
             Key::Named(NamedKey::Enter) => {
                 let index = dock.selected();
                 return self.open_dock_row(index);
+            }
+            Key::Character(c)
+                if dock.active == PanelKind::Agents && c.eq_ignore_ascii_case("d") =>
+            {
+                let index = dock.selected();
+                let pane = self.dock_rows().get(index).and_then(|(_, p)| *p);
+                return self.agent_diff(pane);
             }
             Key::Character(c) if dock.active == PanelKind::Events => match c.as_str() {
                 "f" | "F" => {
@@ -4771,6 +4860,7 @@ impl App {
         let reader_scroll = dock.reader_scroll();
         let dock_hints = match (dock_active, dock_filter) {
             (PanelKind::Events, _) if reader.is_some() => tr!("dock.reader_keys"),
+            (PanelKind::Agents, _) if reader.is_some() => tr!("dock.agent_reader_keys"),
             (PanelKind::Events, EventFilter::All) => tr!("dock.events_keys"),
             (PanelKind::Events, EventFilter::Important) => tr!("dock.events_important_keys"),
             (PanelKind::Agents, _) => tr!("dock.agents_keys"),

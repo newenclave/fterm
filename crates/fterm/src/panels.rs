@@ -10,6 +10,7 @@ use fterm_render::toasts::ToastLevel;
 use fterm_term::alacritty_terminal::vte::ansi::Rgb;
 
 use crate::agent::{AgentKind, AgentState, badge_color};
+use crate::agent_info::{AgentInfo, StepKind, TodoStatus};
 use crate::notify::{Level, Notification};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -343,17 +344,51 @@ pub struct AgentEntry<'a> {
     pub state: &'a AgentState,
     /// Unread messages in its inbox.
     pub messages: usize,
+    /// What it did, waits for, and costs.
+    pub info: &'a AgentInfo,
 }
 
+/// `$0.42`.
+fn money(usd: f64) -> String {
+    format!("${usd:.2}")
+}
+
+/// The rows of the Agents panel: the agents that wait for you first (then errors, working, done). A row tells the
+/// question, else the todo in progress, else the state; the cost in the title and the context at the right.
 pub fn agent_rows(
     entries: &[AgentEntry],
     now: Instant,
     ui: &UiColors,
 ) -> Vec<(DockRow, Option<PaneId>)> {
-    entries
-        .iter()
+    let mut order: Vec<&AgentEntry> = entries.iter().collect();
+    let rank = |k: AgentKind| match k {
+        AgentKind::Waiting => 0,
+        AgentKind::Error => 1,
+        AgentKind::Working => 2,
+        AgentKind::Done => 3,
+    };
+    order.sort_by_key(|e| rank(e.state.kind));
+    order
+        .into_iter()
         .map(|e| {
-            let detail = if e.state.message.trim().is_empty() {
+            let usage = e.info.usage.as_ref();
+            let question = e
+                .info
+                .question
+                .as_ref()
+                .filter(|_| e.state.kind == AgentKind::Waiting);
+            let todos = e
+                .info
+                .todo_progress()
+                .map(|(done, total, current)| match current {
+                    Some(c) => format!("{done}/{total} · {c}"),
+                    None => format!("{done}/{total}"),
+                });
+            let detail = if let Some(q) = question {
+                q.clone()
+            } else if let Some(t) = todos.filter(|_| e.state.kind == AgentKind::Working) {
+                t
+            } else if e.state.message.trim().is_empty() {
                 match e.state.kind {
                     AgentKind::Working => fterm_config::tr!("state.working"),
                     AgentKind::Waiting => fterm_config::tr!("state.waiting"),
@@ -363,21 +398,137 @@ pub fn agent_rows(
             } else {
                 e.state.message.clone()
             };
-            let title = if e.messages > 0 {
+            let mut title = if e.messages > 0 {
                 format!("{} · ✉ {}", e.name, e.messages)
             } else {
                 e.name.to_owned()
             };
+            if let Some(cost) = usage.and_then(|u| u.cost_usd) {
+                title.push_str(&format!(" · {}", money(cost)));
+            }
+            let mut right = short_ago(now.saturating_duration_since(e.state.since));
+            if let Some(ctx) = usage.and_then(|u| u.context_pct) {
+                right.push_str(&format!(" · {ctx:.0}%"));
+            }
             let row = DockRow {
                 marker: badge_color(e.state.kind, ui),
                 title,
                 detail,
-                right: short_ago(now.saturating_duration_since(e.state.since)),
+                right,
                 new: !e.state.seen,
             };
             (row, Some(e.pane))
         })
         .collect()
+}
+
+/// The details of an agent, wrapped to `width` cells: its state and question, its todos, its usage, the files it
+/// changed, and its steps (the newest first).
+pub fn agent_lines(
+    e: &AgentEntry,
+    now: Instant,
+    width: usize,
+) -> Vec<fterm_render::dock::ChatLine> {
+    use fterm_render::dock::{ChatLine, ChatStyle};
+    let width = width.max(8);
+    let mut out = Vec::new();
+    let mut put = |text: &str, style: ChatStyle| {
+        if text.is_empty() {
+            out.push(ChatLine {
+                text: String::new(),
+                style,
+            });
+        }
+        for t in crate::ai_chat::wrap(text, width) {
+            out.push(ChatLine { text: t, style });
+        }
+    };
+    put(e.name, ChatStyle::User);
+    let state = match e.state.kind {
+        AgentKind::Working => fterm_config::tr!("state.working"),
+        AgentKind::Waiting => fterm_config::tr!("state.waiting"),
+        AgentKind::Done => fterm_config::tr!("state.done"),
+        AgentKind::Error => fterm_config::tr!("state.error"),
+    };
+    put(
+        &format!(
+            "{state} · {}",
+            long_ago(now.saturating_duration_since(e.state.since), false)
+        ),
+        ChatStyle::Note,
+    );
+    if let Some(q) = &e.info.question {
+        put("", ChatStyle::Note);
+        put(q, ChatStyle::Answer);
+    }
+    if !e.info.todos.is_empty() {
+        put("", ChatStyle::Note);
+        put(&fterm_config::tr!("agent.todos"), ChatStyle::Note);
+        for t in &e.info.todos {
+            let (mark, text) = match t.status {
+                TodoStatus::Completed => ("✓", t.content.as_str()),
+                TodoStatus::InProgress if !t.active.is_empty() => ("▶", t.active.as_str()),
+                TodoStatus::InProgress => ("▶", t.content.as_str()),
+                TodoStatus::Pending => ("·", t.content.as_str()),
+            };
+            put(&format!("{mark} {text}"), ChatStyle::Answer);
+        }
+    }
+    if let Some(u) = &e.info.usage {
+        let mut parts = Vec::new();
+        if let Some(c) = u.cost_usd {
+            parts.push(money(c));
+        }
+        if let (Some(a), Some(r)) = (u.lines_added, u.lines_removed) {
+            parts.push(format!("+{a} −{r}"));
+        }
+        if let Some(c) = u.context_pct {
+            parts.push(fterm_config::tr!("agent.context", pct = format!("{c:.0}")));
+        }
+        if let Some(m) = &u.model {
+            parts.push(m.clone());
+        }
+        if let Some(p) = u.five_hour_pct {
+            parts.push(format!("5 h {p:.0}%"));
+        }
+        if let Some(p) = u.seven_day_pct {
+            parts.push(format!("7 d {p:.0}%"));
+        }
+        put("", ChatStyle::Note);
+        put(&fterm_config::tr!("agent.usage"), ChatStyle::Note);
+        put(&parts.join(" · "), ChatStyle::Answer);
+    }
+    if !e.info.files.is_empty() {
+        put("", ChatStyle::Note);
+        put(
+            &fterm_config::tr!("agent.files", n = e.info.files.len()),
+            ChatStyle::Note,
+        );
+        for (file, n) in &e.info.files {
+            let text = if *n > 1 {
+                format!("{file} ×{n}")
+            } else {
+                file.clone()
+            };
+            put(&text, ChatStyle::Answer);
+        }
+    }
+    if !e.info.timeline.is_empty() {
+        put("", ChatStyle::Note);
+        put(&fterm_config::tr!("agent.steps"), ChatStyle::Note);
+        for step in e.info.timeline.iter().rev().take(30) {
+            let ago = short_ago(now.saturating_duration_since(step.at));
+            let text = match step.kind {
+                StepKind::Prompt => format!("{ago} · » {}", step.text),
+                StepKind::Question => format!("{ago} · ? {}", step.text),
+                StepKind::Done if step.text.is_empty() => format!("{ago} · ✓"),
+                StepKind::Done => format!("{ago} · ✓ {}", step.text),
+                StepKind::Tool => format!("{ago} · {}", step.text),
+            };
+            put(&text, ChatStyle::Answer);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -543,6 +694,7 @@ mod tests {
     #[test]
     fn agent_rows_show_the_state() {
         let t0 = Instant::now();
+        let empty = AgentInfo::default();
         let waiting = AgentState {
             kind: AgentKind::Waiting,
             message: String::new(),
@@ -563,12 +715,14 @@ mod tests {
                 name: "claude",
                 state: &waiting,
                 messages: 0,
+                info: &empty,
             },
             AgentEntry {
                 pane: PaneId(2),
                 name: "api",
                 state: &done,
                 messages: 2,
+                info: &empty,
             },
         ];
         let rows = agent_rows(&entries, t0 + Duration::from_secs(30), &UiColors::default());
@@ -589,6 +743,157 @@ mod tests {
             "unread messages show in the title"
         );
         assert!(!rows[1].0.new);
+    }
+
+    fn state(kind: AgentKind, t0: Instant) -> AgentState {
+        AgentState {
+            kind,
+            message: String::new(),
+            since: t0,
+            seen: true,
+            auto: false,
+        }
+    }
+
+    fn info_with(t0: Instant) -> AgentInfo {
+        use crate::agent_info::{AgentEvent, Todo, TodoStatus, Usage};
+        let mut info = AgentInfo::default();
+        info.apply(&AgentEvent::Prompt("Fix the login".into()), t0);
+        info.apply(
+            &AgentEvent::Tool {
+                name: "Edit".into(),
+                file: Some("C:/w/src/login.rs".into()),
+                command: None,
+                todos: None,
+            },
+            t0,
+        );
+        let todo = |c: &str, s, a: &str| Todo {
+            content: c.into(),
+            status: s,
+            active: a.into(),
+        };
+        info.apply(
+            &AgentEvent::Tool {
+                name: "TodoWrite".into(),
+                file: None,
+                command: None,
+                todos: Some(vec![
+                    todo("Read the code", TodoStatus::Completed, ""),
+                    todo("Write tests", TodoStatus::InProgress, "Writing tests"),
+                    todo("Fix it", TodoStatus::Pending, ""),
+                ]),
+            },
+            t0,
+        );
+        info.apply(
+            &AgentEvent::Usage(Usage {
+                cost_usd: Some(0.4231),
+                lines_added: Some(120),
+                lines_removed: Some(7),
+                context_pct: Some(37.4),
+                model: Some("Opus".into()),
+                five_hour_pct: Some(12.0),
+                seven_day_pct: None,
+            }),
+            t0,
+        );
+        info
+    }
+
+    #[test]
+    fn agent_rows_tell_the_question_the_todos_and_the_cost() {
+        let t0 = Instant::now();
+        let now = t0 + Duration::from_secs(30);
+        let busy = info_with(t0);
+        let mut asking = AgentInfo::default();
+        asking.apply(
+            &crate::agent_info::AgentEvent::Question("Allow Bash: git push?".into()),
+            t0,
+        );
+        let (working, waiting, done) = (
+            state(AgentKind::Working, t0),
+            state(AgentKind::Waiting, t0),
+            state(AgentKind::Done, t0),
+        );
+        let empty = AgentInfo::default();
+        let entries = [
+            AgentEntry {
+                pane: PaneId(1),
+                name: "done one",
+                state: &done,
+                messages: 0,
+                info: &empty,
+            },
+            AgentEntry {
+                pane: PaneId(2),
+                name: "busy",
+                state: &working,
+                messages: 0,
+                info: &busy,
+            },
+            AgentEntry {
+                pane: PaneId(3),
+                name: "asks",
+                state: &waiting,
+                messages: 0,
+                info: &asking,
+            },
+        ];
+        let rows = agent_rows(&entries, now, &UiColors::default());
+        let panes: Vec<_> = rows.iter().map(|(_, p)| p.unwrap().0).collect();
+        assert_eq!(
+            panes,
+            [3, 2, 1],
+            "the one that waits first, then working, then done"
+        );
+        assert_eq!(
+            rows[0].0.detail, "Allow Bash: git push?",
+            "the real question"
+        );
+        assert_eq!(rows[1].0.title, "busy · $0.42");
+        assert_eq!(rows[1].0.detail, "1/3 · Writing tests");
+        assert_eq!(rows[1].0.right, "30 s · 37%");
+        assert_eq!(rows[2].0.right, "30 s");
+    }
+
+    #[test]
+    fn the_details_of_an_agent() {
+        let t0 = Instant::now();
+        let info = info_with(t0);
+        let working = state(AgentKind::Working, t0);
+        let entry = AgentEntry {
+            pane: PaneId(2),
+            name: "busy",
+            state: &working,
+            messages: 0,
+            info: &info,
+        };
+        let text: Vec<String> = agent_lines(&entry, t0 + Duration::from_secs(90), 60)
+            .into_iter()
+            .map(|l| l.text)
+            .collect();
+        let all = text.join("\n");
+        for want in [
+            "busy",
+            "✓ Read the code",
+            "▶ Writing tests",
+            "· Fix it",
+            "$0.42",
+            "+120 −7",
+            "context 37%",
+            "Opus",
+            "5 h 12%",
+            "C:/w/src/login.rs",
+            "edited login.rs",
+            "Fix the login",
+        ] {
+            assert!(all.contains(want), "{want} is missing in:\n{all}");
+        }
+        assert!(
+            text.iter().all(|l| l.chars().count() <= 60),
+            "wrapped to the width"
+        );
     }
 
     fn dock() -> Dock {
