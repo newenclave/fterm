@@ -141,6 +141,15 @@ pub fn timeout_for(method: &str, params: &Value) -> Duration {
     if method == "review" || (method == "show_image" && picture_wait(params)) {
         return review_timeout(params) + BASE;
     }
+    // An overlay with `wait`: the answer comes when the user closes the program (24 hours at most, as the app).
+    if method == "spawn"
+        && params.get("place").and_then(Value::as_str) == Some("overlay")
+        && params.get("wait").and_then(Value::as_bool) == Some(true)
+    {
+        let ms = params.get("timeout_ms").and_then(Value::as_f64);
+        return BASE
+            + Duration::from_millis(ms.unwrap_or(86_400_000.0).clamp(0.0, 86_400_000.0) as u64);
+    }
     if method != "wait_for" {
         return BASE;
     }
@@ -609,6 +618,21 @@ mod tests {
             err.message
         );
         assert!(scene_place(&json!({"place": 3})).is_err());
+    }
+
+    #[test]
+    fn an_overlay_that_waits_has_time_for_the_user() {
+        // The user may keep lazygit open for hours: the overlay gives the answer, not the 2 minutes of a call.
+        let day = Duration::from_secs(24 * 3600);
+        let waits = json!({ "place": "overlay", "command": "lazygit", "wait": true });
+        assert_eq!(timeout_for("spawn", &waits), day + Duration::from_secs(120));
+        let short = json!({ "place": "overlay", "wait": true, "timeout_ms": 1000 });
+        assert_eq!(timeout_for("spawn", &short), Duration::from_secs(121));
+        assert_eq!(
+            timeout_for("spawn", &json!({ "place": "overlay", "command": "x" })),
+            Duration::from_secs(120),
+            "no wait: an answer at once"
+        );
     }
 
     #[test]
