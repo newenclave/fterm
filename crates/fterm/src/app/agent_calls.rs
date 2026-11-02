@@ -6,6 +6,100 @@ use crate::agent_history::{self, Record};
 use crate::history_popup::{HistoryPopup, PopupKind, PopupRow};
 
 impl App {
+    /// The agent of `pane` took a step: `on_agent_event` of the config sees it (and may call `fterm.*`), and
+    /// `on_agent_row` makes its row again.
+    pub(super) fn agent_changed(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        pane: PaneId,
+        event: Option<&crate::agent_info::AgentEvent>,
+    ) {
+        use crate::agent_info::AgentEvent;
+        use fterm_config::load::{AgentEventIn, AgentRowIn};
+        if let Some(event) = event {
+            let usage = self
+                .running
+                .as_ref()
+                .and_then(|r| r.panes.get(&pane))
+                .and_then(|p| p.agent_info.usage.clone());
+            let mut input = AgentEventIn {
+                pane: pane.0,
+                cost: usage.as_ref().and_then(|u| u.cost_usd),
+                context: usage.as_ref().and_then(|u| u.context_pct),
+                ..Default::default()
+            };
+            match event {
+                AgentEvent::Prompt(text) => {
+                    input.kind = "prompt".into();
+                    input.text = Some(text.clone());
+                }
+                AgentEvent::Tool {
+                    name,
+                    file,
+                    command,
+                    ..
+                } => {
+                    input.kind = "tool".into();
+                    input.tool = Some(name.clone());
+                    input.file = file.clone();
+                    input.command = command.clone();
+                }
+                AgentEvent::Question(text) => {
+                    input.kind = "question".into();
+                    input.text = Some(text.clone());
+                }
+                AgentEvent::Done(text) => {
+                    input.kind = "done".into();
+                    input.text = text.clone();
+                }
+                AgentEvent::Usage(_) => input.kind = "usage".into(),
+            }
+            match self.config.on_agent_event(&input) {
+                Ok(calls) => {
+                    for call in calls {
+                        self.run_api_call(event_loop, call);
+                    }
+                }
+                Err(err) => tracing::warn!("on_agent_event: {err}"),
+            }
+        }
+        let Some(running) = &self.running else {
+            return;
+        };
+        let Some(p) = running.panes.get(&pane) else {
+            return;
+        };
+        let info = &p.agent_info;
+        let (done, total, current) = info.todo_progress().unwrap_or((0, 0, None));
+        let input = AgentRowIn {
+            pane: pane.0,
+            name: running.pane_tab_title(pane).unwrap_or_default(),
+            state: p
+                .agent
+                .as_ref()
+                .map_or("idle", |a| a.kind.name())
+                .to_owned(),
+            question: info.question.clone(),
+            todos_done: done,
+            todos_total: total,
+            todo_current: current.map(str::to_owned),
+            cost: info.usage.as_ref().and_then(|u| u.cost_usd),
+            context: info.usage.as_ref().and_then(|u| u.context_pct),
+            files: info.files.len(),
+            last: info.last_step().map(str::to_owned),
+        };
+        let row = match self.config.on_agent_row(&input) {
+            Ok(row) => row,
+            Err(err) => {
+                tracing::warn!("on_agent_row: {err}");
+                None
+            }
+        };
+        if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {
+            p.agent_row = row;
+        }
+    }
+
     /// Our file of conversations: `agents.jsonl` next to the command history.
     fn agents_file(&self) -> Option<std::path::PathBuf> {
         crate::paths::folder(

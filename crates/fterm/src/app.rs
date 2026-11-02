@@ -139,6 +139,8 @@ struct Pane {
     agent_session: Option<String>,
     /// What the agent did and does (the Agents panel), from the hooks and the status line of Claude Code.
     agent_info: crate::agent_info::AgentInfo,
+    /// The row that `on_agent_row` of the config made from it (made again when the info changes).
+    agent_row: Option<fterm_config::load::AgentRowOut>,
     /// The last command that ended (from shell integration).
     last_command: Option<LastCommand>,
     /// API clients may read and type into it (with the user's yes). `toggle_remote_control` changes it.
@@ -1166,6 +1168,7 @@ impl App {
                                 state,
                                 messages: self.inbox.unread(pane),
                                 info: &p.agent_info,
+                                custom: p.agent_row.as_ref(),
                             });
                         }
                     }
@@ -1272,6 +1275,7 @@ impl App {
                 state,
                 messages: self.inbox.unread(pane),
                 info: &p.agent_info,
+                custom: None,
             };
             let lines = crate::panels::agent_lines(
                 &entry,
@@ -2123,6 +2127,7 @@ impl App {
                 agent_hooks: false,
                 agent_session: None,
                 agent_info: Default::default(),
+                agent_row: None,
                 pictures: Default::default(),
                 picture_pane: None,
                 last_command: None,
@@ -2174,6 +2179,7 @@ impl App {
                 agent_hooks: false,
                 agent_session: None,
                 agent_info: Default::default(),
+                agent_row: None,
                 pictures: Default::default(),
                 picture_pane: Some(Box::new(markup_calls::PicturePane::new(picture, origin))),
                 last_command: None,
@@ -2513,6 +2519,7 @@ impl App {
                 agent_hooks: false,
                 agent_session: None,
                 agent_info: Default::default(),
+                agent_row: None,
                 pictures: Default::default(),
                 picture_pane: None,
                 last_command: None,

@@ -544,7 +544,7 @@ impl App {
             "dashboard_tile" => self.api_dashboard_tile(params),
             "agent_session" => self.api_agent_session(client, params),
             "agent_event" => self.api_agent_event(event_loop, client, params),
-            "agent_usage" => self.api_agent_usage(client, params),
+            "agent_usage" => self.api_agent_usage(event_loop, client, params),
             "scene_draw" => self.api_scene_draw(client, params),
             "send_text" => self.api_send_text(client, params),
             "get_text" => self.api_get_text(client, params),
@@ -746,7 +746,21 @@ impl App {
             "active": running.mux.active_pane() == Some(pane),
             "running": p.shell.is_running(),
             "at_prompt": p.shell.at_prompt(),
-            "agent": p.agent.as_ref().map(|a| json!({ "state": a.kind.name(), "message": a.message })),
+            "agent": p.agent.as_ref().map(|a| {
+                let info = &p.agent_info;
+                let usage = info.usage.as_ref();
+                let todos = info.todo_progress().map(|(done, total, current)| {
+                    json!({ "done": done, "total": total, "current": current })
+                });
+                json!({
+                    "state": a.kind.name(),
+                    "message": a.message,
+                    "question": info.question,
+                    "todos": todos,
+                    "cost": usage.and_then(|u| u.cost_usd),
+                    "context": usage.and_then(|u| u.context_pct),
+                })
+            }),
             "agent_session": p.agent_session,
             "remote": p.remote,
             "messages": self.inbox.unread(pane),
@@ -965,6 +979,7 @@ impl App {
             }
         };
         self.agent_state(event_loop, pane, state, &message);
+        self.agent_changed(event_loop, pane, Some(&event));
         if counts {
             self.remember_conversation(pane);
         }
@@ -972,7 +987,12 @@ impl App {
     }
 
     /// `agent_usage`: the cost, the context, and the model of the agent of a pane (`ftermctl statusline`).
-    fn api_agent_usage(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
+    fn api_agent_usage(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        client: ClientId,
+        params: &Value,
+    ) -> Result<Value, RpcError> {
         let pane = self.target_pane(client, params)?;
         let num = |key: &str| params.get(key).and_then(Value::as_f64);
         let usage = crate::agent_info::Usage {
@@ -984,12 +1004,13 @@ impl App {
             five_hour_pct: num("five_hour"),
             seven_day_pct: num("seven_day"),
         };
+        let event = crate::agent_info::AgentEvent::Usage(usage);
         let running = self.running.as_mut().expect("checked in api_call");
         if let Some(p) = running.panes.get_mut(&pane) {
-            p.agent_info
-                .apply(&crate::agent_info::AgentEvent::Usage(usage), Instant::now());
+            p.agent_info.apply(&event, Instant::now());
             running.window.request_redraw();
         }
+        self.agent_changed(event_loop, pane, Some(&event));
         Ok(json!({ "pane": pane.0 }))
     }
 

@@ -346,6 +346,8 @@ pub struct AgentEntry<'a> {
     pub messages: usize,
     /// What it did, waits for, and costs.
     pub info: &'a AgentInfo,
+    /// The row that `on_agent_row` of the config made, if any.
+    pub custom: Option<&'a fterm_config::load::AgentRowOut>,
 }
 
 /// `$0.42`.
@@ -416,11 +418,13 @@ pub fn agent_rows(
             {
                 right.push_str(&format!(" · {ctx:.0}%"));
             }
+            // The parts that `on_agent_row` set take the place of these.
+            let custom = e.custom;
             let row = DockRow {
                 marker: badge_color(e.state.kind, ui),
-                title,
-                detail,
-                right,
+                title: custom.and_then(|c| c.title.clone()).unwrap_or(title),
+                detail: custom.and_then(|c| c.detail.clone()).unwrap_or(detail),
+                right: custom.and_then(|c| c.right.clone()).unwrap_or(right),
                 new: !e.state.seen,
             };
             (row, Some(e.pane))
@@ -728,6 +732,7 @@ mod tests {
                 state: &waiting,
                 messages: 0,
                 info: &empty,
+                custom: None,
             },
             AgentEntry {
                 pane: PaneId(2),
@@ -735,6 +740,7 @@ mod tests {
                 state: &done,
                 messages: 2,
                 info: &empty,
+                custom: None,
             },
         ];
         let rows = agent_rows(
@@ -841,6 +847,7 @@ mod tests {
                 state: &done,
                 messages: 0,
                 info: &empty,
+                custom: None,
             },
             AgentEntry {
                 pane: PaneId(2),
@@ -848,6 +855,7 @@ mod tests {
                 state: &working,
                 messages: 0,
                 info: &busy,
+                custom: None,
             },
             AgentEntry {
                 pane: PaneId(3),
@@ -855,6 +863,7 @@ mod tests {
                 state: &waiting,
                 messages: 0,
                 info: &asking,
+                custom: None,
             },
         ];
         let rows = agent_rows(&entries, now, &UiColors::default(), &Default::default());
@@ -875,6 +884,38 @@ mod tests {
     }
 
     #[test]
+    fn a_row_from_the_config() {
+        let t0 = Instant::now();
+        let info = info_with(t0);
+        let working = state(AgentKind::Working, t0);
+        let custom = fterm_config::load::AgentRowOut {
+            title: Some("my title".into()),
+            detail: None,
+            right: Some("!".into()),
+        };
+        let entry = AgentEntry {
+            pane: PaneId(2),
+            name: "busy",
+            state: &working,
+            messages: 0,
+            info: &info,
+            custom: Some(&custom),
+        };
+        let rows = agent_rows(
+            std::slice::from_ref(&entry),
+            t0,
+            &UiColors::default(),
+            &Default::default(),
+        );
+        assert_eq!(rows[0].0.title, "my title");
+        assert_eq!(
+            rows[0].0.detail, "1/3 · Writing tests",
+            "not set: the default"
+        );
+        assert_eq!(rows[0].0.right, "!");
+    }
+
+    #[test]
     fn the_config_picks_the_parts() {
         let t0 = Instant::now();
         let info = info_with(t0);
@@ -885,6 +926,7 @@ mod tests {
             state: &working,
             messages: 0,
             info: &info,
+            custom: None,
         };
         let parts = fterm_config::load::AgentsConfig {
             history: true,
@@ -919,6 +961,7 @@ mod tests {
             state: &working,
             messages: 0,
             info: &info,
+            custom: None,
         };
         let text: Vec<String> = agent_lines(
             &entry,

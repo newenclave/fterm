@@ -239,6 +239,7 @@ impl App {
                 agent_hooks: false,
                 agent_session: None,
                 agent_info: Default::default(),
+                agent_row: None,
                 pictures: Default::default(),
                 picture_pane: None,
                 last_command: None,

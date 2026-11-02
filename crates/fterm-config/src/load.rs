@@ -503,6 +503,47 @@ pub struct AgentOut {
     pub calls: Vec<ApiCall>,
 }
 
+/// What `on_agent_row` gets: the agent of a pane, as the Agents panel knows it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AgentRowIn {
+    pub pane: u64,
+    pub name: String,
+    pub state: String,
+    pub question: Option<String>,
+    pub todos_done: usize,
+    pub todos_total: usize,
+    pub todo_current: Option<String>,
+    pub cost: Option<f64>,
+    pub context: Option<f64>,
+    /// How many files it changed.
+    pub files: usize,
+    /// Its newest step.
+    pub last: Option<String>,
+}
+
+/// What `on_agent_row` gave: each part that it set takes the place of the default one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentRowOut {
+    pub title: Option<String>,
+    pub detail: Option<String>,
+    pub right: Option<String>,
+}
+
+/// What `on_agent_event` gets: one step of an agent.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AgentEventIn {
+    pub pane: u64,
+    /// `prompt`, `tool`, `question`, `done`, or `usage`.
+    pub kind: String,
+    pub tool: Option<String>,
+    pub file: Option<String>,
+    pub command: Option<String>,
+    /// The prompt, the question, or the last message.
+    pub text: Option<String>,
+    pub cost: Option<f64>,
+    pub context: Option<f64>,
+}
+
 /// The parts that the Agents panel can show (`agents.show`).
 pub const AGENT_PARTS: [&str; 6] = ["question", "todos", "cost", "context", "files", "last"];
 
@@ -721,6 +762,10 @@ pub struct Config {
     pub on_notification: Option<usize>,
     /// The Lua function `on_agent` (its number), if there is one.
     pub on_agent: Option<usize>,
+    /// The Lua function `on_agent_row` (its number): the row of an agent in the Agents panel.
+    pub on_agent_row: Option<usize>,
+    /// The Lua function `on_agent_event` (its number): every step of an agent.
+    pub on_agent_event: Option<usize>,
     /// The Lua function `on_history` (its number), if there is one.
     pub on_history: Option<usize>,
     /// The Lua function `on_close_window` (its number), if there is one.
@@ -776,6 +821,8 @@ impl Default for Config {
             ai: AiConfig::default(),
             on_notification: None,
             on_agent: None,
+            on_agent_row: None,
+            on_agent_event: None,
             on_history: None,
             on_close_window: None,
             window_title: None,
@@ -911,6 +958,70 @@ impl LoadedConfig {
             notify,
             calls: std::mem::take(&mut *self.queue.borrow_mut()),
         })
+    }
+
+    /// Asks `on_agent_row` (if the config has it) for the row of an agent. `None` = the default row.
+    pub fn on_agent_row(&self, input: &AgentRowIn) -> Result<Option<AgentRowOut>, String> {
+        let (Some(index), Some(lua), Some(api)) = (self.config.on_agent_row, &self._lua, &self.api)
+        else {
+            return Ok(None);
+        };
+        let Some(function) = self.functions.get(index) else {
+            return Err(format!("no Lua function number {index}"));
+        };
+        let run = || -> mlua::Result<Option<AgentRowOut>> {
+            let a = lua.create_table()?;
+            a.set("pane", input.pane)?;
+            a.set("name", input.name.as_str())?;
+            a.set("state", input.state.as_str())?;
+            a.set("question", input.question.as_deref())?;
+            let todos = lua.create_table()?;
+            todos.set("done", input.todos_done)?;
+            todos.set("total", input.todos_total)?;
+            todos.set("current", input.todo_current.as_deref())?;
+            a.set("todos", todos)?;
+            a.set("cost", input.cost)?;
+            a.set("context", input.context)?;
+            a.set("files", input.files)?;
+            a.set("last", input.last.as_deref())?;
+            match function.call::<Value>((a, api.clone()))? {
+                Value::Table(t) => Ok(Some(AgentRowOut {
+                    title: t.get::<Option<String>>("title")?,
+                    detail: t.get::<Option<String>>("detail")?,
+                    right: t.get::<Option<String>>("right")?,
+                })),
+                _ => Ok(None),
+            }
+        };
+        run().map_err(|err| err.to_string())
+    }
+
+    /// Tells `on_agent_event` (if the config has it) about a step of an agent. Gives what it asked fterm to do.
+    pub fn on_agent_event(&self, input: &AgentEventIn) -> Result<Vec<ApiCall>, String> {
+        let (Some(index), Some(lua), Some(api)) =
+            (self.config.on_agent_event, &self._lua, &self.api)
+        else {
+            return Ok(Vec::new());
+        };
+        let Some(function) = self.functions.get(index) else {
+            return Err(format!("no Lua function number {index}"));
+        };
+        self.queue.borrow_mut().clear();
+        let run = || -> mlua::Result<()> {
+            let e = lua.create_table()?;
+            e.set("pane", input.pane)?;
+            e.set("kind", input.kind.as_str())?;
+            e.set("tool", input.tool.as_deref())?;
+            e.set("file", input.file.as_deref())?;
+            e.set("command", input.command.as_deref())?;
+            e.set("text", input.text.as_deref())?;
+            e.set("cost", input.cost)?;
+            e.set("context", input.context)?;
+            function.call::<Value>((e, api.clone()))?;
+            Ok(())
+        };
+        run().map_err(|err| err.to_string())?;
+        Ok(std::mem::take(&mut *self.queue.borrow_mut()))
     }
 
     /// Asks `on_history` (if the config has it) about a command before it goes to the history.
@@ -1534,6 +1645,8 @@ impl Reader {
         }
         config.on_notification = self.hook(root, "on_notification")?;
         config.on_agent = self.hook(root, "on_agent")?;
+        config.on_agent_row = self.hook(root, "on_agent_row")?;
+        config.on_agent_event = self.hook(root, "on_agent_event")?;
         config.on_history = self.hook(root, "on_history")?;
         config.on_close_window = self.hook(root, "on_close_window")?;
         config.window_title = self.hook(root, "window_title")?;
@@ -4302,6 +4415,75 @@ mod tests {
             },
             "nil = keep"
         );
+    }
+
+    fn row_in() -> AgentRowIn {
+        AgentRowIn {
+            pane: 3,
+            name: "claude".into(),
+            state: "working".into(),
+            question: None,
+            todos_done: 1,
+            todos_total: 3,
+            todo_current: Some("Writing tests".into()),
+            cost: Some(6.2),
+            context: Some(81.0),
+            files: 2,
+            last: Some("edited app.rs".into()),
+        }
+    }
+
+    #[test]
+    fn on_agent_row_makes_the_row() {
+        let loaded = load(
+            r#"return { on_agent_row = function(a)
+                local right = nil
+                if a.context and a.context > 80 then right = "ctx " .. math.floor(a.context) .. "%!" end
+                return { title = a.name .. " · " .. a.todos.done .. "/" .. a.todos.total, right = right }
+            end }"#,
+        );
+        let out = loaded.on_agent_row(&row_in()).unwrap().unwrap();
+        assert_eq!(out.title.as_deref(), Some("claude · 1/3"));
+        assert_eq!(out.right.as_deref(), Some("ctx 81%!"));
+        assert_eq!(out.detail, None, "a missing part = the default");
+        // nil = the default row; no function = no change.
+        let none = load("return { on_agent_row = function(a) return nil end }");
+        assert_eq!(none.on_agent_row(&row_in()).unwrap(), None);
+        assert_eq!(load("return {}").on_agent_row(&row_in()).unwrap(), None);
+    }
+
+    #[test]
+    fn on_agent_event_sees_every_step() {
+        let loaded = load(
+            r#"return { on_agent_event = function(e, fterm)
+                if e.kind == "usage" and e.cost > 5 then fterm.notify("expensive: " .. e.pane) end
+                if e.kind == "tool" and e.tool == "Bash" then fterm.notify("ran " .. e.command) end
+            end }"#,
+        );
+        let usage = AgentEventIn {
+            pane: 3,
+            kind: "usage".into(),
+            cost: Some(6.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            loaded.on_agent_event(&usage).unwrap(),
+            [ApiCall::Notify {
+                title: String::new(),
+                body: "expensive: 3".into(),
+                level: "info".into()
+            }]
+        );
+        let tool = AgentEventIn {
+            pane: 3,
+            kind: "tool".into(),
+            tool: Some("Bash".into()),
+            command: Some("cargo test".into()),
+            ..Default::default()
+        };
+        assert_eq!(loaded.on_agent_event(&tool).unwrap().len(), 1);
+        assert!(load("return {}").on_agent_event(&tool).unwrap().is_empty());
+        assert!(error("return { on_agent_event = 5 }").contains("on_agent_event"));
     }
 
     #[test]
