@@ -49,12 +49,14 @@ fn is_ours(entry: &Value) -> bool {
             c.contains("fterm-agent")
                 || c.ends_with("review --hook")
                 || c.ends_with("agent-session --hook")
+                || c.ends_with("agent-event --hook")
         })
     })
 }
 
-/// `settings` with the fterm hooks of `ours` added. Gives the new settings and the hook events that got
-/// an fterm hook. An event that has an fterm hook already is not changed, so it can run again.
+/// `settings` with the fterm hooks of `ours`. Gives the new settings and the hook events that changed. In each
+/// event the old fterm entries (see `is_ours`) give way to the new ones, and the entries of the user stay; so an
+/// older install gets the new hooks, and a second time changes nothing.
 pub fn merge_hooks(settings: &Value, ours: &Value) -> Result<(Value, Vec<String>), String> {
     let mut merged = settings.clone();
     let root = merged
@@ -72,11 +74,12 @@ pub fn merge_hooks(settings: &Value, ours: &Value) -> Result<(Value, Vec<String>
             .or_insert_with(|| Value::Array(Vec::new()))
             .as_array_mut()
             .ok_or_else(|| format!("`hooks.{event}` in the settings is not a list"))?;
-        if list.iter().any(is_ours) {
-            continue;
+        let mut new: Vec<Value> = list.iter().filter(|e| !is_ours(e)).cloned().collect();
+        new.extend(entries.as_array().into_iter().flatten().cloned());
+        if *list != new {
+            *list = new;
+            added.push(event.clone());
         }
-        list.extend(entries.as_array().into_iter().flatten().cloned());
-        added.push(event.clone());
     }
     Ok((merged, added))
 }
@@ -144,6 +147,27 @@ mod tests {
             1 + ours()["hooks"]["Stop"].as_array().unwrap().len()
         );
         assert!(added.contains(&"Stop".to_owned()));
+    }
+
+    #[test]
+    fn an_old_install_gets_the_new_hooks_and_keeps_the_user_ones() {
+        // Installed by an older fterm: the `echo` state hook on PostToolUse, next to a hook of the user.
+        let mine = json!({ "hooks": [{ "type": "command", "command": "my-linter" }] });
+        let old_ours = ours()["hooks"]["PostToolUse"][0].clone();
+        let settings = json!({ "hooks": { "PostToolUse": [mine.clone(), old_ours] } });
+        let new_entry = json!({ "matcher": "", "hooks": [{ "type": "command",
+            "command": "\"C:/f/ftermctl.exe\" agent-event --hook" }] });
+        let newer = json!({ "hooks": { "PostToolUse": [new_entry.clone()] } });
+        let (merged, changed) = merge_hooks(&settings, &newer).unwrap();
+        assert_eq!(
+            merged["hooks"]["PostToolUse"],
+            json!([mine, new_entry]),
+            "ours replaced, the user's stays"
+        );
+        assert_eq!(changed, ["PostToolUse"]);
+        let (again, changed) = merge_hooks(&merged, &newer).unwrap();
+        assert_eq!(again, merged);
+        assert!(changed.is_empty(), "a second time changes nothing");
     }
 
     #[test]
