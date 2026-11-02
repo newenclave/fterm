@@ -141,6 +141,8 @@ impl SessionOptions {
 #[derive(Clone)]
 pub struct Listener {
     on_event: Arc<dyn Fn(TermEvent) + Send + Sync>,
+    /// The exit code of the program, when it has ended (it comes before `Exit`).
+    exit_code: Arc<Mutex<Option<i32>>>,
     /// Set after the event loop starts. Used to answer the app (`PtyWrite`).
     sender: Arc<OnceLock<LoopSender>>,
 }
@@ -158,7 +160,10 @@ impl EventListener for Listener {
                     sender.send(Msg::Input(text.into_bytes().into()));
                 }
             }
-            Event::ChildExit(status) => tracing::debug!(?status, "child process ended"),
+            Event::ChildExit(status) => {
+                tracing::debug!(?status, "child process ended");
+                *self.exit_code.lock().unwrap() = status.code();
+            }
             Event::Bell => (self.on_event)(TermEvent::Bell),
             other => tracing::trace!(?other, "terminal event not used yet"),
         }
@@ -182,6 +187,8 @@ pub struct Session {
     recorder: crate::record::Shared,
     /// The cell size in pixels, for the pictures in the output.
     cell: crate::io_loop::CellPx,
+    /// The exit code of the program, when it has ended.
+    exit_code: Arc<Mutex<Option<i32>>>,
 }
 
 impl Session {
@@ -194,6 +201,7 @@ impl Session {
     ) -> io::Result<Self> {
         let listener = Listener {
             on_event: Arc::new(on_event),
+            exit_code: Arc::default(),
             sender: Arc::new(OnceLock::new()),
         };
         let term = Arc::new(FairMutex::new(Term::new(
@@ -292,6 +300,7 @@ impl Session {
             program: program_name,
             recorder,
             cell: cell_px,
+            exit_code: listener.exit_code.clone(),
         })
     }
 
@@ -305,6 +314,7 @@ impl Session {
     ) -> (Self, RemoteFeed) {
         let listener = Listener {
             on_event: Arc::new(on_event),
+            exit_code: Arc::default(),
             // No pty here: `PtyWrite` answers go nowhere.
             sender: Arc::new(OnceLock::new()),
         };
@@ -318,6 +328,7 @@ impl Session {
         )));
         let program = options.program.clone().unwrap_or_else(default_shell);
         let cell = crate::io_loop::CellPx::default();
+        let exit_code = listener.exit_code.clone();
         let feed = RemoteFeed {
             term: term.clone(),
             feeder: Mutex::new({
@@ -337,6 +348,7 @@ impl Session {
             program: program_name(&program),
             recorder: Default::default(),
             cell,
+            exit_code,
         };
         (session, feed)
     }
@@ -380,6 +392,7 @@ impl Session {
     pub fn scene(size: GridSize) -> Self {
         let listener = Listener {
             on_event: Arc::new(|_| {}),
+            exit_code: Arc::default(),
             sender: Arc::new(OnceLock::new()),
         };
         let term = Term::new(
@@ -400,6 +413,7 @@ impl Session {
             program: "scene".to_owned(),
             recorder: Default::default(),
             cell: Default::default(),
+            exit_code: Arc::default(),
         }
     }
 
@@ -436,6 +450,11 @@ impl Session {
         let mut selection = self.selection.lock().unwrap();
         selection.sync(&mut term);
         f(&mut term, &mut selection)
+    }
+
+    /// The exit code of the program: `None` while it runs (and for a scene or a mux pane).
+    pub fn exit_code(&self) -> Option<i32> {
+        *self.exit_code.lock().unwrap()
     }
 
     /// Text on the screen, one line per row, without spaces at the end of lines.

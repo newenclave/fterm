@@ -14,6 +14,8 @@ pub enum WaitKind {
     Text(String),
     /// A scene pane gets a new size (draw again with more or fewer dots).
     SceneResized,
+    /// The program of the pane ends (an overlay with `wait`).
+    Exit,
 }
 
 /// Something that happened in a pane.
@@ -26,6 +28,8 @@ pub enum Happening<'a> {
     Screen(&'a str),
     /// A scene pane got a new size.
     SceneResized,
+    /// The program of the pane ended.
+    Exit,
 }
 
 /// `event` and `pattern` from the params of `wait_for`.
@@ -46,6 +50,18 @@ pub fn parse_kind(event: &str, pattern: Option<String>) -> Result<WaitKind, Stri
     }
 }
 
+#[cfg(test)]
+mod exit_tests {
+    use super::*;
+
+    #[test]
+    fn a_wait_for_the_end_of_the_program() {
+        assert!(matches(&WaitKind::Exit, Happening::Exit));
+        assert!(!matches(&WaitKind::Exit, Happening::CommandDone));
+        assert!(!matches(&WaitKind::CommandDone, Happening::Exit));
+    }
+}
+
 pub fn matches(kind: &WaitKind, happening: Happening) -> bool {
     match (kind, happening) {
         (WaitKind::CommandDone, Happening::CommandDone) => true,
@@ -53,6 +69,7 @@ pub fn matches(kind: &WaitKind, happening: Happening) -> bool {
         (WaitKind::AgentWaiting, Happening::Agent(state)) => state == "waiting",
         (WaitKind::Message, Happening::Message) => true,
         (WaitKind::SceneResized, Happening::SceneResized) => true,
+        (WaitKind::Exit, Happening::Exit) => true,
         (WaitKind::Text(pattern), Happening::Screen(text)) => text.contains(pattern.as_str()),
         _ => false,
     }

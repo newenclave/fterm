@@ -373,7 +373,7 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             call("spawn", params)
         }
         "overlay" => {
-            let w = read(&["size", "pane"], &[])?;
+            let w = read(&["size", "pane"], &["wait"])?;
             let command = w.text();
             if command.trim().is_empty() {
                 return Err("overlay needs a command".to_owned());
@@ -381,6 +381,9 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
             let mut params = json!({ "place": "overlay", "command": command.trim() });
             if let Some(size) = w.number("size")? {
                 params["size"] = json!(size);
+            }
+            if w.flag("wait") {
+                params["wait"] = json!(true);
             }
             w.pane_into(&mut params)?;
             call("spawn", params)
@@ -822,6 +825,14 @@ mod tests {
             )
         );
         assert!(cli("overlay").is_err(), "no command");
+        assert_eq!(
+            call("overlay --wait -- lazygit"),
+            (
+                "spawn".into(),
+                json!({ "place": "overlay", "command": "lazygit", "wait": true })
+            ),
+            "it answers when the program ends"
+        );
         assert_eq!(call("scratch"), ("scratch".into(), json!({})));
         assert_eq!(
             call("scratch --show"),

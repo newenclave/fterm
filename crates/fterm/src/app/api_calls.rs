@@ -132,6 +132,12 @@ impl App {
         if request.method == "wait_for" {
             return self.api_wait_for(request);
         }
+        if request.method == "spawn"
+            && request.params.get("place").and_then(Value::as_str) == Some("overlay")
+            && request.params.get("wait").and_then(Value::as_bool) == Some(true)
+        {
+            return self.api_overlay_wait(request);
+        }
         if request.method == "screenshot" {
             return self.api_screenshot(request);
         }
@@ -491,6 +497,17 @@ impl App {
 
     /// A pane closed: its inbox goes, and its waits get an error.
     pub(super) fn api_pane_closed(&mut self, pane: PaneId) {
+        // An overlay with `wait`: its program ended, so the answer is its exit code.
+        let exit = self
+            .running
+            .as_ref()
+            .and_then(|r| r.panes.get(&pane))
+            .and_then(|p| p.session.exit_code());
+        self.resolve_waits(
+            pane,
+            Happening::Exit,
+            json!({ "event": "exit", "pane": pane.0, "exit": exit }),
+        );
         self.review_pane_closed(pane);
         self.picture_pane_closed(pane);
         self.inbox.remove(pane);
@@ -837,6 +854,37 @@ impl App {
             p.opened_by = Some(client);
         }
         Ok(json!({ "pane": pane.map(|p| p.0) }))
+    }
+
+    /// `spawn` with `place: "overlay"` and `wait: true`: the answer comes when the program ends, with its exit code.
+    fn api_overlay_wait(&mut self, request: ApiRequest) {
+        let opened = self.api_overlay(request.client, &request.params);
+        let pane = match opened {
+            Ok(answer) => match answer.get("pane").and_then(Value::as_u64) {
+                Some(pane) => PaneId(pane),
+                None => {
+                    let _ = request.reply.send(Ok(answer));
+                    return;
+                }
+            },
+            Err(err) => {
+                let _ = request.reply.send(Err(err));
+                return;
+            }
+        };
+        let ms = request
+            .params
+            .get("timeout_ms")
+            .and_then(Value::as_f64)
+            .unwrap_or(86_400_000.0)
+            .clamp(0.0, 86_400_000.0);
+        self.waits.push(Wait {
+            client: request.client,
+            pane,
+            kind: WaitKind::Exit,
+            deadline: Instant::now() + Duration::from_millis(ms as u64),
+            reply: request.reply,
+        });
     }
 
     /// `spawn` with `place: "overlay"`: `command` (or the program of `profile`) in a box over a pane.

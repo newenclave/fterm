@@ -36,9 +36,10 @@ Panes and tabs:
   tab-color [--pane N] \"#rrggbb\"|none    a color line at the top of the tab of a pane
                                          (quote the color: # starts a comment in shells)
   panel [events|agents]                  show a panel of the dock (no name = close the dock)
-  overlay [--size N] [--pane N] [--] COMMAND
+  overlay [--size N] [--pane N] [--wait] [--] COMMAND
                                          run COMMAND in a box over a pane (N percent of it); the box goes
-                                         when the program ends (`--` before a command with its own flags)
+                                         when the program ends (`--` before a command with its own flags);
+                                         --wait: wait for it and exit with its exit code
   scratch [--show|--hide]                show or hide the drop-down scratch shell (no flag = the other one)
   companion [--pane N] [--] [COMMAND]    run COMMAND (or a shell) as a companion of a pane: a strip of the pane
   companion --toggle|--next [--pane N]   hide or show the companion of a pane, or show its next one
@@ -221,6 +222,14 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             let answer = client
                 .call(method, params.clone())
                 .map_err(|err| err.to_string())?;
+            // `overlay --wait`: the exit code of the program is the exit code of ftermctl.
+            if method == "spawn" && params.get("wait").and_then(Value::as_bool) == Some(true) {
+                if cli.json {
+                    print_answer(cli.json, method, &answer);
+                }
+                let code = answer.get("exit").and_then(Value::as_i64).unwrap_or(1);
+                return Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)));
+            }
             print_answer(cli.json, method, &answer);
             if method == "ai_ask"
                 && let Some(error) = answer.get("error").and_then(Value::as_str)

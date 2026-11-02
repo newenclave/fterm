@@ -62,6 +62,19 @@ fn output_of_a_command_is_in_the_grid() {
 }
 
 #[test]
+fn the_exit_code_of_the_program_is_kept() {
+    let options = if cfg!(windows) {
+        SessionOptions::command("cmd.exe", ["/c", "exit 3"])
+    } else {
+        SessionOptions::command("sh", ["-c", "exit 3"])
+    };
+    let (session, rx) = spawn(options);
+    assert_eq!(session.exit_code(), None, "it runs");
+    wait_for_exit(&session, &rx);
+    assert_eq!(session.exit_code(), Some(3));
+}
+
+#[test]
 fn the_tap_gets_the_same_bytes_as_the_grid() {
     let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let into = got.clone();

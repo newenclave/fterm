@@ -68,6 +68,7 @@ pub fn tools() -> Value {
                 "place": { "type": "string", "enum": ["tab", "right", "down", "overlay", "companion"], "description": "Where. The default is a new tab." },
                 "command": { "type": "string", "description": "With place overlay or companion: the command to run (the shell runs it)." },
                 "size": { "type": "integer", "description": "With place overlay: its size in percent of the pane (20-100)." },
+                "wait": { "type": "boolean", "description": "With place overlay: answer when the program ends, with its exit code (for example after the user closes lazygit)." },
                 "profile": { "type": "string", "description": "An fterm profile name (for example PowerShell). No profile = the default one." },
                 "cwd": { "type": "string", "description": "The folder to start in." },
                 "next_to": { "type": "integer", "description": "Split next to this pane." }
@@ -395,9 +396,13 @@ impl<B: Backend> Server<B> {
                         ("next_to", "pane"),
                         ("command", "command"),
                         ("size", "size"),
+                        ("wait", "wait"),
                     ]),
                 )
-                .map(|v| format!("Opened pane {}.", v["pane"])),
+                .map(|v| match v.get("exit") {
+                    Some(exit) => format!("The overlay (pane {}) ended with exit code {exit}.", v["pane"]),
+                    None => format!("Opened pane {}.", v["pane"]),
+                }),
             "run_command" => need("command").and_then(|command| {
                 let command = command
                     .as_str()
@@ -788,6 +793,7 @@ mod tests {
             }
             Ok(match method {
                 "list" => json!({ "tabs": [], "active_pane": 1 }),
+                "spawn" if params["wait"] == json!(true) => json!({ "pane": 7, "exit": 0 }),
                 "spawn" => json!({ "pane": 7 }),
                 "get_text" if params["styled"] == json!(true) => json!({
                     "pane": 1, "text": "ok error", "fg": "#cdd6f4", "bg": "#1e1e2e",
@@ -1275,6 +1281,25 @@ mod tests {
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("closed"), "{text}");
         assert_ne!(result["isError"], json!(true));
+    }
+
+    #[test]
+    fn an_overlay_that_waits() {
+        let mut s = server();
+        let text = tool(
+            &mut s,
+            "open_pane",
+            json!({ "place": "overlay", "command": "lazygit", "wait": true }),
+        );
+        assert_eq!(
+            s.backend.calls[0],
+            (
+                "spawn".into(),
+                json!({ "place": "overlay", "command": "lazygit", "wait": true })
+            )
+        );
+        let text = text.to_string();
+        assert!(text.contains("ended with exit code 0"), "{text}");
     }
 
     #[test]

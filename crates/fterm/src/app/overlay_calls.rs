@@ -11,11 +11,18 @@ pub(super) fn shell_run_args(shell: &str, command: &str) -> Vec<String> {
     let name = file.to_ascii_lowercase();
     let name = name.strip_suffix(".exe").unwrap_or(&name);
     match name {
+        // PowerShell ends with 1 after any failed program: give the real exit code (`overlay --wait` shows it). New
+        // lines, not `;`, so a comment at the end of the command does not hide the rest.
         "powershell" | "pwsh" => vec![
             "-NoLogo".into(),
             "-NoProfile".into(),
             "-Command".into(),
-            command.into(),
+            format!(
+                "{command}
+$ok = $?
+if ($LASTEXITCODE) {{ exit $LASTEXITCODE }}
+if (-not $ok) {{ exit 1 }}"
+            ),
         ],
         "cmd" => vec!["/c".into(), command.into()],
         // bash, zsh, sh, fish, nu, and others take `-c`.
@@ -338,12 +345,23 @@ mod tests {
     #[test]
     fn each_shell_runs_a_command_its_way() {
         assert_eq!(
-            shell_run_args("powershell.exe", "yazi C:/x"),
-            ["-NoLogo", "-NoProfile", "-Command", "yazi C:/x"]
+            shell_run_args("powershell.exe", "yazi C:/x")[..3],
+            ["-NoLogo", "-NoProfile", "-Command"]
         );
+        // PowerShell gives 1 for any failed program: the real exit code goes out after the command (on new lines,
+        // so a comment at the end of the command does not hide it).
+        let script = &shell_run_args("pwsh", "lazygit # the UI")[3];
+        assert!(
+            script.starts_with(
+                "lazygit # the UI
+"
+            ),
+            "{script:?}"
+        );
+        assert!(script.contains("exit $LASTEXITCODE"), "{script:?}");
         assert_eq!(
-            shell_run_args(r"C:\Program Files\PowerShell\7\pwsh.exe", "htop")[2..],
-            ["-Command", "htop"]
+            shell_run_args(r"C:\Program Files\PowerShell\7\pwsh.exe", "htop")[2],
+            "-Command"
         );
         assert_eq!(shell_run_args("cmd.exe", "dir /w"), ["/c", "dir /w"]);
         assert_eq!(shell_run_args("CMD", "x"), ["/c", "x"]);
