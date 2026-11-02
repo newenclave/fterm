@@ -804,6 +804,8 @@ impl App {
             .collect();
         let mut out = json!({
             "pid": std::process::id(),
+            // The config file, for an agent that sets fterm up for the user.
+            "config": self.config_path.display().to_string(),
             "active_pane": running.mux.active_pane().map(|p| p.0),
             "workspace": running.mux.workspace(),
             "tabs": tabs,

@@ -113,6 +113,35 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
   `fterm.lua` (or a profile). The user tries the strength live with Ctrl+Shift+] and Ctrl+Shift+[.
 - `close_pane` closes a pane (see the rules).
 
+## Set up fterm for the user
+The user can ask you to change fterm: a key, a palette command, a profile, a tile on the dashboard. fterm reads
+its config from one Lua file; `list_panes` gives its path as `config`. fterm reads the file again when it is saved,
+and a broken file keeps the old config (the user sees the error).
+- **Ask first, and keep the file of the user:** add or change the part that you need, never write the whole file
+  again. Read it before you change it.
+- The file returns one table. The parts that are asked for most:
+  ```lua
+  return {
+    keys = { { key = "ctrl+alt+g", action = function(fterm) fterm.send_text("git status\r") end } },
+    commands = { { name = "Claude here", action = { spawn = "Claude", split = "right" } } },
+    dashboard = { tiles = {
+      { panes = "agents" },
+      -- The id, a tab, the title: {1} is the id.
+      { title = "Failed runs", every = 300, show = 2,
+        command = { "gh", "run", "list", "--status", "failure", "--limit", "5",
+                    "--json", "databaseId,displayTitle", "--jq", [[.[] | "\(.databaseId)\t\(.displayTitle)"]] },
+        actions = { { key = "r", label = "rerun", run = { "gh", "run", "rerun", "{1}" } } } },
+    } },
+  }
+  ```
+- **Profiles:** the first one is the default (the shell of every new tab). Add a new profile at the end of
+  `profiles`, never in front, or every new tab starts it.
+- In `actions`, `run` is a list of arguments (no shell), so a part of a line (`{1}`, `{2}`, between tabs) is one
+  argument. Never make it a text for a shell.
+- Lua in the config cannot run programs or open files itself; it asks fterm: `fterm.spawn`, `fterm.send_text`,
+  `fterm.run`, `fterm.open`, `fterm.notify`, `fterm.copy`, `fterm.action`.
+- All fields: `docs/CONFIG.md` in the fterm repository.
+
 ## Rules
 - **Ask the user before you close a pane** where something runs (`close_pane` with `force`), or a pane
   that you did not open.
