@@ -36,6 +36,7 @@ impl App {
                     cwd: p.shell.cwd.clone(),
                     program: display_name(p.session.program()).to_owned(),
                     ran: p.shell.running_command().map(str::to_owned),
+                    agent_session: p.agent_session.clone(),
                     scene: p.scene.is_some(),
                     mux: p.mux.as_ref().filter(|m| m.is_local()).map(|m| m.id),
                     remote: p
@@ -458,12 +459,13 @@ impl App {
                 self.spawn_intro = intro_bytes(&pane.text, &ago);
                 match self.spawn_pane(size, pane.profile.as_deref()) {
                     Ok(id) => {
-                        let rerun = pane
-                            .ran
-                            .as_deref()
-                            .and_then(|ran| rerun_command(ran, programs, agents));
+                        let rerun = pane.ran.as_deref().and_then(|ran| {
+                            rerun_command(ran, programs, agents, pane.agent_session.as_deref())
+                        });
                         if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&id)) {
                             p.intro_lines = pane.text.len();
+                            // Kept until the agent says its new id, so a save before that keeps it.
+                            p.agent_session = pane.agent_session.clone();
                             if rerun.is_some() {
                                 p.rerun = rerun;
                                 reruns += 1;

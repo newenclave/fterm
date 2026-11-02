@@ -87,6 +87,10 @@ pub struct SavedPane {
     /// A pane on a remote (its name): it comes back when the window connects to the remote again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
+    /// The conversation of the agent in the pane (Claude Code's `session_id`, from its SessionStart hook): it
+    /// comes back with `claude --resume <id>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -392,15 +396,34 @@ pub fn entry_text(entry: &Entry, now: u64) -> (String, String) {
     (text, hint)
 }
 
+/// An id of a conversation that may be typed into a shell: letters, digits, `-`, and `_`, at most 128.
+pub fn valid_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// What to put into a restored pane where `ran` ran: the command and true when Enter runs it.
-/// Claude Code comes back as `claude --continue`, so its conversation comes back too.
-pub fn rerun_command(ran: &str, programs: Rerun, agents: Rerun) -> Option<(String, bool)> {
+/// Claude Code comes back with the conversation of its pane (`claude --resume <id>`, when its hook told fterm the
+/// id), else with the newest one of the folder (`claude --continue`).
+pub fn rerun_command(
+    ran: &str,
+    programs: Rerun,
+    agents: Rerun,
+    session: Option<&str>,
+) -> Option<(String, bool)> {
     let ran = ran.trim();
     let first = ran.split_whitespace().next()?;
     let name = first.rsplit(['\\', '/']).next().unwrap_or(first);
     let name = name.split('.').next().unwrap_or(name);
     let (command, policy) = if name.eq_ignore_ascii_case("claude") {
-        ("claude --continue".to_owned(), agents)
+        let command = match session.filter(|id| valid_session_id(id)) {
+            Some(id) => format!("claude --resume {id}"),
+            None => "claude --continue".to_owned(),
+        };
+        (command, agents)
     } else {
         (ran.to_owned(), programs)
     };
@@ -508,15 +531,15 @@ mod tests {
     fn a_program_comes_back_into_the_prompt() {
         let p = Rerun::Prompt;
         assert_eq!(
-            rerun_command("npm run dev", p, p),
+            rerun_command("npm run dev", p, p, None),
             Some(("npm run dev".to_owned(), false))
         );
         assert_eq!(
-            rerun_command("  cargo watch  ", Rerun::Run, p),
+            rerun_command("  cargo watch  ", Rerun::Run, p, None),
             Some(("cargo watch".to_owned(), true))
         );
-        assert_eq!(rerun_command("npm run dev", Rerun::Never, p), None);
-        assert_eq!(rerun_command("   ", p, p), None);
+        assert_eq!(rerun_command("npm run dev", Rerun::Never, p, None), None);
+        assert_eq!(rerun_command("   ", p, p, None), None);
     }
 
     #[test]
@@ -529,18 +552,61 @@ mod tests {
             "Claude.cmd -r",
         ] {
             assert_eq!(
-                rerun_command(ran, Rerun::Never, p),
+                rerun_command(ran, Rerun::Never, p, None),
                 Some(("claude --continue".to_owned(), false)),
                 "{ran}"
             );
         }
         assert_eq!(
-            rerun_command("claude", p, Rerun::Run),
+            rerun_command("claude", p, Rerun::Run, None),
             Some(("claude --continue".to_owned(), true))
         );
-        assert_eq!(rerun_command("claude", p, Rerun::Never), None);
+        assert_eq!(rerun_command("claude", p, Rerun::Never, None), None);
         // Not an agent: only the name starts the same.
-        assert_eq!(rerun_command("claudette", Rerun::Never, p), None);
+        assert_eq!(rerun_command("claudette", Rerun::Never, p, None), None);
+    }
+
+    #[test]
+    fn claude_comes_back_to_the_conversation_of_its_pane() {
+        let p = Rerun::Prompt;
+        let id = "3f2a9c1e-77b4-4d1a-9b0e-1c2d3e4f5a6b";
+        assert_eq!(
+            rerun_command("claude", Rerun::Never, p, Some(id)),
+            Some((format!("claude --resume {id}"), false))
+        );
+        // An id that could do more than name a conversation is not typed into the shell.
+        for bad in ["x; rm -rf ~", "a b", "", "$(whoami)", &"a".repeat(200)] {
+            assert_eq!(
+                rerun_command("claude", Rerun::Never, p, Some(bad)),
+                Some(("claude --continue".to_owned(), false)),
+                "{bad:?}"
+            );
+        }
+        // Only for Claude.
+        assert_eq!(
+            rerun_command("npm run dev", p, p, Some(id)),
+            Some(("npm run dev".to_owned(), false))
+        );
+        assert!(valid_session_id(id) && valid_session_id("abc_123"));
+        assert!(!valid_session_id("a/b") && !valid_session_id("a\\b"));
+    }
+
+    #[test]
+    fn an_old_session_file_has_no_conversation_ids() {
+        let pane: SavedPane =
+            serde_json::from_str(r#"{ "program": "pwsh", "ran": "claude" }"#).unwrap();
+        assert_eq!(pane.agent_session, None);
+        let with = SavedPane {
+            agent_session: Some("abc".into()),
+            ..pane.clone()
+        };
+        let text = serde_json::to_string(&with).unwrap();
+        assert!(text.contains(r#""agent_session":"abc""#), "{text}");
+        assert!(
+            !serde_json::to_string(&pane)
+                .unwrap()
+                .contains("agent_session")
+        );
     }
 
     #[test]

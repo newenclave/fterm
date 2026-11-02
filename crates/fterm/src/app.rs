@@ -134,6 +134,8 @@ struct Pane {
     agent: Option<AgentState>,
     /// The agent of this pane sent its state with hooks: then fterm does not guess it.
     agent_hooks: bool,
+    /// The conversation of the agent (Claude Code's `session_id`), from its SessionStart hook.
+    agent_session: Option<String>,
     /// The last command that ended (from shell integration).
     last_command: Option<LastCommand>,
     /// API clients may read and type into it (with the user's yes). `toggle_remote_control` changes it.
@@ -2007,6 +2009,7 @@ impl App {
                 shell: ShellState::default(),
                 agent: None,
                 agent_hooks: false,
+                agent_session: None,
                 pictures: Default::default(),
                 picture_pane: None,
                 last_command: None,
@@ -2056,6 +2059,7 @@ impl App {
                 shell: ShellState::default(),
                 agent: None,
                 agent_hooks: false,
+                agent_session: None,
                 pictures: Default::default(),
                 picture_pane: Some(Box::new(markup_calls::PicturePane::new(picture, origin))),
                 last_command: None,
@@ -2393,6 +2397,7 @@ impl App {
                 shell: ShellState::starting_in(start_cwd),
                 agent: None,
                 agent_hooks: false,
+                agent_session: None,
                 pictures: Default::default(),
                 picture_pane: None,
                 last_command: None,

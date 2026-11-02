@@ -195,6 +195,7 @@ impl App {
                 shell: ShellState::default(),
                 agent: None,
                 agent_hooks: false,
+                agent_session: None,
                 pictures: Default::default(),
                 picture_pane: None,
                 last_command: None,
