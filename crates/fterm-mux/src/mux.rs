@@ -409,7 +409,8 @@ impl Mux {
         self.window_overlay.map(|w| (w.pane, w.shown))
     }
 
-    /// Opens `pane` as the overlay over the active pane. `false` when the tab has one already (or there is no tab).
+    /// Opens `pane` as the overlay over the active pane (over its pane when it is a companion). `false` when the tab
+    /// has one already (or there is no tab).
     pub fn open_overlay(&mut self, pane: PaneId, size: u8) -> bool {
         let Some(tab) = self.active_tab_mut() else {
             return false;
@@ -417,9 +418,11 @@ impl Mux {
         if tab.overlay.is_some() {
             return false;
         }
+        // Over a pane of the layout: from a companion, over its pane (a companion ends with its own program).
+        let over = tab.layout_pane(tab.active_pane);
         tab.overlay = Some(Overlay {
             pane,
-            over: tab.active_pane,
+            over,
             size: size.clamp(1, 100),
             shown: true,
         });
@@ -1907,6 +1910,33 @@ mod tests {
         );
         mux.toggle_companion();
         assert_eq!(mux.companion_dividers(AREA), [], "hidden: no line");
+    }
+
+    #[test]
+    fn an_overlay_from_a_companion_goes_over_its_pane() {
+        let (mut mux, panes) = mux_with(1);
+        let a = panes[0];
+        let c = mux.new_pane_id();
+        mux.add_companion(a, c);
+        assert_eq!(mux.active_pane(), Some(c), "the companion has the keys");
+        let o = mux.new_pane_id();
+        assert!(mux.open_overlay(o, 80));
+        assert_eq!(
+            mux.overlay().map(|o| o.over),
+            Some(a),
+            "over the pane, not over its companion"
+        );
+        let rects = mux.floating_rects(AREA, (0.0, 0.0));
+        let owner_rect = mux
+            .pane_rects(AREA)
+            .into_iter()
+            .find(|(p, _)| *p == a)
+            .unwrap()
+            .1;
+        assert_eq!(rects, [(o, overlay_rect(owner_rect, 80, (0.0, 0.0)))]);
+        // The companion ends: the overlay of its pane stays.
+        assert_eq!(mux.close_pane(c), Closed::Floating);
+        assert_eq!(mux.overlay().map(|o| o.pane), Some(o));
     }
 
     #[test]
