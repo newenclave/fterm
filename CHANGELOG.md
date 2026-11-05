@@ -7,6 +7,14 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 ## [Unreleased]
 
 ### Added
+- **Copy mode can search, jump, and be changed in the config.** Ctrl+Shift+X opens it (as in WezTerm;
+  Ctrl+Shift+Space still works), and Ctrl+Shift+F opens it with the search. `/` and `?` search the history while
+  you type, the matches are lit, and `n` / `N` go to the next and the previous one. `f F t T ; ,` go to a char on
+  the line, `o` goes to the other end of the selection, `i w` / `a w` select a word, `Y` copies the line, and the
+  mouse moves the cursor and selects. A bar on the last row shows the mode, the line, and the search (`3/9`). All
+  keys are in `copy_mode.keys` in the config, and a key can run a Lua function that gets the selection, the line,
+  and the word, and drives copy mode with `fterm.copy_mode(...)`. See [docs/KEYS.md](docs/KEYS.md#copy-mode-keyboard)
+  and [docs/CONFIG.md](docs/CONFIG.md#copy-mode).
 - **Resize the scratch shell, overlays, and companions** with Alt+Shift+arrows, like split panes. In the scratch,
   Down makes it higher and Up lower. In an overlay, Right or Down make it bigger, Left or Up smaller. In a
   companion, the arrows move the line between it and its pane. See
@@ -97,6 +105,7 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   links, and asks first when a link is a file or its text does not show its URL. See docs/KEYS.md.
 
 ### Changed
+- **"Explain the last error" is on Ctrl+Shift+Y now** (Ctrl+Shift+X opens copy mode).
 - **Many tabs are faster.** When the window, the dock, or a split changes its size, only the panes on the screen
   get the new size at once. The panes of hidden tabs get it a moment later, a few at a time. Before, each step of
   a drag was slow when many tabs had a long history.

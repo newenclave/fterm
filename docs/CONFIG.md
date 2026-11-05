@@ -165,7 +165,7 @@ also work on other layouts (for example, Russian).
 | `split_right`, `split_down`, `zoom` | Split panes. |
 | `focus_left`, `focus_right`, `focus_up`, `focus_down` | Go to a pane. |
 | `resize_left`, `resize_right`, `resize_up`, `resize_down` | Move the line between panes. |
-| `copy`, `paste`, `copy_mode` | Copy and paste. |
+| `copy`, `paste`, `copy_mode` (Ctrl+Shift+X), `search` (Ctrl+Shift+F) | Copy and paste; copy mode, and copy mode with the search (see [Copy mode](#copy-mode)). |
 | `scroll_page_up`, `scroll_page_down`, `scroll_top`, `scroll_bottom` | Scroll. |
 | `command_palette` (Ctrl+Shift+P), `reload_config` (Ctrl+Shift+F5), `open_config` (Ctrl+Shift+,) | fterm itself. |
 | `copy_claude_hooks` | Copy the Claude Code hooks for tab dots (see [CLAUDE.md](CLAUDE.md)). |
@@ -193,6 +193,61 @@ also work on other layouts (for example, Russian).
 | `open_link_hints` (Ctrl+Shift+U) | Labels on the links of the screen: a label opens its link, Shift + label copies it. |
 | `plan_review_mode` | The next `plan_review` mode (ask → always → never), until the config changes. |
 
+### Copy mode
+The keys of copy mode (Ctrl+Shift+X, see [KEYS.md](KEYS.md#copy-mode-keyboard)) and two options:
+
+```lua
+copy_mode = {
+  exit_after_copy = true,   -- false: y and Enter copy, and copy mode stays
+  status_bar = true,        -- the bar on the last row of the pane
+  keys = {
+    { key = "Y", action = "copy_and_stay" },               -- change a key
+    { key = "q", action = "none" },                        -- turn a key off
+    { key = "g g", action = "top" },                       -- two keys, like in vim
+    { key = "ctrl+o", action = function(fterm, cm)         -- your own action
+        if cm.word then fterm.open("https://www.google.com/search?q=" .. cm.word) end
+      end },
+    { key = "z", action = { jump = "f", char = "(" } },    -- go to the next "("
+  },
+},
+```
+
+**Key names:** a char as you type it, with its case: `G` is Shift+G, `$` is the dollar key. Also `ctrl+u`,
+`alt+w`, and the names `up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, `enter`, `esc`, `tab`,
+`space`, `backspace`, `delete`, `f1` … `f24` (with `shift+` too). Two keys with a space: `"i w"`. A key can not
+be both a key and the first key of two keys: the newer one wins (`"g g"` turns `g` off).
+
+**Actions:** `up`, `down`, `left`, `right`, `word_right`, `word_left`, `word_end`, `big_word_right`,
+`big_word_left`, `big_word_end`, `line_start`, `line_end`, `first_char`, `screen_top`, `screen_middle`,
+`screen_bottom`, `paragraph_up`, `paragraph_down`, `bracket`, `page_up`, `page_down`, `half_page_up`,
+`half_page_down`, `top`, `bottom`, `select`, `select_lines`, `select_block`, `select_word`, `select_word_around`,
+`select_big_word`, `select_big_word_around`, `swap_ends`, `copy`, `copy_and_stay`, `copy_and_exit`, `copy_line`,
+`exit`, `search_forward`, `search_backward`, `next_match`, `prev_match`, `jump_forward`, `jump_backward`,
+`till_forward`, `till_backward`, `repeat_jump`, `repeat_jump_back`; a jump `{ jump = "f" | "F" | "t" | "T",
+char = "x" }`; a Lua function; or `"none"`.
+
+**A Lua function** gets `fterm` and `cm`:
+
+| Field of `cm` | What it is |
+|---|---|
+| `selection` | The selected text, or `nil`. |
+| `line` | The text of the cursor line. |
+| `word` | The word under the cursor, or `nil`. |
+| `row`, `column` | Where the cursor is: the line from 1 at the top of the history, the column from 1. |
+| `mode` | `normal`, `visual`, `visual_line`, or `visual_block`. |
+| `search` | The text of the last search, or `nil`. |
+
+`fterm.copy_mode("action")` runs an action of copy mode (also `fterm.copy_mode({ jump = "f", char = "x" })`), so
+one key can do many steps:
+
+```lua
+-- Copy the word under the cursor and leave copy mode.
+{ key = "c", action = function(fterm, cm)
+    fterm.copy_mode("select_word")
+    fterm.copy_mode("copy_and_exit")
+  end },
+```
+
 ### Lua functions
 A function gets an object `fterm` with these functions:
 
@@ -204,6 +259,7 @@ A function gets an object `fterm` with these functions:
 | `fterm.copy("text")` | Put text into the clipboard. |
 | `fterm.set_tab_color("#f38ba8", pane)` | Give the tab of a pane a color (no `pane` = the active pane; `"none"` = no color). |
 | `fterm.action("zoom")` | Run an action from the list above. |
+| `fterm.copy_mode("select_word")` | Run an action of copy mode in the active pane (see [Copy mode](#copy-mode)); copy mode starts first. |
 | `fterm.run({ "gh", "pr", "list" })` | Run a program with its arguments (no shell), in the background; the result is a toast. `fterm.run({ { "a" }, { "b", "c" } })` runs them one after another. `{ show = "overlay" }` as the second argument: in an overlay, so you see the output. |
 | `fterm.open("https://...")` | Open a link (other kinds than http and https ask first). |
 

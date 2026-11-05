@@ -96,6 +96,7 @@ does not give it (`bg` = the background, `fg` = the text color).
 | `text_ghost` | the grey hint from the history while you type | `fg` with 55% of `bg` |
 | `scrollbar` | the scroll indicator of a pane | `fg` with 45% of `bg` |
 | `copy_cursor` | the cursor in copy mode | yellow |
+| `search_match`, `search_current` | the matches of the copy mode search, and the current one | yellow with `bg`, yellow with red |
 | `code_bg`, `input_bg`, `chip_bg` | the AI chat: code, the input box, the context chips | `bg` and `fg` mixes |
 | `info`, `success`, `warning`, `error`, `attention` | toasts, the Events panel, the dot in the tab bar | blue, green, yellow, red, `accent` |
 | `agent_working`, `agent_waiting`, `agent_done`, `agent_error` | the agent dots on tabs and in the Agents panel | blue, yellow, green, red |

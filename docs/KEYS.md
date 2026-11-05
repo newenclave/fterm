@@ -298,8 +298,9 @@ See [AI.md](AI.md).
 When the window gets or loses focus, fterm tells the app (if the app asks for it).
 
 ## Copy mode (keyboard)
-Press **Ctrl + Shift + Space** to start or stop copy mode. A yellow cursor shows.
-It can go up into the history, and the view follows it.
+Press **Ctrl + Shift + X** (or Ctrl + Shift + Space) to start or stop copy mode. A yellow cursor shows.
+It can go up into the history, and the view follows it. **Ctrl + Shift + F** opens copy mode with the search.
+A bar on the last row of the pane shows the mode, the line (`120/3400`), and the search (`/error 3/9`).
 
 | Key | What it does |
 |---|---|
@@ -311,8 +312,21 @@ It can go up into the history, and the view follows it.
 | Ctrl+U / Ctrl+D | Half a page up / down. |
 | `g` / `G` | First line of the history / last line. |
 | `{` `}` `%` | Paragraph up / down, matching bracket. |
+| `/` / `?` | Search down / up. Type the text: the cursor goes to the first match while you type. Enter keeps it, Esc goes back. |
+| `n` / `N` | The next / the previous match (after the last one comes the first). |
+| `f` `F` + a char | Go to the next / the previous char on the line. `t` `T`: stop just before it. |
+| `;` / `,` | The last `f` `F` `t` `T` again / the other way. |
 | `v` / `V` / Ctrl+V | Select chars / lines / a block. Press again to stop. |
+| `i w` / `a w` | Select the word under the cursor / with the spaces after it. `i W` `a W`: a word up to the spaces (`cargo-test`). |
+| `o` | Go to the other end of the selection. |
 | `y`, Enter | Copy and leave copy mode. |
+| `Y` | Copy the line (or all lines of the selection). |
+| Mouse | A click moves the cursor there; drag to select. |
 | Esc, `q` | Leave copy mode. |
 
-Keys work on any keyboard layout (for example, Russian): fterm uses the key position.
+The search finds a regular expression (`err(or)?`). Text with a capital letter finds that exact case; text with
+none finds every case. Text that is not a good expression (`f(`) is found as it is.
+
+Letters work on any keyboard layout (for example, Russian): fterm uses the key position.
+You can change all these keys and add your own (also Lua functions): see
+[CONFIG.md](CONFIG.md#copy-mode).

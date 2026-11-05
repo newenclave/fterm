@@ -160,6 +160,10 @@ processes and real escape codes.
   moved by the lines that went into the history. `Session::with_term` calls it before every use.
 - Change the selection only through `Session::with_term_mut` and `StickySelection::set`.
 - Copy mode (`copy_mode.rs`) uses the vi mode of alacritty. After each move the view scrolls to the cursor.
+  `CopyState` (in the `Session`, with the selection) keeps the start of the selection, the search, and the last jump;
+  the selection is made again from its start to the cursor after each step. Its keys are a table in
+  `fterm-config/src/copy_keys.rs` (chars with their case, two-key bindings); `app/copy_calls.rs` reads the keys, the
+  search prompt, and Lua actions.
 - Limit: when the history is full (10 000 lines) and output is very fast, a restored selection can move by a few lines.
 
 ## Known limits
