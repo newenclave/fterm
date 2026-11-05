@@ -6,6 +6,8 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-05
+
 ### Added
 - **Copy mode can search, jump, and be changed in the config.** Ctrl+Shift+X opens it (as in WezTerm;
   Ctrl+Shift+Space still works), and Ctrl+Shift+F opens it with the search. `/` and `?` search the history while
@@ -233,6 +235,7 @@ The first version. Portable archives for Windows, Linux, and macOS.
 - The text of the prompt lost its first letter when the task ended with a space.
 - Less memory at start (from about 337 MB down to about 161 MB on DX12).
 
-[Unreleased]: https://github.com/newenclave/fterm/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/newenclave/fterm/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/newenclave/fterm/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/newenclave/fterm/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/newenclave/fterm/releases/tag/v0.1.0
