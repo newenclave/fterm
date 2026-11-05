@@ -301,16 +301,16 @@ pub(super) struct StatusParts<'a> {
     pub total: usize,
     /// The search: its pattern, the number of the current match, and how many there are.
     pub search: Option<(&'a str, Option<usize>, usize)>,
-    /// The prompt while the user types: `/` or `?` and the text with its cursor.
-    pub prompt: Option<(char, String)>,
+    /// The prompt while the user types: `/` or `?`, the text with its cursor, and if any text is typed.
+    pub prompt: Option<(char, String, bool)>,
     pub pending: &'a str,
 }
 
 /// The text of the copy mode status bar: ` COPY · VISUAL · 120/3400 · /error 3/9 `.
 pub(super) fn copy_status(p: &StatusParts) -> String {
-    if let Some((mark, text)) = &p.prompt {
+    if let Some((mark, text, typed)) = &p.prompt {
         let count = match p.search {
-            Some((_, current, total)) if !text.is_empty() => {
+            Some((_, current, total)) if *typed => {
                 format!("  {}", match_text(current, total))
             }
             _ => String::new(),
@@ -366,7 +366,7 @@ impl App {
             .copy_input
             .prompt
             .as_ref()
-            .map(|input| input.line_with_cursor('▏'));
+            .map(|input| (input.line_with_cursor('▏'), !input.text.is_empty()));
         pane.session.with_copy(|term, _, state| {
             let (list, current) = state.visible_matches(term);
             let matches = list.iter().map(|m| (*m.start(), *m.end())).collect();
@@ -381,9 +381,9 @@ impl App {
                         .search_pattern()
                         .zip(count)
                         .map(|(p, (c, t))| (p, c, t)),
-                    prompt: prompt
-                        .clone()
-                        .map(|t| (if state.prompt_forward() { '/' } else { '?' }, t)),
+                    prompt: prompt.clone().map(|(t, typed)| {
+                        (if state.prompt_forward() { '/' } else { '?' }, t, typed)
+                    }),
                     pending: &state.pending,
                 });
                 let columns = term.columns();
@@ -439,15 +439,16 @@ mod tests {
     #[test]
     fn the_status_bar_while_typing_a_search() {
         let typing = StatusParts {
-            prompt: Some(('?', "err▏".into())),
+            prompt: Some(('?', "err▏".into(), true)),
             search: Some(("err", Some(2), 5)),
             ..parts()
         };
         assert_eq!(copy_status(&typing), " ?err▏  2/5 ");
         let empty = StatusParts {
-            prompt: Some(('/', "▏".into())),
+            prompt: Some(('/', "▏".into(), false)),
+            search: Some(("alpha", Some(1), 6)),
             ..parts()
         };
-        assert_eq!(copy_status(&empty), " /▏ ");
+        assert_eq!(copy_status(&empty), " /▏ ", "no count of the search before");
     }
 }
