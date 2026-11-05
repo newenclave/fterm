@@ -179,6 +179,8 @@ pub struct Session {
     size: Mutex<GridSize>,
     /// The user's selection. It is kept here, so the terminal cannot remove it.
     selection: Mutex<StickySelection>,
+    /// Copy mode: the start of the selection, the search, the last jump.
+    copy: Mutex<crate::copy_mode::CopyState>,
     /// The shell process.
     pid: Option<u32>,
     /// The program name without folder and `.exe` (for the default tab title).
@@ -296,6 +298,7 @@ impl Session {
             notifier: Mutex::new(Some(Notifier(sender))),
             size: Mutex::new(size),
             selection: Mutex::new(StickySelection::default()),
+            copy: Mutex::default(),
             pid,
             program: program_name,
             recorder,
@@ -344,6 +347,7 @@ impl Session {
             remote: Some(link),
             size: Mutex::new(size),
             selection: Mutex::new(StickySelection::default()),
+            copy: Mutex::default(),
             pid: None,
             program: program_name(&program),
             recorder: Default::default(),
@@ -409,6 +413,7 @@ impl Session {
             remote: None,
             size: Mutex::new(size),
             selection: Mutex::new(StickySelection::default()),
+            copy: Mutex::default(),
             pid: None,
             program: "scene".to_owned(),
             recorder: Default::default(),
@@ -450,6 +455,18 @@ impl Session {
         let mut selection = self.selection.lock().unwrap();
         selection.sync(&mut term);
         f(&mut term, &mut selection)
+    }
+
+    /// Like `with_term_mut`, with the copy mode state of the pane too.
+    pub fn with_copy<R>(
+        &self,
+        f: impl FnOnce(&mut Term<Listener>, &mut StickySelection, &mut crate::copy_mode::CopyState) -> R,
+    ) -> R {
+        let mut term = self.term.lock();
+        let mut selection = self.selection.lock().unwrap();
+        let mut copy = self.copy.lock().unwrap();
+        selection.sync(&mut term);
+        f(&mut term, &mut selection, &mut copy)
     }
 
     /// The exit code of the program: `None` while it runs (and for a scene or a mux pane).

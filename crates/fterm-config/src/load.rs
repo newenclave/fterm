@@ -7,6 +7,7 @@ use std::rc::Rc;
 use mlua::{Function, Lua, Table, Value};
 
 use crate::colors::{ColorConfig, Rgb, parse_color};
+use crate::copy_keys::{CopyBinding, CopyCommand, CopyKeymap, JumpKind, parse_keys};
 use crate::keys::{Action, BuiltinAction, KeyChord, Keymap, SpawnWhere};
 use crate::profiles::{Profile, expand_home, home_dir};
 
@@ -529,6 +530,45 @@ pub struct AgentRowOut {
     pub right: Option<String>,
 }
 
+/// Copy mode (`copy_mode` in the config).
+#[derive(Clone, Debug)]
+pub struct CopyModeConfig {
+    pub keys: CopyKeymap,
+    /// `copy` (y, Enter) leaves copy mode; `false` = it stays.
+    pub exit_after_copy: bool,
+    /// The bar on the last row of the pane: the mode, the line, the search.
+    pub status_bar: bool,
+}
+
+impl Default for CopyModeConfig {
+    fn default() -> Self {
+        Self {
+            keys: CopyKeymap::with_defaults(),
+            exit_after_copy: true,
+            status_bar: true,
+        }
+    }
+}
+
+/// What a Lua action of copy mode gets as `cm`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CopyModeIn {
+    /// The selected text, if there is a selection.
+    pub selection: Option<String>,
+    /// The text of the cursor line.
+    pub line: String,
+    /// The word at the cursor.
+    pub word: Option<String>,
+    /// The line of the cursor, from 1 at the top of the history.
+    pub row: i64,
+    /// The column of the cursor, from 1.
+    pub column: usize,
+    /// `normal`, `visual`, `visual_line`, or `visual_block`.
+    pub mode: String,
+    /// The pattern of the last search.
+    pub search: Option<String>,
+}
+
 /// What `on_agent_event` gets: one step of an agent.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AgentEventIn {
@@ -735,6 +775,8 @@ pub struct Config {
     /// Profiles from the config. Empty = fterm finds them itself.
     pub profiles: Vec<Profile>,
     pub keys: Keymap,
+    /// Copy mode: its keys and options.
+    pub copy_mode: CopyModeConfig,
     pub commands: Vec<UserCommand>,
     /// The dashboard (Ctrl+Shift+D).
     pub dashboard: DashboardConfig,
@@ -803,6 +845,7 @@ impl Default for Config {
             default_profile: None,
             profiles: Vec::new(),
             keys: Keymap::with_defaults(),
+            copy_mode: CopyModeConfig::default(),
             commands: Vec::new(),
             dashboard: DashboardConfig::default(),
             agents: AgentsConfig::default(),
@@ -847,6 +890,8 @@ pub enum ApiCall {
     },
     Copy(String),
     Action(BuiltinAction),
+    /// `fterm.copy_mode`: a step of copy mode in the active pane (copy mode starts first when it is off).
+    CopyMode(CopyCommand),
     /// `fterm.run`: programs with their arguments, one after another (no shell).
     Run {
         steps: Vec<Vec<String>>,
@@ -1222,6 +1267,61 @@ impl LoadedConfig {
             .map_err(|err| err.to_string())?;
         Ok(std::mem::take(&mut *self.queue.borrow_mut()))
     }
+
+    /// Calls the Lua action `index` of a copy mode key with `(fterm, cm)`.
+    pub fn call_copy(&self, index: usize, input: &CopyModeIn) -> Result<Vec<ApiCall>, String> {
+        let (Some(function), Some(api), Some(lua)) =
+            (self.functions.get(index), &self.api, &self._lua)
+        else {
+            return Err(format!("no Lua function number {index}"));
+        };
+        self.queue.borrow_mut().clear();
+        let run = || -> mlua::Result<()> {
+            let cm = lua.create_table()?;
+            cm.set("selection", input.selection.as_deref())?;
+            cm.set("line", input.line.as_str())?;
+            cm.set("word", input.word.as_deref())?;
+            cm.set("row", input.row)?;
+            cm.set("column", input.column)?;
+            cm.set("mode", input.mode.as_str())?;
+            cm.set("search", input.search.as_deref())?;
+            function.call::<()>((api.clone(), cm))
+        };
+        run().map_err(|err| err.to_string())?;
+        Ok(std::mem::take(&mut *self.queue.borrow_mut()))
+    }
+}
+
+/// A copy mode action: a name (`"select_word"`) or a jump (`{ jump = "f", char = "x" }`).
+fn copy_command(value: &Value) -> Result<CopyCommand, String> {
+    match value {
+        Value::String(name) => {
+            let name = name.to_string_lossy();
+            CopyCommand::from_name(&name).ok_or_else(|| {
+                format!(
+                    "unknown copy mode action `{name}`; the actions are {}",
+                    CopyCommand::names().collect::<Vec<_>>().join(", ")
+                )
+            })
+        }
+        Value::Table(t) => {
+            let jump: Option<String> = t.get("jump").map_err(|err| err.to_string())?;
+            let ch: Option<String> = t.get("char").map_err(|err| err.to_string())?;
+            let kind = jump
+                .as_deref()
+                .and_then(JumpKind::from_name)
+                .ok_or("`jump` must be \"f\", \"F\", \"t\", or \"T\"")?;
+            let mut chars = ch.as_deref().unwrap_or("").chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => Ok(CopyCommand::JumpTo(kind, c)),
+                _ => Err("`char` must be one char".to_owned()),
+            }
+        }
+        other => Err(format!(
+            "expected an action name or {{ jump = ..., char = ... }}, got {}",
+            other.type_name()
+        )),
+    }
 }
 
 /// `{ "gh", "pr", "list" }` (one program) or `{ { "a" }, { "b", "c" } }` (one after another): the steps of a run.
@@ -1399,6 +1499,15 @@ fn make_api(lua: &Lua, queue: &Rc<RefCell<Vec<ApiCall>>>) -> mlua::Result<Table>
             let action = BuiltinAction::from_name(&name)
                 .ok_or_else(|| mlua::Error::runtime(format!("unknown action `{name}`")))?;
             q.borrow_mut().push(ApiCall::Action(action));
+            Ok(())
+        })?,
+    )?;
+    let q = queue.clone();
+    api.set(
+        "copy_mode",
+        lua.create_function(move |_, value: Value| {
+            let command = copy_command(&value).map_err(mlua::Error::runtime)?;
+            q.borrow_mut().push(ApiCall::CopyMode(command));
             Ok(())
         })?,
     )?;
@@ -1789,6 +1898,30 @@ impl Reader {
                 config.keys.bind(chord, action);
             }
         }
+        if let Some(cm) = table_field(root, "copy_mode", "copy_mode")? {
+            if let Some(exit) = bool_field(&cm, "exit_after_copy", "copy_mode.exit_after_copy")? {
+                config.copy_mode.exit_after_copy = exit;
+            }
+            if let Some(bar) = bool_field(&cm, "status_bar", "copy_mode.status_bar")? {
+                config.copy_mode.status_bar = bar;
+            }
+            if let Some(keys) = table_field(&cm, "keys", "copy_mode.keys")? {
+                for (i, value) in list(&keys) {
+                    let path = format!("copy_mode.keys[{i}]");
+                    let Value::Table(table) = value else {
+                        return Err(format!(
+                            "{path}: expected a table, got {}",
+                            value.type_name()
+                        ));
+                    };
+                    let key = string_field(&table, "key", &format!("{path}.key"))?
+                        .ok_or_else(|| format!("{path}.key: missing"))?;
+                    let keys = parse_keys(&key).map_err(|err| format!("{path}.key: {err}"))?;
+                    let binding = self.copy_binding(&table, &format!("{path}.action"))?;
+                    config.copy_mode.keys.bind(keys, binding);
+                }
+            }
+        }
         if let Some(agents) = table_field(root, "agents", "agents")? {
             if let Some(history) = bool_field(&agents, "history", "agents.history")? {
                 config.agents.history = history;
@@ -2118,6 +2251,24 @@ impl Reader {
             does,
             confirm,
         })
+    }
+
+    /// The action of a copy mode key: a name, `"none"`, a jump table, or a Lua function.
+    fn copy_binding(&mut self, table: &Table, path: &str) -> Result<Option<CopyBinding>, String> {
+        let value: Value = table
+            .get("action")
+            .map_err(|err| format!("{path}: {err}"))?;
+        match value {
+            Value::Nil => Err(format!("{path}: missing")),
+            Value::String(ref name) if name.to_string_lossy() == "none" => Ok(None),
+            Value::Function(function) => {
+                self.functions.push(function);
+                Ok(Some(CopyBinding::Lua(self.functions.len() - 1)))
+            }
+            other => copy_command(&other)
+                .map(|c| Some(CopyBinding::Command(c)))
+                .map_err(|err| format!("{path}: {err}")),
+        }
     }
 
     fn action(&mut self, table: &Table, path: &str) -> Result<Option<Action>, String> {
@@ -2703,6 +2854,118 @@ mod tests {
             Ok(_) => panic!("no error"),
             Err(err) => err,
         }
+    }
+
+    #[test]
+    fn copy_mode_keys_from_the_config() {
+        use crate::copy_keys::{CopyBinding, CopyCommand, CopyKey, JumpKind, Lookup, parse_keys};
+        let plain = load("return {}");
+        let cm = &plain.config.copy_mode;
+        assert!(cm.exit_after_copy && cm.status_bar);
+        assert_eq!(
+            cm.keys.lookup(&[CopyKey::char('G')]),
+            Lookup::Found(CopyBinding::Command(CopyCommand::Bottom))
+        );
+        let loaded = load(
+            r#"return { copy_mode = { exit_after_copy = false, status_bar = false, keys = {
+                { key = "x", action = "copy_line" },
+                { key = "q", action = "none" },
+                { key = "g g", action = "top" },
+                { key = "ctrl+o", action = function(fterm, cm) fterm.copy(cm.selection) end },
+                { key = "z", action = { jump = "f", char = "(" } },
+            } } }"#,
+        );
+        let cm = &loaded.config.copy_mode;
+        assert!(!cm.exit_after_copy && !cm.status_bar);
+        let get = |text: &str| cm.keys.lookup(&parse_keys(text).unwrap());
+        assert_eq!(
+            get("x"),
+            Lookup::Found(CopyBinding::Command(CopyCommand::CopyLine))
+        );
+        assert_eq!(get("q"), Lookup::None);
+        assert_eq!(get("g"), Lookup::Prefix);
+        assert!(matches!(get("ctrl+o"), Lookup::Found(CopyBinding::Lua(_))));
+        assert_eq!(
+            get("z"),
+            Lookup::Found(CopyBinding::Command(CopyCommand::JumpTo(
+                JumpKind::Forward,
+                '('
+            )))
+        );
+    }
+
+    #[test]
+    fn copy_mode_errors_name_the_field() {
+        assert!(error(r#"return { copy_mode = 5 }"#).contains("copy_mode"));
+        let bad_key =
+            error(r#"return { copy_mode = { keys = { { key = "shift+v", action = "up" } } } }"#);
+        assert!(bad_key.contains("copy_mode.keys[1].key"), "{bad_key}");
+        let bad_action =
+            error(r#"return { copy_mode = { keys = { { key = "v", action = "fly" } } } }"#);
+        assert!(
+            bad_action.contains("copy_mode.keys[1].action"),
+            "{bad_action}"
+        );
+        assert!(
+            bad_action.contains("select_word"),
+            "lists the names: {bad_action}"
+        );
+        let bad_jump = error(
+            r#"return { copy_mode = { keys = { { key = "v", action = { jump = "x", char = "a" } } } } }"#,
+        );
+        assert!(bad_jump.contains("jump"), "{bad_jump}");
+        assert!(
+            error(r#"return { copy_mode = { exit_after_copy = "yes" } }"#)
+                .contains("copy_mode.exit_after_copy")
+        );
+    }
+
+    #[test]
+    fn a_lua_copy_action_gets_the_text_and_can_drive_copy_mode() {
+        use crate::copy_keys::{CopyBinding, CopyCommand, CopyKey, JumpKind, Lookup};
+        let loaded = load(
+            r#"return { copy_mode = { keys = { { key = "x", action = function(fterm, cm)
+                fterm.copy_mode("select_word")
+                fterm.copy_mode({ jump = "t", char = ")" })
+                fterm.copy(cm.word .. "|" .. cm.line .. "|" .. cm.mode .. "|" .. cm.row .. ":" .. cm.column
+                    .. "|" .. tostring(cm.selection) .. "|" .. tostring(cm.search))
+                fterm.copy_mode("exit")
+            end } } } }"#,
+        );
+        let Lookup::Found(CopyBinding::Lua(index)) =
+            loaded.config.copy_mode.keys.lookup(&[CopyKey::char('x')])
+        else {
+            panic!("no Lua action");
+        };
+        let input = CopyModeIn {
+            selection: None,
+            line: "fn main() {".into(),
+            word: Some("main".into()),
+            row: 12,
+            column: 3,
+            mode: "normal".into(),
+            search: Some("main".into()),
+        };
+        assert_eq!(
+            loaded.call_copy(index, &input).unwrap(),
+            [
+                ApiCall::CopyMode(CopyCommand::SelectWord),
+                ApiCall::CopyMode(CopyCommand::JumpTo(JumpKind::TillForward, ')')),
+                ApiCall::Copy("main|fn main() {|normal|12:3|nil|main".into()),
+                ApiCall::CopyMode(CopyCommand::Exit),
+            ]
+        );
+        let bad = load(
+            r#"return { copy_mode = { keys = { { key = "x", action = function(fterm, cm)
+                fterm.copy_mode("fly")
+            end } } } }"#,
+        );
+        let Lookup::Found(CopyBinding::Lua(index)) =
+            bad.config.copy_mode.keys.lookup(&[CopyKey::char('x')])
+        else {
+            panic!("no Lua action");
+        };
+        assert!(bad.call_copy(index, &input).unwrap_err().contains("fly"));
     }
 
     #[test]

@@ -31,7 +31,7 @@ use fterm_term::alacritty_terminal::index::{Point, Side};
 use fterm_term::alacritty_terminal::selection::{Selection, SelectionType};
 use fterm_term::alacritty_terminal::term::TermMode;
 use fterm_term::colors::Palette;
-use fterm_term::copy_mode::{self, CopyAction, CopyResult};
+use fterm_term::copy_mode;
 use fterm_term::input::typed_input;
 use fterm_term::osc::OscEvent;
 use fterm_term::process::{display_name, is_shell, running_children};
@@ -55,7 +55,7 @@ use crate::gpu::Gpu;
 use crate::history_popup::{
     HistoryPopup, PopupKind, PopupRow, cd_command, command_rows, dir_rows, replace_input,
 };
-use crate::input::{KeyInput, copy_mode_action, encode_key, key_chord, physical_letter};
+use crate::input::{KeyInput, encode_key, key_chord, physical_letter};
 use crate::mouse::{
     ClickCounter, GridGeometry, ReportButton, ReportKind, ReportMods, Wheel, autoscroll_lines,
     encode_mouse,
@@ -110,6 +110,7 @@ mod agent_calls;
 mod ai_calls;
 mod api_calls;
 mod companion_calls;
+mod copy_calls;
 mod dashboard_calls;
 mod link_calls;
 mod markup_calls;
@@ -623,6 +624,8 @@ pub struct App {
     spawn_remote: Option<String>,
     /// The `user@host` box of "Connect over SSH…".
     ssh_prompt: Option<crate::ai_chat::InputBox>,
+    /// The copy mode keys typed so far, a jump that waits for its char, the search prompt.
+    copy_input: copy_calls::CopyInput,
     /// A remote that connects now (its box).
     connecting: Option<mux_calls::Connecting>,
     /// While mux panes come back at start: the server panes that no pane shows yet.
@@ -741,6 +744,7 @@ impl App {
             adhoc_remotes: Vec::new(),
             spawn_remote: None,
             ssh_prompt: None,
+            copy_input: Default::default(),
             connecting: None,
             mux_free: Vec::new(),
             mux_end_on_exit: Vec::new(),
@@ -2989,6 +2993,7 @@ impl App {
                 });
             }
             ApiCall::Action(builtin) => self.run_builtin(event_loop, builtin),
+            ApiCall::CopyMode(command) => self.copy_command(command),
             ApiCall::SetTabColor { pane, color } => {
                 let pane = pane
                     .map(PaneId)
@@ -3269,20 +3274,7 @@ impl App {
                 return;
             }
             A::Paste => return self.paste(),
-            A::CopyMode => {
-                if let Some(session) = running.session() {
-                    let active = session.with_term(copy_mode::is_active);
-                    session.with_term_mut(|term, selection| {
-                        if active {
-                            copy_mode::apply(term, selection, CopyAction::Exit);
-                        } else {
-                            copy_mode::enter(term, selection);
-                        }
-                    });
-                    running.window.request_redraw();
-                }
-                return;
-            }
+            A::CopyMode => return self.toggle_copy_mode(false),
             A::ScrollPageUp => return scroll(running, Scroll::PageUp),
             A::ScrollPageDown => return scroll(running, Scroll::PageDown),
             A::ScrollTop => return scroll(running, Scroll::Top),
@@ -4037,18 +4029,17 @@ impl App {
     }
 
     /// Copy mode keys and the Ctrl+C rule. Returns true when the key is used.
-    fn handle_copy_keys(&mut self, event: &KeyEvent, action: Option<&Action>) -> bool {
+    fn handle_copy_keys(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        event: &KeyEvent,
+        action: Option<&Action>,
+    ) -> bool {
         let Some(running) = &self.running else {
             return false;
         };
         let Some(session) = running.session() else {
             return false;
-        };
-        let key = KeyInput {
-            logical: &event.logical_key,
-            physical: event.physical_key,
-            text: event.text.as_deref(),
-            mods: self.mods,
         };
 
         // In copy mode, all keys belong to copy mode (the copy mode key itself closes it).
@@ -4056,15 +4047,7 @@ impl App {
             if action == Some(&Action::Builtin(BuiltinAction::CopyMode)) {
                 return false;
             }
-            if let Some(copy_action) = copy_mode_action(&key) {
-                let result = session.with_term_mut(|term, selection| {
-                    copy_mode::apply(term, selection, copy_action)
-                });
-                running.window.request_redraw();
-                if let CopyResult::Copied(text) = result {
-                    self.copy_text(text);
-                }
-            }
+            self.copy_mode_key(event_loop, event);
             return true;
         }
 
@@ -5795,7 +5778,7 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     return;
                 }
-                if self.handle_copy_keys(&event, action.as_ref()) {
+                if self.handle_copy_keys(event_loop, &event, action.as_ref()) {
                     return;
                 }
                 if let Some(action) = action {

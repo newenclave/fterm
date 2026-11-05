@@ -1,9 +1,10 @@
 //! Keyboard: turns a winit key press into bytes for the pty (xterm style).
 
+use fterm_config::copy_keys::{CopyCommand, CopyKey, JumpKind};
 use fterm_config::keys::{Key as ChordKey, KeyChord, Mods};
 use fterm_term::alacritty_terminal::selection::SelectionType;
 use fterm_term::alacritty_terminal::vi_mode::ViMotion;
-use fterm_term::copy_mode::CopyAction;
+use fterm_term::copy_mode::{CopyAction, Jump};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
 /// One key press, with the parts of `winit::event::KeyEvent` that we need.
@@ -161,32 +162,54 @@ pub fn physical_letter(physical: PhysicalKey) -> Option<char> {
     Some(letter)
 }
 
-/// A key in copy mode. Keys like in vi and less. `None` = the key does nothing in copy mode.
-pub fn copy_mode_action(key: &KeyInput) -> Option<CopyAction> {
-    use CopyAction::{Move, Select};
+/// A key in copy mode, as the copy mode key table writes it: the typed char with its case ("G", "$"),
+/// or a named key. On a non-Latin layout a letter comes from the physical key ("л" on the K key = "k").
+/// `None` for keys that are only modifiers.
+pub fn copy_key(key: &KeyInput) -> Option<CopyKey> {
     let ctrl = key.mods.control_key();
+    let alt = key.mods.alt_key();
     if let Key::Named(named) = key.logical {
-        return match named {
-            NamedKey::ArrowUp => Some(Move(ViMotion::Up)),
-            NamedKey::ArrowDown => Some(Move(ViMotion::Down)),
-            NamedKey::ArrowLeft => Some(Move(ViMotion::Left)),
-            NamedKey::ArrowRight => Some(Move(ViMotion::Right)),
-            NamedKey::Home => Some(Move(ViMotion::First)),
-            NamedKey::End => Some(Move(ViMotion::Last)),
-            NamedKey::PageUp => Some(CopyAction::PageUp),
-            NamedKey::PageDown => Some(CopyAction::PageDown),
-            NamedKey::Enter => Some(CopyAction::Copy),
-            NamedKey::Escape => Some(CopyAction::Exit),
-            _ => None,
+        let name = match named {
+            NamedKey::ArrowUp => ChordKey::Up,
+            NamedKey::ArrowDown => ChordKey::Down,
+            NamedKey::ArrowLeft => ChordKey::Left,
+            NamedKey::ArrowRight => ChordKey::Right,
+            NamedKey::Home => ChordKey::Home,
+            NamedKey::End => ChordKey::End,
+            NamedKey::PageUp => ChordKey::PageUp,
+            NamedKey::PageDown => ChordKey::PageDown,
+            NamedKey::Enter => ChordKey::Enter,
+            NamedKey::Escape => ChordKey::Escape,
+            NamedKey::Tab => ChordKey::Tab,
+            NamedKey::Backspace => ChordKey::Backspace,
+            NamedKey::Delete => ChordKey::Delete,
+            NamedKey::Insert => ChordKey::Insert,
+            NamedKey::Space => ChordKey::Space,
+            other => match function_key(*other) {
+                Some(n) => ChordKey::F(n),
+                None => return None,
+            },
         };
+        return Some(CopyKey {
+            ctrl,
+            alt,
+            shift: key.mods.shift_key(),
+            key: name,
+        });
     }
-
-    // The char on the key. On a non-Latin layout we use the Latin letter of the physical key.
     let typed = match key.logical {
         Key::Character(s) => s.chars().next(),
         _ => None,
     };
     let c = match typed {
+        Some(' ') => {
+            return Some(CopyKey {
+                ctrl,
+                alt,
+                shift: false,
+                key: ChordKey::Space,
+            });
+        }
         Some(c) if c.is_ascii() => c,
         _ => {
             let letter = physical_letter(key.physical)?;
@@ -197,44 +220,99 @@ pub fn copy_mode_action(key: &KeyInput) -> Option<CopyAction> {
             }
         }
     };
-    if ctrl {
-        return match c.to_ascii_lowercase() {
-            'u' => Some(CopyAction::HalfPageUp),
-            'd' => Some(CopyAction::HalfPageDown),
-            'b' => Some(CopyAction::PageUp),
-            'f' => Some(CopyAction::PageDown),
-            'v' => Some(Select(SelectionType::Block)),
-            _ => None,
-        };
-    }
-    match c {
-        'k' => Some(Move(ViMotion::Up)),
-        'j' => Some(Move(ViMotion::Down)),
-        'h' => Some(Move(ViMotion::Left)),
-        'l' => Some(Move(ViMotion::Right)),
-        'w' => Some(Move(ViMotion::SemanticRight)),
-        'b' => Some(Move(ViMotion::SemanticLeft)),
-        'e' => Some(Move(ViMotion::SemanticRightEnd)),
-        'W' => Some(Move(ViMotion::WordRight)),
-        'B' => Some(Move(ViMotion::WordLeft)),
-        'E' => Some(Move(ViMotion::WordRightEnd)),
-        '0' => Some(Move(ViMotion::First)),
-        '$' => Some(Move(ViMotion::Last)),
-        '^' => Some(Move(ViMotion::FirstOccupied)),
-        'H' => Some(Move(ViMotion::High)),
-        'M' => Some(Move(ViMotion::Middle)),
-        'L' => Some(Move(ViMotion::Low)),
-        '{' => Some(Move(ViMotion::ParagraphUp)),
-        '}' => Some(Move(ViMotion::ParagraphDown)),
-        '%' => Some(Move(ViMotion::Bracket)),
-        'g' => Some(CopyAction::Top),
-        'G' => Some(CopyAction::Bottom),
-        'v' => Some(Select(SelectionType::Simple)),
-        'V' => Some(Select(SelectionType::Lines)),
-        'y' => Some(CopyAction::Copy),
-        'q' => Some(CopyAction::Exit),
-        _ => None,
-    }
+    let mut out = CopyKey::char(c);
+    out.alt = alt;
+    Some(if ctrl { out.with_ctrl() } else { out })
+}
+
+fn function_key(named: NamedKey) -> Option<u8> {
+    use NamedKey::*;
+    let keys = [
+        F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, F13, F14, F15, F16, F17, F18, F19, F20,
+        F21, F22, F23, F24,
+    ];
+    keys.iter().position(|k| *k == named).map(|i| i as u8 + 1)
+}
+
+/// What a copy mode command does now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CopyStep {
+    Run(CopyAction),
+    /// `f` `F` `t` `T`: wait for the char.
+    WaitJump(Jump),
+}
+
+/// A command of the copy mode key table as a step of the engine.
+pub fn copy_step(command: CopyCommand, exit_after_copy: bool) -> CopyStep {
+    use CopyAction as A;
+    use CopyCommand as C;
+    let jump = |kind: JumpKind| match kind {
+        JumpKind::Forward => Jump::Forward,
+        JumpKind::Backward => Jump::Backward,
+        JumpKind::TillForward => Jump::TillForward,
+        JumpKind::TillBackward => Jump::TillBackward,
+    };
+    let stay = !exit_after_copy;
+    CopyStep::Run(match command {
+        C::Up => A::Move(ViMotion::Up),
+        C::Down => A::Move(ViMotion::Down),
+        C::Left => A::Move(ViMotion::Left),
+        C::Right => A::Move(ViMotion::Right),
+        C::WordRight => A::Move(ViMotion::SemanticRight),
+        C::WordLeft => A::Move(ViMotion::SemanticLeft),
+        C::WordEnd => A::Move(ViMotion::SemanticRightEnd),
+        C::BigWordRight => A::Move(ViMotion::WordRight),
+        C::BigWordLeft => A::Move(ViMotion::WordLeft),
+        C::BigWordEnd => A::Move(ViMotion::WordRightEnd),
+        C::LineStart => A::Move(ViMotion::First),
+        C::LineEnd => A::Move(ViMotion::Last),
+        C::FirstChar => A::Move(ViMotion::FirstOccupied),
+        C::ScreenTop => A::Move(ViMotion::High),
+        C::ScreenMiddle => A::Move(ViMotion::Middle),
+        C::ScreenBottom => A::Move(ViMotion::Low),
+        C::ParagraphUp => A::Move(ViMotion::ParagraphUp),
+        C::ParagraphDown => A::Move(ViMotion::ParagraphDown),
+        C::Bracket => A::Move(ViMotion::Bracket),
+        C::PageUp => A::PageUp,
+        C::PageDown => A::PageDown,
+        C::HalfPageUp => A::HalfPageUp,
+        C::HalfPageDown => A::HalfPageDown,
+        C::Top => A::Top,
+        C::Bottom => A::Bottom,
+        C::Select => A::Select(SelectionType::Simple),
+        C::SelectLines => A::Select(SelectionType::Lines),
+        C::SelectBlock => A::Select(SelectionType::Block),
+        C::SelectWord => A::SelectWord {
+            big: false,
+            around: false,
+        },
+        C::SelectWordAround => A::SelectWord {
+            big: false,
+            around: true,
+        },
+        C::SelectBigWord => A::SelectWord {
+            big: true,
+            around: false,
+        },
+        C::SelectBigWordAround => A::SelectWord {
+            big: true,
+            around: true,
+        },
+        C::SwapEnds => A::SwapEnds,
+        C::Copy => A::Copy { stay },
+        C::CopyAndStay => A::Copy { stay: true },
+        C::CopyAndExit => A::Copy { stay: false },
+        C::CopyLine => A::CopyLine { stay },
+        C::Exit => A::Exit,
+        C::SearchForward => A::SearchStart { forward: true },
+        C::SearchBackward => A::SearchStart { forward: false },
+        C::NextMatch => A::NextMatch { same_way: true },
+        C::PrevMatch => A::NextMatch { same_way: false },
+        C::Jump(kind) => return CopyStep::WaitJump(jump(kind)),
+        C::JumpTo(kind, c) => A::JumpTo(jump(kind), c),
+        C::RepeatJump => A::RepeatJump { same_way: true },
+        C::RepeatJumpBack => A::RepeatJump { same_way: false },
+    })
 }
 
 /// The key as a `KeyChord` for the keymap. It uses the key position, so it works on every layout.
@@ -515,33 +593,51 @@ mod tests {
         assert_eq!(press(named(NamedKey::Control), CTRL), None);
     }
 
-    fn copy_key(logical: Key, mods: ModifiersState) -> Option<CopyAction> {
+    /// The step of a key with the default copy mode keys (`physical` for the Russian layout test).
+    fn copy_with(logical: Key, physical: KeyCode, mods: ModifiersState) -> Option<CopyStep> {
+        use fterm_config::copy_keys::{CopyBinding, CopyKeymap, Lookup};
         let key = KeyInput {
             logical: &logical,
-            physical: PhysicalKey::Code(KeyCode::KeyZ),
+            physical: PhysicalKey::Code(physical),
             text: None,
             mods,
         };
-        copy_mode_action(&key)
+        match CopyKeymap::with_defaults().lookup(&[copy_key(&key)?]) {
+            Lookup::Found(CopyBinding::Command(c)) => Some(copy_step(c, true)),
+            _ => None,
+        }
+    }
+
+    fn copy_step_of(logical: Key, mods: ModifiersState) -> Option<CopyAction> {
+        match copy_with(logical, KeyCode::KeyZ, mods)? {
+            CopyStep::Run(action) => Some(action),
+            CopyStep::WaitJump(_) => None,
+        }
     }
 
     #[test]
     fn copy_mode_moves_with_arrows_and_hjkl() {
         use CopyAction::Move;
         assert_eq!(
-            copy_key(named(NamedKey::ArrowUp), NONE),
+            copy_step_of(named(NamedKey::ArrowUp), NONE),
             Some(Move(ViMotion::Up))
         );
-        assert_eq!(copy_key(ch("k"), NONE), Some(Move(ViMotion::Up)));
-        assert_eq!(copy_key(ch("j"), NONE), Some(Move(ViMotion::Down)));
-        assert_eq!(copy_key(ch("h"), NONE), Some(Move(ViMotion::Left)));
-        assert_eq!(copy_key(ch("l"), NONE), Some(Move(ViMotion::Right)));
-        assert_eq!(copy_key(ch("w"), NONE), Some(Move(ViMotion::SemanticRight)));
-        assert_eq!(copy_key(ch("b"), NONE), Some(Move(ViMotion::SemanticLeft)));
-        assert_eq!(copy_key(ch("0"), NONE), Some(Move(ViMotion::First)));
-        assert_eq!(copy_key(ch("$"), NONE), Some(Move(ViMotion::Last)));
+        assert_eq!(copy_step_of(ch("k"), NONE), Some(Move(ViMotion::Up)));
+        assert_eq!(copy_step_of(ch("j"), NONE), Some(Move(ViMotion::Down)));
+        assert_eq!(copy_step_of(ch("h"), NONE), Some(Move(ViMotion::Left)));
+        assert_eq!(copy_step_of(ch("l"), NONE), Some(Move(ViMotion::Right)));
         assert_eq!(
-            copy_key(named(NamedKey::Home), NONE),
+            copy_step_of(ch("w"), NONE),
+            Some(Move(ViMotion::SemanticRight))
+        );
+        assert_eq!(
+            copy_step_of(ch("b"), NONE),
+            Some(Move(ViMotion::SemanticLeft))
+        );
+        assert_eq!(copy_step_of(ch("0"), NONE), Some(Move(ViMotion::First)));
+        assert_eq!(copy_step_of(ch("$"), SHIFT), Some(Move(ViMotion::Last)));
+        assert_eq!(
+            copy_step_of(named(NamedKey::Home), NONE),
             Some(Move(ViMotion::First))
         );
     }
@@ -549,54 +645,105 @@ mod tests {
     #[test]
     fn copy_mode_pages_and_ends() {
         assert_eq!(
-            copy_key(named(NamedKey::PageUp), NONE),
+            copy_step_of(named(NamedKey::PageUp), NONE),
             Some(CopyAction::PageUp)
         );
         assert_eq!(
-            copy_key(named(NamedKey::PageDown), NONE),
+            copy_step_of(named(NamedKey::PageDown), NONE),
             Some(CopyAction::PageDown)
         );
-        assert_eq!(copy_key(ch("u"), CTRL), Some(CopyAction::HalfPageUp));
-        assert_eq!(copy_key(ch("d"), CTRL), Some(CopyAction::HalfPageDown));
-        assert_eq!(copy_key(ch("g"), NONE), Some(CopyAction::Top));
-        assert_eq!(copy_key(ch("G"), SHIFT), Some(CopyAction::Bottom));
+        assert_eq!(copy_step_of(ch("u"), CTRL), Some(CopyAction::HalfPageUp));
+        assert_eq!(copy_step_of(ch("d"), CTRL), Some(CopyAction::HalfPageDown));
+        assert_eq!(copy_step_of(ch("g"), NONE), Some(CopyAction::Top));
+        assert_eq!(copy_step_of(ch("G"), SHIFT), Some(CopyAction::Bottom));
     }
 
     #[test]
     fn copy_mode_select_copy_and_exit() {
         use CopyAction::Select;
-        assert_eq!(copy_key(ch("v"), NONE), Some(Select(SelectionType::Simple)));
-        assert_eq!(copy_key(ch("V"), SHIFT), Some(Select(SelectionType::Lines)));
-        assert_eq!(copy_key(ch("v"), CTRL), Some(Select(SelectionType::Block)));
-        assert_eq!(copy_key(ch("y"), NONE), Some(CopyAction::Copy));
         assert_eq!(
-            copy_key(named(NamedKey::Enter), NONE),
-            Some(CopyAction::Copy)
+            copy_step_of(ch("v"), NONE),
+            Some(Select(SelectionType::Simple))
         );
         assert_eq!(
-            copy_key(named(NamedKey::Escape), NONE),
+            copy_step_of(ch("V"), SHIFT),
+            Some(Select(SelectionType::Lines))
+        );
+        assert_eq!(
+            copy_step_of(ch("v"), CTRL),
+            Some(Select(SelectionType::Block))
+        );
+        assert_eq!(
+            copy_step_of(ch("y"), NONE),
+            Some(CopyAction::Copy { stay: false })
+        );
+        assert_eq!(
+            copy_step_of(named(NamedKey::Enter), NONE),
+            Some(CopyAction::Copy { stay: false })
+        );
+        assert_eq!(
+            copy_step_of(named(NamedKey::Escape), NONE),
             Some(CopyAction::Exit)
         );
-        assert_eq!(copy_key(ch("q"), NONE), Some(CopyAction::Exit));
+        assert_eq!(copy_step_of(ch("q"), NONE), Some(CopyAction::Exit));
     }
 
     #[test]
     fn copy_mode_ignores_other_keys() {
-        assert_eq!(copy_key(ch("x"), NONE), None);
-        assert_eq!(copy_key(named(NamedKey::F5), NONE), None);
+        assert_eq!(copy_step_of(ch("x"), NONE), None);
+        assert_eq!(copy_step_of(named(NamedKey::F5), NONE), None);
+        assert_eq!(
+            copy_key(&KeyInput {
+                logical: &named(NamedKey::Shift),
+                physical: PhysicalKey::Code(KeyCode::ShiftLeft),
+                text: None,
+                mods: SHIFT,
+            }),
+            None
+        );
     }
 
     #[test]
     fn copy_mode_works_on_the_russian_layout() {
         // On the Russian layout the "K" key gives "л": we use the physical key.
-        let logical = ch("л");
-        let key = KeyInput {
-            logical: &logical,
-            physical: PhysicalKey::Code(KeyCode::KeyK),
-            text: Some("л"),
-            mods: NONE,
-        };
-        assert_eq!(copy_mode_action(&key), Some(CopyAction::Move(ViMotion::Up)));
+        assert_eq!(
+            copy_with(ch("л"), KeyCode::KeyK, NONE),
+            Some(CopyStep::Run(CopyAction::Move(ViMotion::Up)))
+        );
+        assert_eq!(
+            copy_with(ch("П"), KeyCode::KeyG, SHIFT),
+            Some(CopyStep::Run(CopyAction::Bottom)),
+            "Shift gives the capital letter"
+        );
+    }
+
+    #[test]
+    fn copy_mode_new_keys() {
+        assert_eq!(
+            copy_step_of(ch("/"), NONE),
+            Some(CopyAction::SearchStart { forward: true })
+        );
+        assert_eq!(
+            copy_step_of(ch("N"), SHIFT),
+            Some(CopyAction::NextMatch { same_way: false })
+        );
+        assert_eq!(
+            copy_with(ch("t"), KeyCode::KeyT, NONE),
+            Some(CopyStep::WaitJump(Jump::TillForward))
+        );
+        assert_eq!(
+            copy_step_of(ch("Y"), SHIFT),
+            Some(CopyAction::CopyLine { stay: false })
+        );
+        assert_eq!(
+            copy_step(CopyCommand::Copy, false),
+            CopyStep::Run(CopyAction::Copy { stay: true }),
+            "exit_after_copy = false"
+        );
+        assert_eq!(
+            copy_step(CopyCommand::JumpTo(JumpKind::Backward, 'x'), true),
+            CopyStep::Run(CopyAction::JumpTo(Jump::Backward, 'x'))
+        );
     }
 
     #[test]
