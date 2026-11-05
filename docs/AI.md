@@ -34,7 +34,7 @@ Chips over the input show what goes with the next question. Only what you see th
 
 | Key | What it does |
 |---|---|
-| `Ctrl+Shift+X` (**Explain the last error**) | Sends the last command, its exit code, and its output with the question "Why did this command fail?" at once. |
+| `Ctrl+Shift+Y` (**Explain the last error**) | Sends the last command, its exit code, and its output with the question "Why did this command fail?" at once. |
 | **Ask AI about the selection** (palette) | Opens the panel with the selected text as a chip. You write the question. |
 | `Alt+O` (in the panel) | Adds the last command and its output. |
 | `Alt+S` (in the panel) | Adds the selected text. |

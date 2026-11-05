@@ -3275,6 +3275,7 @@ impl App {
             }
             A::Paste => return self.paste(),
             A::CopyMode => return self.toggle_copy_mode(false),
+            A::Search => return self.toggle_copy_mode(true),
             A::ScrollPageUp => return scroll(running, Scroll::PageUp),
             A::ScrollPageDown => return scroll(running, Scroll::PageDown),
             A::ScrollTop => return scroll(running, Scroll::Top),
@@ -4044,7 +4045,11 @@ impl App {
 
         // In copy mode, all keys belong to copy mode (the copy mode key itself closes it).
         if session.with_term(copy_mode::is_active) {
-            if action == Some(&Action::Builtin(BuiltinAction::CopyMode)) {
+            // The copy mode key closes it; the search key opens the prompt (when no prompt is open).
+            if action == Some(&Action::Builtin(BuiltinAction::CopyMode))
+                || (action == Some(&Action::Builtin(BuiltinAction::Search))
+                    && self.copy_input.prompt.is_none())
+            {
                 return false;
             }
             self.copy_mode_key(event_loop, event);

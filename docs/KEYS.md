@@ -278,7 +278,7 @@ with `agents` and `on_agent_row` in [CONFIG.md](CONFIG.md#the-agents-panel).
 | Key | What it does |
 |---|---|
 | Ctrl + Shift + I | Open the AI panel (press again to close the dock). |
-| Ctrl + Shift + X | Explain the last error: the last command and its output go to the AI. |
+| Ctrl + Shift + Y | Explain the last error: the last command and its output go to the AI. |
 | Ctrl + Shift + G | Text to command: the task typed in the prompt becomes a command (it does not run). |
 | Enter / Shift + Enter | Send / a new line. |
 | Esc | Stop the answer; again = back to the terminal. |

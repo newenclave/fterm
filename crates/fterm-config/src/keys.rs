@@ -161,6 +161,8 @@ pub enum BuiltinAction {
     Copy,
     Paste,
     CopyMode,
+    /// Copy mode with the search prompt open.
+    Search,
     ScrollPageUp,
     ScrollPageDown,
     ScrollTop,
@@ -258,7 +260,7 @@ pub enum BuiltinAction {
 
 impl BuiltinAction {
     /// All actions with one value (for the palette and the docs). `SelectTab` is there as tab 1.
-    pub const ALL: [BuiltinAction; 74] = [
+    pub const ALL: [BuiltinAction; 75] = [
         Self::NewTab,
         Self::ClosePane,
         Self::NextTab,
@@ -282,6 +284,7 @@ impl BuiltinAction {
         Self::Copy,
         Self::Paste,
         Self::CopyMode,
+        Self::Search,
         Self::ScrollPageUp,
         Self::ScrollPageDown,
         Self::ScrollTop,
@@ -361,6 +364,7 @@ impl BuiltinAction {
             Self::Copy => "copy",
             Self::Paste => "paste",
             Self::CopyMode => "copy_mode",
+            Self::Search => "search",
             Self::ScrollPageUp => "scroll_page_up",
             Self::ScrollPageDown => "scroll_page_down",
             Self::ScrollTop => "scroll_top",
@@ -505,7 +509,9 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+shift+v", "paste"),
     ("shift+insert", "paste"),
     ("ctrl+insert", "copy"),
+    ("ctrl+shift+x", "copy_mode"),
     ("ctrl+shift+space", "copy_mode"),
+    ("ctrl+shift+f", "search"),
     ("shift+pageup", "scroll_page_up"),
     ("shift+pagedown", "scroll_page_down"),
     ("shift+home", "scroll_top"),
@@ -518,7 +524,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl+shift+a", "panel_agents"),
     ("ctrl+shift+o", "focus_dock"),
     ("ctrl+shift+i", "panel_ai"),
-    ("ctrl+shift+x", "explain_error"),
+    ("ctrl+shift+y", "explain_error"),
     ("ctrl+shift+g", "text_to_command"),
     ("ctrl+shift+s", "sessions"),
     ("alt+f8", "history_commands"),
@@ -635,10 +641,34 @@ mod tests {
     }
 
     #[test]
+    fn copy_mode_and_search_keys() {
+        let keys = Keymap::with_defaults();
+        for key in ["ctrl+shift+x", "ctrl+shift+space"] {
+            assert_eq!(
+                keys.get(&chord(key)),
+                Some(&Action::Builtin(BuiltinAction::CopyMode)),
+                "{key}"
+            );
+        }
+        assert_eq!(
+            keys.get(&chord("ctrl+shift+f")),
+            Some(&Action::Builtin(BuiltinAction::Search))
+        );
+        assert_eq!(BuiltinAction::Search.name(), "search");
+        assert_eq!(BuiltinAction::Search.label(), "Search the history");
+        assert_eq!(
+            keys.key_for(&Action::Builtin(BuiltinAction::CopyMode))
+                .as_deref(),
+            Some("Ctrl+Shift+X"),
+            "the palette shows the new key"
+        );
+    }
+
+    #[test]
     fn ai_context_actions() {
         let keys = Keymap::with_defaults();
         assert_eq!(
-            keys.get(&chord("ctrl+shift+x")),
+            keys.get(&chord("ctrl+shift+y")),
             Some(&Action::Builtin(BuiltinAction::ExplainError))
         );
         assert_eq!(

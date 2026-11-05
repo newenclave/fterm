@@ -11,6 +11,7 @@
     "action.copy": "Copy",
     "action.copy_claude_hooks": "Copy Claude Code hooks (settings.json)",
     "action.copy_mode": "Copy mode",
+    "action.search": "Search the history",
     "action.explain_error": "Explain the last error (AI)",
     "action.focus_dock": "Focus the dock or the terminal",
     "action.focus_down": "Focus down",
