@@ -185,10 +185,7 @@ pub fn copy_key(key: &KeyInput) -> Option<CopyKey> {
             NamedKey::Delete => ChordKey::Delete,
             NamedKey::Insert => ChordKey::Insert,
             NamedKey::Space => ChordKey::Space,
-            other => match function_key(*other) {
-                Some(n) => ChordKey::F(n),
-                None => return None,
-            },
+            other => ChordKey::F(function_key(*other)?),
         };
         return Some(CopyKey {
             ctrl,

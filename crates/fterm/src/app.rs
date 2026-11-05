@@ -4402,6 +4402,10 @@ impl App {
         {
             return;
         }
+        // Copy mode: a click moves its cursor, a drag selects from the click (not sent to the app).
+        if button == MouseButton::Left && self.copy_mouse(state) {
+            return;
+        }
         let report_button = match button {
             MouseButton::Left => Some(ReportButton::Left),
             MouseButton::Middle => Some(ReportButton::Middle),
@@ -4452,7 +4456,7 @@ impl App {
             return;
         }
 
-        if self.markup_drag() {
+        if self.markup_drag() || self.copy_mouse_drag() {
             return;
         }
         if !self.mouse.selecting

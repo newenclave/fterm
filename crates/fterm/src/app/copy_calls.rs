@@ -18,6 +18,8 @@ pub(super) struct CopyInput {
     jump: Option<Jump>,
     /// The search prompt (`/`, `?`).
     pub(super) prompt: Option<InputBox>,
+    /// The left button is down in copy mode: the cell where it went down.
+    drag: Option<Point>,
 }
 
 impl App {
@@ -146,6 +148,50 @@ impl App {
         if search && self.copy_input.prompt.is_none() {
             self.copy_command(CopyCommand::SearchForward);
         }
+    }
+
+    /// The left button in copy mode: down moves the cursor there. `false` = not in copy mode.
+    pub(super) fn copy_mouse(&mut self, state: ElementState) -> bool {
+        let Some(running) = &self.running else {
+            return false;
+        };
+        let Some(session) = running.session() else {
+            return false;
+        };
+        if !session.with_term(copy_mode::is_active) {
+            return false;
+        }
+        match state {
+            ElementState::Pressed => {
+                let (point, _) = self.mouse_cell(running);
+                self.copy_input.drag = Some(point);
+                self.copy_run(CopyAction::MoveTo(point));
+            }
+            ElementState::Released => self.copy_input.drag = None,
+        }
+        true
+    }
+
+    /// The mouse moves with the left button down in copy mode: select from the click to the mouse.
+    pub(super) fn copy_mouse_drag(&mut self) -> bool {
+        let Some(start) = self.copy_input.drag else {
+            return false;
+        };
+        let Some(running) = &self.running else {
+            return false;
+        };
+        let Some(session) = running.session() else {
+            return false;
+        };
+        let (point, _) = self.mouse_cell(running);
+        if point == start && session.with_copy(|_, _, state| state.mode() == "normal") {
+            return true;
+        }
+        if session.with_copy(|_, _, state| state.mode() == "normal") {
+            self.copy_run(CopyAction::Select(SelectionType::Simple));
+        }
+        self.copy_run(CopyAction::MoveTo(point));
+        true
     }
 
     fn copy_pending(&self, text: String) {
