@@ -134,12 +134,17 @@ and a broken file keeps the old config (the user sees the error).
     } },
   }
   ```
+- **Copy mode keys** (Ctrl+Shift+X) are not in `keys` but in `copy_mode.keys`. There a key is the char that it types,
+  with its case (`"G"` is Shift+G, `"$"`), or two keys with a space (`"i w"`):
+  `copy_mode = { keys = { { key = "Y", action = "copy_and_stay" }, { key = "q", action = "none" } } }`.
+  A Lua action there gets `(fterm, cm)`: `cm.selection`, `cm.line`, `cm.word`, `cm.row`, `cm.column`, `cm.mode`,
+  `cm.search`; `fterm.copy_mode("select_word")` runs a copy mode action.
 - **Profiles:** the first one is the default (the shell of every new tab). Add a new profile at the end of
   `profiles`, never in front, or every new tab starts it.
 - In `actions`, `run` is a list of arguments (no shell), so a part of a line (`{1}`, `{2}`, between tabs) is one
   argument. Never make it a text for a shell.
 - Lua in the config cannot run programs or open files itself; it asks fterm: `fterm.spawn`, `fterm.send_text`,
-  `fterm.run`, `fterm.open`, `fterm.notify`, `fterm.copy`, `fterm.action`.
+  `fterm.run`, `fterm.open`, `fterm.notify`, `fterm.copy`, `fterm.action`, `fterm.copy_mode`.
 - All fields: `docs/CONFIG.md` in the fterm repository.
 
 ## Rules
