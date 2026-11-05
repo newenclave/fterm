@@ -139,6 +139,8 @@ pub fn ui_colors(theme: &Theme) -> UiColors {
         text_ghost: term_rgb(u.text_ghost),
         scrollbar: term_rgb(u.scrollbar),
         copy_cursor: term_rgb(u.copy_cursor),
+        search_match: term_rgb(u.search_match),
+        search_current: term_rgb(u.search_current),
         code_bg: term_rgb(u.code_bg),
         input_bg: term_rgb(u.input_bg),
         chip_bg: term_rgb(u.chip_bg),

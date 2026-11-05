@@ -9,6 +9,7 @@ use fterm_term::alacritty_terminal::term::cell::Flags;
 use fterm_term::alacritty_terminal::term::{Term, TermMode};
 use fterm_term::alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use fterm_term::colors::{Palette, cell_colors_with};
+use fterm_term::harmonize::contrast;
 
 use crate::atlas::{AtlasFull, AtlasGlyph, GlyphKey};
 use crate::builtin::{BrailleStyle, is_braille};
@@ -56,6 +57,10 @@ pub struct FrameInput<'a> {
     /// Cells to underline (links under the mouse with Ctrl, or the links of the hint labels), as first and last
     /// cell in history coordinates.
     pub underline: &'a [(Point, Point)],
+    /// The matches of the copy mode search (first and last cell, in history coordinates).
+    pub matches: &'a [(Point, Point)],
+    /// Which of `matches` is the current one.
+    pub current_match: Option<usize>,
 }
 
 /// How a pane looks: everything of `FrameInput` that the app chooses for each pane.
@@ -66,6 +71,8 @@ pub struct PaneStyle<'a> {
     pub program_palette: bool,
     pub braille: BrailleStyle,
     pub underline: &'a [(Point, Point)],
+    pub matches: &'a [(Point, Point)],
+    pub current_match: Option<usize>,
 }
 
 /// Width of the scroll indicator in pixels.
@@ -149,11 +156,27 @@ pub fn build_frame<T: EventListener>(
             cursor_width = width;
         }
 
-        if selection.is_some_and(|range| range.contains(indexed.point)) {
+        let selected = selection.is_some_and(|range| range.contains(indexed.point));
+        // A search match (not under the selection): its color, and the text color that reads best on it.
+        let match_bg = input
+            .matches
+            .iter()
+            .position(|(a, b)| *a <= indexed.point && indexed.point <= *b)
+            .filter(|_| !selected)
+            .map(|i| {
+                if input.current_match == Some(i) {
+                    input.ui.search_current
+                } else {
+                    input.ui.search_match
+                }
+            });
+        if selected {
             backgrounds.push(solid(
                 [x, y, width, cell.height],
                 linear(input.palette.selection),
             ));
+        } else if let Some(color) = match_bg {
+            backgrounds.push(solid([x, y, width, cell.height], linear(color)));
         } else if bg != default_bg {
             backgrounds.push(solid([x, y, width, cell.height], linear(bg)));
         }
@@ -169,7 +192,17 @@ pub fn build_frame<T: EventListener>(
                 dots: input.braille == BrailleStyle::Dots && is_braille(c),
             };
             if let Some(g) = glyph(&key)? {
-                let color = if under_block_cursor { bg } else { fg };
+                let color = if under_block_cursor {
+                    bg
+                } else if let Some(m) = match_bg {
+                    if contrast(default_bg, m) > contrast(fg, m) {
+                        default_bg
+                    } else {
+                        fg
+                    }
+                } else {
+                    fg
+                };
                 let kind = if g.color {
                     KIND_COLOR_GLYPH
                 } else {
@@ -336,6 +369,8 @@ mod tests {
             program_palette: true,
             braille: BrailleStyle::Pixels,
             underline: &[],
+            matches: &[],
+            current_match: None,
         }
     }
 
@@ -432,6 +467,8 @@ mod tests {
                 program_palette,
                 braille: BrailleStyle::Pixels,
                 underline: &[],
+                matches: &[],
+                current_match: None,
             };
             let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
             solids(&quads)
@@ -542,6 +579,8 @@ mod tests {
             program_palette: true,
             braille: BrailleStyle::Pixels,
             underline: &[],
+            matches: &[],
+            current_match: None,
         };
         let quads = build_frame(&term, &input, &mut |key| {
             Ok(Some(AtlasGlyph {
@@ -594,6 +633,50 @@ mod tests {
         assert_eq!(
             lines,
             [PADDING + 3.0 * CELL.width, PADDING + 4.0 * CELL.width]
+        );
+    }
+
+    #[test]
+    fn search_matches_get_their_colors() {
+        use fterm_term::alacritty_terminal::index::{Column, Line, Point};
+        let term = term_with(b"ab cd ef");
+        let palette = Palette::default();
+        let ui = UiColors::default();
+        let found = [
+            (
+                Point::new(Line(0), Column(0)),
+                Point::new(Line(0), Column(1)),
+            ),
+            (
+                Point::new(Line(0), Column(6)),
+                Point::new(Line(0), Column(6)),
+            ),
+        ];
+        let input = FrameInput {
+            matches: &found,
+            current_match: Some(1),
+            ..input_for(&palette, &ui)
+        };
+        let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
+        let back = |col: f32| {
+            solids(&quads)
+                .into_iter()
+                .find(|q| q.rect == cell_rect(col, 0.0))
+                .map(|q| q.color)
+        };
+        assert_eq!(back(0.0), Some(linear(ui.search_match)));
+        assert_eq!(back(1.0), Some(linear(ui.search_match)));
+        assert_eq!(
+            back(6.0),
+            Some(linear(ui.search_current)),
+            "the current one"
+        );
+        assert_eq!(back(3.0), None, "not a match");
+        let text = glyphs(&quads);
+        assert_eq!(
+            text[0].color,
+            color(NamedColor::Background),
+            "dark text on a match"
         );
     }
 
@@ -670,6 +753,8 @@ mod tests {
             program_palette: true,
             braille: BrailleStyle::Pixels,
             underline: &[],
+            matches: &[],
+            current_match: None,
         };
         let got = build_frame(&term, &input, &mut |_| Err(AtlasFull));
         assert_eq!(got, Err(AtlasFull));
@@ -688,6 +773,8 @@ mod tests {
             program_palette: true,
             braille: BrailleStyle::Pixels,
             underline: &[],
+            matches: &[],
+            current_match: None,
         };
         build_frame(term, &input, &mut |_| Ok(Some(GLYPH))).unwrap()
     }
@@ -802,6 +889,8 @@ mod tests {
             program_palette: true,
             braille: BrailleStyle::Pixels,
             underline: &[],
+            matches: &[],
+            current_match: None,
         };
         let moved = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         let at_origin = build(&term);
@@ -830,6 +919,8 @@ mod tests {
             program_palette: true,
             braille: BrailleStyle::Pixels,
             underline: &[],
+            matches: &[],
+            current_match: None,
         };
         let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         let rects = rects_with_color(&quads, UiColors::default().scrollbar);
@@ -881,6 +972,8 @@ mod tests {
             program_palette: true,
             braille: BrailleStyle::Pixels,
             underline: &[],
+            matches: &[],
+            current_match: None,
         };
         let quads = build_frame(&term, &input, &mut |_| Ok(Some(GLYPH))).unwrap();
         assert_eq!(rects_with_color(&quads, ui.scrollbar).len(), 1);

@@ -4797,6 +4797,7 @@ impl App {
             .map(|(tab, text)| (*tab, text.clone()));
         let hover = self.mouse.tab_hover;
         let link_marks = self.link_marks();
+        let copy_marks = self.copy_marks();
         let chip = self.workspace_chip();
         let question = self
             .restore_question_lines()
@@ -4998,6 +4999,14 @@ impl App {
                             } else {
                                 &[]
                             },
+                            matches: if copy_marks.pane == Some(*id) {
+                                &copy_marks.matches
+                            } else {
+                                &[]
+                            },
+                            current_match: copy_marks
+                                .current
+                                .filter(|_| copy_marks.pane == Some(*id)),
                         };
                         pane.session.with_term(|term| {
                             parts.pane(term, *rect, style)?;
@@ -5069,6 +5078,12 @@ impl App {
                     && !link_marks.labels.is_empty()
                 {
                     parts.labels(&link_marks.labels, *rect)?;
+                }
+                if let Some((text, column, row)) = &copy_marks.status
+                    && let Some((_, rect)) =
+                        pane_rects.iter().find(|(p, _)| copy_marks.pane == Some(*p))
+                {
+                    parts.labels(&[(text.clone(), *column, *row)], *rect)?;
                 }
                 parts.pane_chrome(&dividers, active_frame);
                 // An overlay over its pane (dim under it) and the scratch on top: each in its own layer, so its

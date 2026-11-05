@@ -40,6 +40,9 @@ ui_colors!(
     // The scroll indicator of a pane.
     scrollbar = 0x7f849c,
     copy_cursor = 0xf9e2af,
+    // The matches of the copy mode search, and the current one.
+    search_match = 0x8a7a4a,
+    search_current = 0xfab387,
     code_bg = 0x11111b,
     input_bg = 0x26273a,
     chip_bg = 0x3a3c55,

@@ -19,6 +19,8 @@
     "text_ghost": "#9ca0b0",
     "scrollbar": "#8c8fa1",
     "copy_cursor": "#df8e1d",
+    "search_match": "#f0d9a8",
+    "search_current": "#fe640b",
     "code_bg": "#dce0e8",
     "input_bg": "#e3e6ed",
     "chip_bg": "#c4c8d3",

@@ -572,6 +572,8 @@ impl FrameParts<'_> {
             program_palette: style.program_palette,
             braille: style.braille,
             underline: style.underline,
+            matches: style.matches,
+            current_match: style.current_match,
         };
         let quads = build_frame(term, &input, &mut self.glyph)?;
         self.quads.extend(quads);

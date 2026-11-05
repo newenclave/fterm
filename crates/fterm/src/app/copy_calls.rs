@@ -237,3 +237,171 @@ impl App {
         }
     }
 }
+
+/// What the frame draws for copy mode in the active pane: the matches and the status bar.
+#[derive(Default)]
+pub(super) struct CopyMarks {
+    pub pane: Option<PaneId>,
+    pub matches: Vec<(Point, Point)>,
+    pub current: Option<usize>,
+    /// The text of the status bar and its column on the last row.
+    pub status: Option<(String, usize, usize)>,
+}
+
+/// The parts of the status bar.
+pub(super) struct StatusParts<'a> {
+    pub mode: &'a str,
+    pub row: i64,
+    pub total: usize,
+    /// The search: its pattern, the number of the current match, and how many there are.
+    pub search: Option<(&'a str, Option<usize>, usize)>,
+    /// The prompt while the user types: `/` or `?` and the text with its cursor.
+    pub prompt: Option<(char, String)>,
+    pub pending: &'a str,
+}
+
+/// The text of the copy mode status bar: ` COPY · VISUAL · 120/3400 · /error 3/9 `.
+pub(super) fn copy_status(p: &StatusParts) -> String {
+    if let Some((mark, text)) = &p.prompt {
+        let count = match p.search {
+            Some((_, current, total)) if !text.is_empty() => {
+                format!("  {}", match_text(current, total))
+            }
+            _ => String::new(),
+        };
+        return format!(" {mark}{text}{count} ");
+    }
+    let mode = match p.mode {
+        "visual" => " · VISUAL",
+        "visual_line" => " · VISUAL LINE",
+        "visual_block" => " · VISUAL BLOCK",
+        _ => "",
+    };
+    let mut out = format!(" COPY{mode} · {}/{}", p.row, p.total);
+    if let Some((pattern, current, total)) = p.search {
+        out.push_str(&format!(" · /{pattern} {}", match_text(current, total)));
+    }
+    if !p.pending.is_empty() {
+        out.push_str(&format!(" · {}…", p.pending));
+    }
+    out.push(' ');
+    out
+}
+
+fn match_text(current: Option<usize>, total: usize) -> String {
+    let total = if total >= copy_mode::MAX_COUNT {
+        format!("{}+", copy_mode::MAX_COUNT)
+    } else {
+        total.to_string()
+    };
+    match current {
+        Some(n) => format!("{n}/{total}"),
+        None => format!("-/{total}"),
+    }
+}
+
+impl App {
+    /// The matches and the status bar of copy mode in the active pane (empty when copy mode is off).
+    pub(super) fn copy_marks(&self) -> CopyMarks {
+        let Some(running) = &self.running else {
+            return CopyMarks::default();
+        };
+        let Some(id) = running.mux.input_pane() else {
+            return CopyMarks::default();
+        };
+        let Some(pane) = running.panes.get(&id) else {
+            return CopyMarks::default();
+        };
+        if !pane.session.with_term(copy_mode::is_active) {
+            return CopyMarks::default();
+        }
+        let bar = self.config.config.copy_mode.status_bar;
+        let prompt = self
+            .copy_input
+            .prompt
+            .as_ref()
+            .map(|input| input.line_with_cursor('▏'));
+        pane.session.with_copy(|term, _, state| {
+            let (list, current) = state.visible_matches(term);
+            let matches = list.iter().map(|m| (*m.start(), *m.end())).collect();
+            let status = bar.then(|| {
+                let count = state.match_count(term);
+                let (row, total) = copy_mode::cursor_row(term);
+                let text = copy_status(&StatusParts {
+                    mode: state.mode(),
+                    row,
+                    total,
+                    search: state
+                        .search_pattern()
+                        .zip(count)
+                        .map(|(p, (c, t))| (p, c, t)),
+                    prompt: prompt
+                        .clone()
+                        .map(|t| (if state.prompt_forward() { '/' } else { '?' }, t)),
+                    pending: &state.pending,
+                });
+                let columns = term.columns();
+                let text: String = text.chars().take(columns).collect();
+                let width = text.chars().count();
+                (text, columns - width, term.screen_lines() - 1)
+            });
+            CopyMarks {
+                pane: Some(id),
+                matches,
+                current,
+                status,
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parts() -> StatusParts<'static> {
+        StatusParts {
+            mode: "normal",
+            row: 120,
+            total: 3400,
+            search: None,
+            prompt: None,
+            pending: "",
+        }
+    }
+
+    #[test]
+    fn the_status_bar_text() {
+        assert_eq!(copy_status(&parts()), " COPY · 120/3400 ");
+        let visual = StatusParts {
+            mode: "visual_line",
+            search: Some(("error", Some(3), 9)),
+            ..parts()
+        };
+        assert_eq!(
+            copy_status(&visual),
+            " COPY · VISUAL LINE · 120/3400 · /error 3/9 "
+        );
+        let pending = StatusParts {
+            pending: "i",
+            search: Some(("x", None, 1000)),
+            ..parts()
+        };
+        assert_eq!(copy_status(&pending), " COPY · 120/3400 · /x -/1000+ · i… ");
+    }
+
+    #[test]
+    fn the_status_bar_while_typing_a_search() {
+        let typing = StatusParts {
+            prompt: Some(('?', "err▏".into())),
+            search: Some(("err", Some(2), 5)),
+            ..parts()
+        };
+        assert_eq!(copy_status(&typing), " ?err▏  2/5 ");
+        let empty = StatusParts {
+            prompt: Some(('/', "▏".into())),
+            ..parts()
+        };
+        assert_eq!(copy_status(&empty), " /▏ ");
+    }
+}
