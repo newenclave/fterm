@@ -2,6 +2,7 @@
 //! This crate has no window or GPU code, so it is easy to test.
 
 pub mod colors;
+pub mod copy_keys;
 pub mod keys;
 pub mod l10n;
 pub mod load;
