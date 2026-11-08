@@ -38,6 +38,10 @@ cargo test -p fterm-mux layout::            # tests whose path matches a filter
   short sentences, common words. Match that style when you edit them.
 - Tests must pass on all three CI systems: no hard-coded Windows paths, and tests that need system fonts
   (emoji, CJK) skip themselves when the font is missing. Font tests use `Fonts::embedded_only`.
+- **No English literals in UI text.** Use `tr!("key", name = value)` / `trn!("key", n)` (`fterm-config/src/l10n.rs`)
+  and add the key to `assets/l10n/en.json`. Tests fail when a key in the code is missing from `en.json`, when a
+  key in `en.json` is unused, or when a `notify(` call has a literal text.
+- **No color values in render code** except `fterm-render/src/theme.rs`: take UI colors by role from the theme.
 
 ## Architecture
 
@@ -45,16 +49,17 @@ Read `docs/ARCHITECTURE.md` for detail. The big picture:
 
 | Crate | Role |
 |---|---|
-| `fterm-term` | pty session (own ConPTY on Windows), our pty read/write loop (`io_loop.rs`), OSC scanner, sticky selection, copy mode. No GPU, so it is tested with real processes. |
-| `fterm-mux` | Pure model: tabs, pane tree (`Layout` of `Pane`/`Split`), rects, neighbors, zoom. |
-| `fterm-config` | Runs `fterm.lua` in sandboxed Luau (`mlua`); settings, colors, profiles, keymap. `sample.lua` is the default config. |
+| `fterm-term` | pty session (own ConPTY on Windows), our pty read/write loop (`io_loop.rs`), OSC scanner, pictures (OSC 1337), links (URLs, OSC 8), sticky selection, copy mode, the pane palette and `harmonize.rs` (fits program colors to the theme). Also remote sessions (`Session::remote`) and `snapshot.rs` (a Term as escape bytes) for the mux server. No GPU, so it is tested with real processes. |
+| `fterm-mux` | Pure model: workspaces, tabs, pane tree (`Layout` of `Pane`/`Split`), rects, neighbors, zoom, overlays, the scratch shell, companions. |
+| `fterm-config` | Runs `fterm.lua` in sandboxed Luau (`mlua`); settings, themes (`theme.rs`), UI languages (`l10n.rs`), profiles, keymap (`keys.rs`), copy mode keys (`copy_keys.rs`). `sample.lua` is the default config. |
 | `fterm-render` | wgpu renderer: glyph atlases (mask + color), builtin box/Braille glyphs, tab bar, dock, toasts, overlays. One draw call per frame. |
 | `fterm-history` | Command/folder history in JSON-lines files shared by many windows (append-only writes). |
 | `fterm-scene` | Braille canvas: draw ops and plots for scene panes. |
 | `fterm-api` | JSON-RPC 2.0 over a local socket (named pipe / unix socket); server, client, discovery (`instances/<pid>.json`), the agent guide. |
+| `fterm-server` | The mux server (`fterm --mux-server`, `ftermctl mux serve`): programs of mux panes live there and go on when the window closes; its client for the window. See `docs/MUX.md`. |
 | `fterm-ai` | Streaming clients for the AI panel (Anthropic, OpenAI-like, Ollama), SSE parsing. |
-| `fterm` | The app: winit event loop, wires everything. `app.rs` is the core; `app/*_calls.rs` handle API/AI/session calls. |
-| `ftermctl` | Console CLI and the stdio MCP server (`ftermctl mcp`) that talk to a running window over the API socket. |
+| `fterm` | The app: winit event loop, wires everything. `app.rs` is the core; `app/*_calls.rs` group the app by feature (API, AI, session, review, mux, workspaces, links, overlays, companions, copy mode, dashboard, picture markup, agents, recent panes). Pure models with tests next to it: `ai_chat.rs`, `review.rs`, `panels.rs`, `themes.rs`, `link_open.rs`, `dashboard.rs`, `markup.rs`, `agent_info.rs`, `recent.rs`. |
+| `ftermctl` | Console CLI and the stdio MCP server (`ftermctl mcp`) that talk to a running window over the API socket; `ftermctl review --hook`, `agent-event --hook`, `agent-session --hook`, and `statusline` are what Claude Code runs; `ftermctl mux serve` and `mux proxy` run the mux server on another machine (reached over SSH). |
 
 Key flows that span files:
 
@@ -71,5 +76,15 @@ Key flows that span files:
   the handler in `fterm/src/app/api_calls.rs`, the CLI in `ftermctl/src/cli.rs` (+ output in `main.rs`),
   the MCP tool in `ftermctl/src/mcp.rs`, and the docs `docs/API.md`, `docs/MCP.md`, and
   `assets/agents/GUIDE.md` (the guide shipped to agents and installed as a Claude Code skill).
+- **Special panes:** a scene pane (`Pane::scene`, also the dashboard), a Review tab (`Pane::review`), and a picture
+  pane (`Pane::picture_pane`) have no program; the app draws their model and gives them the keys.
+- **Panes outside the layout tree:** overlays, the scratch shell, and companions are in `Mux` next to the `Layout`.
+  Code that walks the panes of a tab must not assume that the tree has them all.
+- **Slow API calls** (`wait_for`, `screenshot`, `ai_ask` with `wait`, `review`, `show_image` with `wait`, `spawn` of
+  an overlay with `wait`) branch off in `api_call` before
+  `api_dispatch`, keep `ApiRequest::reply`, and answer later; add a long call to `timeout_for` in `api.rs` too.
+- **Mux panes:** the server runs the program in a normal `Session` (with a `tap` on its output); the window keeps
+  its own copy of the `Term` through `Session::remote`, fed with a snapshot on attach and then the raw output.
+  So window features (selection, links, agent states) work the same for local and mux panes.
 - **Frame building** (`fterm-render/src/frame.rs`) turns cells into quads with no GPU code, so it is unit-tested;
   `renderer.rs` composes `FrameParts` (tab bar, panes, dock, toasts, palette, message box).

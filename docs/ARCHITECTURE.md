@@ -4,16 +4,17 @@
 
 | Crate | What it does | GPU? |
 |---|---|---|
-| `fterm-term` | Runs the shell in a pty. Keeps the text grid. Colors. Grid size. | No |
-| `fterm-mux` | Tabs and the tree of panes in each tab. A pure model. | No |
-| `fterm-config` | The Luau config: settings, colors, profiles, key bindings, Lua functions. | No |
+| `fterm-term` | Runs the shell in a pty. Keeps the text grid. Colors. Grid size. Links. Pictures (OSC 1337). Remote sessions and snapshots for the mux server. | No |
+| `fterm-mux` | Workspaces, tabs, the tree of panes in each tab, overlays, the scratch shell, and companions. A pure model. | No |
+| `fterm-config` | The Luau config: settings, themes, languages (l10n), profiles, key bindings, Lua functions. | No |
 | `fterm-render` | Font, glyph atlas, tab bar, and drawing with wgpu. | Yes |
 | `fterm-history` | The history of commands and folders (JSON lines files). | No |
 | `fterm-scene` | Braille scenes: a canvas of dots, draw commands, and charts. | No |
 | `fterm-api` | The local API: JSON-RPC over a socket, the server, the client, finding windows, the guide for agents. | No |
+| `fterm-server` | The mux server (panes that live on) and its client: frames and messages on a socket. | No |
 | `fterm-ai` | The AI clients (Anthropic, OpenAI-like) with streamed answers. | No |
 | `fterm` | The app: window, keys, events. It connects the other crates. | Yes |
-| `ftermctl` | A console program: the CLI for the API, and the MCP server (`ftermctl mcp`). | No |
+| `ftermctl` | A console program: the CLI for the API, the MCP server (`ftermctl mcp`), and the mux server on other machines (`ftermctl mux serve\|proxy`). | No |
 
 `fterm-term` has no GPU and no window code. So we can test it with real
 processes and real escape codes.
@@ -53,6 +54,13 @@ processes and real escape codes.
 - `fterm-mux::Mux` keeps the tabs. Each tab has a `Layout`: a tree of panes (`Pane` or `Split`).
   A split has a direction (right or down) and a ratio. `Layout` gives the rects of the panes,
   the dividers (for drawing and for the mouse), and the neighbor of a pane (for Alt + arrows).
+- Workspaces: `Mux` keeps its tabs in `Workspace`s (a name and tabs; the first is `main`). The index methods
+  (`tabs`, `select`, `cycle`, ...) work on the tabs of the current workspace; the methods with a pane or a tab id
+  find it in any workspace. `app/workspace_calls.rs` has the list, the keys, and the name in the tab bar.
+- Some panes are not in the tree. `Tab::overlay` is a box over a pane, `Mux` also keeps the window overlay and
+  the scratch shell (a drop-down shell), and `Tab::companions` are strips of a pane that close with it. A hidden one
+  keeps its program. `app/overlay_calls.rs` and `app/companion_calls.rs` have their keys and their API.
+- `app/recent_calls.rs` and `recent.rs` keep the recent panes (Alt+\`, Ctrl+Shift+H).
 - Zoom: `Tab::zoomed` shows one pane in the whole tab area; the tree does not change.
 - Tab color: `Tab::color` (RGB or none). A profile (`tab_color`), Lua (`fterm.set_tab_color`), the API
   (`set_tab_color`), and the escape sequence `777;fterm-tab;color` all go to `App::set_tab_color`.
@@ -108,14 +116,26 @@ processes and real escape codes.
   other clients. It knows `subscribe` / `unsubscribe` itself; the app answers all other methods.
 - A client thread sends each call to the event loop (`fterm/src/api.rs`, `UserEvent::Api`) and waits for the
   answer. Most methods answer at once (`app/api_calls.rs`, `api_dispatch`). The slow ones keep the reply
-  and answer later: `wait_for` (`App::waits`), `screenshot` (at the next frame), and `ai_ask` with `wait`
-  (`App::ai_waits`, at the end of the AI answer). A timer sends a timeout to old waits.
+  and answer later: `wait_for` (`App::waits`), `screenshot` (at the next frame), `ai_ask` with `wait`
+  (`App::ai_waits`, at the end of the AI answer), and `review` (when the user ends the review). A timer sends
+  a timeout to old waits.
 - Reading or typing into a pane of somebody else, `spawn`, and reading the AI chat need a yes from the user
   (`access.rs`). `ai_ask` also needs `ai.api_access` in the config: it costs the user's money.
 - Each window writes `instances/<pid>.json` with its socket, and every pane gets `FTERM_SOCKET`.
   So `ftermctl` and `ftermctl mcp` find the right window.
 - MCP clients (Claude Code, OpenCode) speak stdio, not pipes: `ftermctl mcp` is a small process between them
   and the pipe.
+
+## Agents and Claude Code
+
+- `agent.rs` keeps the state of the agent of each pane (the tab dots). `agent_info.rs` (pure) keeps what it does:
+  its steps, its question, its todos, the changed files, and the cost.
+- The data comes from Claude Code: the hooks run `ftermctl agent-event --hook` (API `agent_event`) and
+  `ftermctl agent-session --hook` (API `agent_session`), and `ftermctl statusline` wraps the status line (API
+  `agent_usage`). `claude_hooks.rs` installs them.
+- `agent_session` gives each pane its conversation, so a restored pane gets `claude --resume <id>`.
+- `agent_history.rs` reads the past conversations of a folder: our `agents.jsonl` and the files of Claude Code (read
+  only). `app/agent_calls.rs` shows the list (H in the Agents panel).
 
 ## The AI panel
 - `ai_chat.rs` is the model: the turns, the input, the context chips. It has no drawing and no network.
@@ -124,14 +144,48 @@ processes and real escape codes.
   `UserEvent::Ai(id, event)`. At its end, `ai_event` sends the API event `ai_answer`.
 - There is one chat in each window. Only one answer runs at a time.
 
-## Colors
+## Colors and themes
 
-- `fterm-term/src/colors.rs` has the palette: 16 colors (Catppuccin Mocha), the 256-color table,
-  and the default fg, bg, and cursor.
-- Apps can change colors (OSC 4, 10, 11). These changes win over the palette.
+- `fterm-term/src/colors.rs` has the palette of a pane: 16 colors, the 256-color table, and the default fg,
+  bg, and cursor. The theme in use gives them (the default is Catppuccin Mocha).
+- Apps can change colors (OSC 4, 10, 11). These changes win over the palette (`palette_changes = false`
+  in the config or a profile turns them off).
+- `fterm-config/src/theme.rs` reads a theme: JSON (a file in a `themes` folder, a string, or a Lua table)
+  or a Windows Terminal color scheme. The UI colors are roles (`accent`, `surface`, `text_dim`, …); a role
+  that the theme does not give is made from the terminal colors. Built-in themes are in `assets/themes`.
+- `fterm/src/themes.rs` picks the theme: a theme set while fterm runs (palette, `set_theme`) wins over the
+  config; `theme = { light, dark }` follows the system. It gives the colors to every pane and to the renderer.
+- `fterm-render/src/theme.rs` is the only file of the renderer with color values. All other render code takes
+  the UI colors from it by role.
+- Harmonize (`fterm-term/src/harmonize.rs`): colors that programs choose themselves (truecolor, the 256-color
+  cube) move toward the theme in Oklab (hue and chroma to the nearest theme color, lightness kept as a
+  distance from the background), then get at least `min_contrast`. The settings come from the theme, and
+  `harmonize` in the config changes them. `Palette::set_harmonize` turns it on for a pane; a profile can turn
+  it off (`harmonize = false`).
 - The surface is sRGB, so we send linear colors to the GPU (`fterm-render/src/color.rs`).
 - Text gamma: font glyph alpha goes through `text_alpha` (alpha^(1/1.45)), so light text on a dark
   background does not look thin. Builtin chars do not use it (their edges are exact).
+
+## Languages (l10n)
+
+- `fterm-config/src/l10n.rs`: the texts of the UI by key. English is built in (`assets/l10n/en.json`);
+  another language is a JSON file with the same keys (`language` in the config). A missing key stays English.
+  A text can have plural forms (`one`, `few`, `many`, `other`).
+- The code takes every UI text with `tr!("key", name = value)` or `trn!("key", n)`. Tests check that each key
+  in the code is in `en.json`, that each key of `en.json` is used, and that `notify(` calls have no English
+  literals.
+
+## The Review tab
+
+- `fterm/src/review.rs` is the model (no window code): items from markdown or from a list, each one marked
+  Ok, commented, changed, added, or removed, and the result for the agent. The app draws it into the grid of
+  a pane (`Pane::review`), like a scene, and gives it the keys.
+- `app/review_calls.rs`: the API method `review` opens the tab and keeps the reply until the user ends the
+  review. `plan_review` in the config (and a question, R or Esc) decides if a plan of Claude Code plan mode
+  opens.
+- The plan mode hook is `ftermctl review --hook` (a `PreToolUse` hook for `ExitPlanMode`;
+  `ftermctl/src/review.rs`): approved = allow, changes = deny with the feedback, cancelled = Claude's own dialog.
+  `fterm/src/claude_hooks.rs` merges the fterm hooks into the Claude Code `settings.json` (palette action).
 
 ## Fonts
 
@@ -165,6 +219,56 @@ processes and real escape codes.
   `fterm-config/src/copy_keys.rs` (chars with their case, two-key bindings); `app/copy_calls.rs` reads the keys, the
   search prompt, and Lua actions.
 - Limit: when the history is full (10 000 lines) and output is very fast, a restored selection can move by a few lines.
+
+## Pictures
+
+See [PICTURES.md](PICTURES.md).
+
+- `osc.rs` finds `OSC 1337;File=` and hides its body from the alacritty parser, which would keep a copy of
+  megabytes. The pty loop decodes the picture (`fterm-term/src/picture.rs`) and marks its top-left cell with a
+  hidden link (`fterm-picture:<id>`). So the picture moves with the text.
+- `pictures.rs` keeps the pictures of a pane by that id. It drops one when its mark leaves the grid, or when the
+  pictures take too much memory.
+- `fterm-render/src/picture.rs` finds where each picture goes, with no GPU code. The frame has layers, so a picture
+  is drawn above the quads of its layer and an overlay still covers it.
+- A picture pane (`Pane::picture_pane`) has no program; the picture fills it. `markup.rs` is the pure model of
+  the drawing on it, and `app/markup_calls.rs` has the mouse, the keys, and `show_image` with `wait`.
+
+## The dashboard
+
+`dashboard.rs` (pure) makes the tiles (panes, command output, buttons, tiles from the API) into scene commands.
+`app/dashboard_calls.rs` draws them in a scene pane and gives the keys and clicks to the tiles. `runner.rs` runs the
+commands of the config in the background.
+
+## Mux panes (panes that live on)
+
+The programs of mux panes run in the mux server (`fterm-server`), not in the window. See [MUX.md](MUX.md).
+
+- The local server is `fterm --mux-server` (started in the background by the first mux pane). A server on
+  another machine is `ftermctl mux serve` there; the window reaches it with a command (`ssh ... ftermctl mux
+  proxy`), and `ftermctl mux proxy` joins its stdin and stdout to that server.
+- On the socket: frames `[u32 length][u8 kind][payload]` (`frame.rs`). Control messages are JSON (`proto.rs`:
+  spawn, attach, detach, close, list, stop, set/get layout); the output and the keys of a pane are raw bytes.
+- The server runs each program in a normal `Session`, with `SessionOptions::tap` to get its output bytes.
+  Its own `Term` answers the terminal queries of the program.
+- The window keeps its own copy of the `Term`: `Session::remote` sends the keys and the sizes over a
+  `RemoteLink` and parses the bytes that come into its `RemoteFeed`. On attach the server first sends a snapshot
+  (`fterm-term/src/snapshot.rs`: the screen, the history, the cursor, and the modes as escape bytes), then the
+  output. So selection, links, copy mode, shell integration, and agent states work as in a local pane.
+- One window shows a pane at a time: a new attach takes the pane over.
+- The window saves the layout of its tabs (tabs, splits, workspaces) in the server. At start,
+  `reattach_mux` brings back the panes that no window shows in that layout.
+- `app/mux_calls.rs` has all of this on the window side: which pane is a mux pane (`mux`, a profile's `mux`
+  or `remote`), the connection on its own thread with a box to cancel it, "Connect over SSH…", and stop.
+
+## Links
+
+- `fterm-term/src/links.rs` finds URLs in the text (also wrapped to the next line) and OSC 8 links. Each link
+  knows its cells.
+- `app/link_calls.rs`: Ctrl + click, the underline and the hand cursor while Ctrl is down, the hint labels
+  (`open_link_hints`), and the question before a risky link.
+- `link_open.rs` (pure, with tests) decides: open at once, ask first (a file, or OSC 8 text that does not show
+  its URL), or never (a scheme that is not http, https, ftp, mailto, or file).
 
 ## Known limits
 
