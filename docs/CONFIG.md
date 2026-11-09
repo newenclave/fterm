@@ -405,7 +405,8 @@ and the mouse only works on the toast itself:
 - a click goes to its tab and pane;
 - `×` closes it.
 
-Info and success toasts hide after 4 s, warnings after 8 s, errors and "attention" stay until you close them.
+By default, info and success toasts hide after 4 s, warnings after 8 s, and errors after 30 s. "Attention"
+(for example, an agent waits for you) stays until you close it. `timeouts` changes this for each level.
 
 ```lua
 notifications = {
@@ -417,6 +418,9 @@ notifications = {
   long_command = 10,            -- seconds; 0 = no "command finished" notifications
   bell = "ignore",              -- "notify" = the bell makes a notification
   flash = true,                 -- flash the taskbar for "attention" when fterm is not in front
+  timeouts = {                  -- seconds that a toast stays; false = until you close it
+    info = 4, success = 4, warning = 8, error = 30, attention = false,
+  },
 },
 ```
 

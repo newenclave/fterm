@@ -6,6 +6,14 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 
 ## [Unreleased]
 
+### Added
+- **How long toasts stay, for each level:** `notifications = { timeouts = { error = 30, attention = 120 } }`.
+  A number is seconds; `false` means "until you close it". See [docs/CONFIG.md](docs/CONFIG.md#notifications).
+
+### Changed
+- **Error toasts hide after 30 seconds now** (before, they stayed until you closed them). They are still in the
+  Events panel. "Attention" toasts (an agent waits for you) still stay until you close them.
+
 ## [0.3.0] - 2026-11-05
 
 ### Added

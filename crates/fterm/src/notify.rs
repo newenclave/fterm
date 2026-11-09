@@ -19,15 +19,6 @@ pub enum Level {
 }
 
 impl Level {
-    /// How long a toast stays. `None` = until the user closes it.
-    pub fn timeout(self) -> Option<Duration> {
-        match self {
-            Level::Info | Level::Success => Some(Duration::from_secs(4)),
-            Level::Warning => Some(Duration::from_secs(8)),
-            Level::Error | Level::Attention => None,
-        }
-    }
-
     pub fn name(self) -> &'static str {
         match self {
             Level::Info => "info",
@@ -133,6 +124,8 @@ pub struct Center {
     next_id: u64,
     pub max_toasts: usize,
     pub toasts_on: bool,
+    /// How long a toast of each level stays (`notifications.timeouts`); `None` = until closed.
+    timeouts: fterm_config::load::ToastTimeouts,
 }
 
 impl Center {
@@ -143,7 +136,18 @@ impl Center {
             next_id: 0,
             max_toasts,
             toasts_on,
+            timeouts: Default::default(),
         }
+    }
+
+    /// The times of the config. Toasts on the screen keep their timers.
+    pub fn set_timeouts(&mut self, timeouts: &fterm_config::load::ToastTimeouts) {
+        self.timeouts = *timeouts;
+    }
+
+    /// How long a toast of `level` stays. `None` = until the user closes it.
+    fn timeout(&self, level: Level) -> Option<Duration> {
+        self.timeouts.get(level.name()).map(Duration::from_secs_f64)
     }
 
     /// Adds a notification. With `toast`, it also shows as a toast. Returns its id.
@@ -174,7 +178,7 @@ impl Center {
         if toast && self.toasts_on && self.max_toasts > 0 {
             self.toasts.push(Toast {
                 id,
-                hide_at: level.timeout().map(|t| now + t),
+                hide_at: self.timeout(level).map(|t| now + t),
                 paused_left: None,
             });
             let extra = self.toasts.len().saturating_sub(self.max_toasts);
@@ -213,13 +217,17 @@ impl Center {
     /// New text for a notification that is still in the history, and its toast again with a new timer.
     /// `false` = it is gone.
     pub fn update(&mut self, id: u64, now: Instant, title: &str, body: &str) -> bool {
+        let timeout = match self.history.iter().find(|n| n.id == id) {
+            Some(n) => self.timeout(n.level),
+            None => return false,
+        };
         let Some(n) = self.history.iter_mut().find(|n| n.id == id) else {
             return false;
         };
         n.title = title.to_owned();
         n.body = body.to_owned();
         n.time = now;
-        let hide_at = n.level.timeout().map(|t| now + t);
+        let hide_at = timeout.map(|t| now + t);
         match self.toasts.iter_mut().find(|t| t.id == id) {
             Some(toast) => {
                 toast.hide_at = hide_at;
@@ -313,6 +321,52 @@ mod tests {
     }
 
     #[test]
+    fn errors_hide_after_30_s_and_attention_stays_by_default() {
+        let mut center = Center::new(4, true);
+        let t0 = Instant::now();
+        push(&mut center, t0, "err", Level::Error);
+        push(&mut center, t0, "wait", Level::Attention);
+        center.tick(t0 + Duration::from_secs(29));
+        assert_eq!(toast_titles(&center), ["err", "wait"]);
+        center.tick(t0 + Duration::from_secs(31));
+        assert_eq!(toast_titles(&center), ["wait"]);
+        center.tick(t0 + Duration::from_secs(3600));
+        assert_eq!(
+            toast_titles(&center),
+            ["wait"],
+            "attention stays until closed"
+        );
+    }
+
+    #[test]
+    fn the_config_sets_the_time_of_each_level() {
+        let mut center = Center::new(4, true);
+        center.set_timeouts(&fterm_config::load::ToastTimeouts {
+            info: None,
+            attention: Some(60.0),
+            warning: Some(1.5),
+            ..Default::default()
+        });
+        let t0 = Instant::now();
+        push(&mut center, t0, "info", Level::Info);
+        push(&mut center, t0, "warn", Level::Warning);
+        push(&mut center, t0, "wait", Level::Attention);
+        assert_eq!(
+            center.next_deadline(),
+            Some(t0 + Duration::from_millis(1500))
+        );
+        center.tick(t0 + Duration::from_secs(2));
+        assert_eq!(toast_titles(&center), ["info", "wait"]);
+        center.tick(t0 + Duration::from_secs(61));
+        assert_eq!(toast_titles(&center), ["info"], "info = until closed now");
+        // A new text gives the toast a new timer of its level.
+        let id = push(&mut center, t0, "wait2", Level::Attention);
+        assert!(center.update(id, t0 + Duration::from_secs(100), "wait2", "again"));
+        center.tick(t0 + Duration::from_secs(150));
+        assert_eq!(toast_titles(&center), ["info", "wait2"]);
+    }
+
+    #[test]
     fn a_notification_goes_into_the_history_and_a_toast() {
         let mut center = Center::new(4, true);
         let now = Instant::now();
@@ -359,8 +413,8 @@ mod tests {
         assert_eq!(toast_titles(&center), ["warn", "error"]);
         center.tick(t0 + Duration::from_secs(9));
         assert_eq!(toast_titles(&center), ["error"]);
-        center.tick(t0 + Duration::from_secs(3600));
-        assert_eq!(toast_titles(&center), ["error"], "errors stay until closed");
+        center.tick(t0 + Duration::from_secs(31));
+        assert!(toast_titles(&center).is_empty(), "errors hide after 30 s");
     }
 
     #[test]

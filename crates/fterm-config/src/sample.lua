@@ -82,6 +82,8 @@ return {
 
   -- Toasts and OS notifications. OS notifications are off: they can be annoying.
   -- notifications = { toasts = "bottom_right", os = false, long_command = 10 },
+  -- How long toasts stay, in seconds (false = until you close them):
+  -- notifications = { timeouts = { info = 4, warning = 8, error = 30, attention = false } },
 
   -- The AI panel (Ctrl+Shift+I) and "Explain the last error" (Ctrl+Shift+Y). See docs/AI.md.
   -- The key: the command palette -> "Set the AI key" (or the env var ANTHROPIC_API_KEY).

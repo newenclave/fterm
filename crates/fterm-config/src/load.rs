@@ -443,6 +443,101 @@ pub struct NotificationConfig {
     pub bell: bool,
     /// Flash the taskbar for "attention" when the window is not in front.
     pub flash: bool,
+    /// How long the toasts of each level stay.
+    pub timeouts: ToastTimeouts,
+}
+
+/// Seconds that a toast of each level stays on the screen; `None` = until the user closes it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToastTimeouts {
+    pub info: Option<f64>,
+    pub success: Option<f64>,
+    pub warning: Option<f64>,
+    pub error: Option<f64>,
+    pub attention: Option<f64>,
+}
+
+impl Default for ToastTimeouts {
+    fn default() -> Self {
+        Self {
+            info: Some(4.0),
+            success: Some(4.0),
+            warning: Some(8.0),
+            error: Some(30.0),
+            attention: None,
+        }
+    }
+}
+
+/// The levels of `notifications.timeouts`, in this order.
+pub const TOAST_LEVELS: [&str; 5] = ["info", "success", "warning", "error", "attention"];
+
+impl ToastTimeouts {
+    /// The time of a level by its name (`None` for an unknown name or "until closed").
+    pub fn get(&self, level: &str) -> Option<f64> {
+        self.slot(level).and_then(|s| *s)
+    }
+
+    fn slot(&self, level: &str) -> Option<&Option<f64>> {
+        Some(match level {
+            "info" => &self.info,
+            "success" => &self.success,
+            "warning" => &self.warning,
+            "error" => &self.error,
+            "attention" => &self.attention,
+            _ => return None,
+        })
+    }
+
+    fn slot_mut(&mut self, level: &str) -> Option<&mut Option<f64>> {
+        Some(match level {
+            "info" => &mut self.info,
+            "success" => &mut self.success,
+            "warning" => &mut self.warning,
+            "error" => &mut self.error,
+            "attention" => &mut self.attention,
+            _ => return None,
+        })
+    }
+}
+
+/// `notifications.timeouts = { error = 30, attention = false }`: seconds, or `false` = until closed.
+fn toast_timeouts(table: &Table) -> Result<ToastTimeouts, String> {
+    let mut t = ToastTimeouts::default();
+    for pair in table.pairs::<Value, Value>() {
+        let (key, value) = pair.map_err(|err| format!("notifications.timeouts: {err}"))?;
+        let name = match &key {
+            Value::String(name) => name.to_string_lossy(),
+            other => {
+                return Err(format!(
+                    "notifications.timeouts: the keys are level names, got {}",
+                    other.type_name()
+                ));
+            }
+        };
+        let path = format!("notifications.timeouts.{name}");
+        let Some(slot) = t.slot_mut(&name) else {
+            return Err(format!(
+                "{path}: `{name}` is not a level; the levels are {}",
+                TOAST_LEVELS.join(", ")
+            ));
+        };
+        *slot = match value {
+            Value::Boolean(false) => None,
+            Value::Integer(n) if n > 0 => Some(n as f64),
+            Value::Number(n) if n > 0.0 => Some(n),
+            Value::Integer(_) | Value::Number(_) => {
+                return Err(format!("{path}: must be more than 0 seconds (or false)"));
+            }
+            other => {
+                return Err(format!(
+                    "{path}: expected seconds or false, got {}",
+                    other.type_name()
+                ));
+            }
+        };
+    }
+    Ok(t)
 }
 
 impl Default for NotificationConfig {
@@ -455,6 +550,7 @@ impl Default for NotificationConfig {
             long_command: 10.0,
             bell: false,
             flash: true,
+            timeouts: ToastTimeouts::default(),
         }
     }
 }
@@ -2508,6 +2604,9 @@ fn notifications(table: &Table) -> Result<NotificationConfig, String> {
             ));
         }
     }
+    if let Some(t) = table_field(table, "timeouts", "notifications.timeouts")? {
+        n.timeouts = toast_timeouts(&t)?;
+    }
     if let Some(count) = number_field(table, "max_visible", "notifications.max_visible")? {
         n.max_visible = count.max(0.0) as usize;
     }
@@ -2854,6 +2953,52 @@ mod tests {
             Ok(_) => panic!("no error"),
             Err(err) => err,
         }
+    }
+
+    #[test]
+    fn toast_timeouts_from_the_config() {
+        let t = load("return {}").config.notifications.timeouts;
+        assert_eq!(
+            t,
+            ToastTimeouts {
+                info: Some(4.0),
+                success: Some(4.0),
+                warning: Some(8.0),
+                error: Some(30.0),
+                attention: None,
+            },
+            "the defaults"
+        );
+        let t = load(
+            r#"return { notifications = { timeouts = { info = 2, error = false, attention = 120 } } }"#,
+        )
+        .config
+        .notifications
+        .timeouts;
+        assert_eq!(t.info, Some(2.0));
+        assert_eq!(t.error, None, "false = until closed");
+        assert_eq!(t.attention, Some(120.0));
+        assert_eq!(
+            t.warning,
+            Some(8.0),
+            "a level that is not set keeps its default"
+        );
+        assert_eq!(t.get("attention"), Some(120.0));
+        assert_eq!(t.get("nope"), None);
+    }
+
+    #[test]
+    fn bad_toast_timeouts_say_where() {
+        let bad = |src: &str| {
+            error(&format!(
+                "return {{ notifications = {{ timeouts = {src} }} }}"
+            ))
+        };
+        assert!(bad("{ error = \"x\" }").contains("notifications.timeouts.error"));
+        assert!(bad("{ error = true }").contains("false"));
+        assert!(bad("{ info = 0 }").contains("notifications.timeouts.info"));
+        assert!(bad("{ fatal = 5 }").contains("fatal"));
+        assert!(bad("5").contains("notifications.timeouts"));
     }
 
     #[test]

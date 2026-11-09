@@ -776,6 +776,7 @@ impl App {
         let n = &self.config.config.notifications;
         self.center.max_toasts = n.max_visible;
         self.center.toasts_on = n.toasts.is_some();
+        self.center.set_timeouts(&n.timeouts);
     }
 
     /// Makes a notification: the Lua filter, then the history and a toast, and maybe an OS notification.
