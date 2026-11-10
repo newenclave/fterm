@@ -175,12 +175,13 @@ processes and real escape codes.
   in the code is in `en.json`, that each key of `en.json` is used, and that `notify(` calls have no English
   literals.
 
-## The Review tab
+## The Review
 
 - `fterm/src/review.rs` is the model (no window code): items from markdown or from a list, each one marked
   Ok, commented, changed, added, or removed, and the result for the agent. The app draws it into the grid of
-  a pane (`Pane::review`), like a scene, and gives it the keys.
-- `app/review_calls.rs`: the API method `review` opens the tab and keeps the reply until the user ends the
+  a pane (`Pane::review`), like a scene, and gives it the keys. The pane is an overlay over the pane of the
+  agent, a split next to it, or a tab after its tab (`plan_review.place`).
+- `app/review_calls.rs`: the API method `review` opens the Review at the pane of the agent and keeps the reply until the user ends the
   review. `plan_review` in the config (and a question, R or Esc) decides if a plan of Claude Code plan mode
   opens.
 - The plan mode hook is `ftermctl review --hook` (a `PreToolUse` hook for `ExitPlanMode`;

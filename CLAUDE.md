@@ -76,7 +76,7 @@ Key flows that span files:
   the handler in `fterm/src/app/api_calls.rs`, the CLI in `ftermctl/src/cli.rs` (+ output in `main.rs`),
   the MCP tool in `ftermctl/src/mcp.rs`, and the docs `docs/API.md`, `docs/MCP.md`, and
   `assets/agents/GUIDE.md` (the guide shipped to agents and installed as a Claude Code skill).
-- **Special panes:** a scene pane (`Pane::scene`, also the dashboard), a Review tab (`Pane::review`), and a picture
+- **Special panes:** a scene pane (`Pane::scene`, also the dashboard), a Review (`Pane::review`), and a picture
   pane (`Pane::picture_pane`) have no program; the app draws their model and gives them the keys.
 - **Panes outside the layout tree:** overlays, the scratch shell, and companions are in `Mux` next to the `Layout`.
   Code that walks the panes of a tab must not assume that the tree has them all.
