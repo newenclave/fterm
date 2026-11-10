@@ -256,7 +256,7 @@ impl App {
                     PromptFor::Overlay => self.open_overlay(Some(command), None, None).map(|_| ()),
                     // No command: the shell.
                     PromptFor::Companion => self
-                        .open_companion((!command.is_empty()).then_some(command), None)
+                        .open_companion((!command.is_empty()).then_some(command), None, false)
                         .map(|_| ()),
                 };
                 if let Err(err) = opened {

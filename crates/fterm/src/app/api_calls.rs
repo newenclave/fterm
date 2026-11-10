@@ -1045,6 +1045,7 @@ impl App {
     /// `spawn` with `place: "companion"`: `command` (or a shell) as a companion of `pane` (default: the active one).
     fn api_spawn_companion(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
         let command = str_param(params, "command")?;
+        // The owner: `pane`, else the pane of the caller (an agent: its own pane), else the active one.
         let owner = pane_param(params, "pane")?.map(PaneId);
         if let Some(owner) = owner {
             let running = self.running.as_ref().expect("checked in api_call");
@@ -1053,14 +1054,19 @@ impl App {
             }
         }
         // A companion of a companion belongs to its owner.
-        let owner = owner.map(|o| {
-            let mux = &self.running.as_ref().expect("checked in api_call").mux;
-            mux.owner_of(o).unwrap_or(o)
-        });
+        let running = self.running.as_ref().expect("checked in api_call");
+        let owner = owner
+            .or_else(|| {
+                self.api_clients
+                    .get(&client)
+                    .and_then(|c| c.pane)
+                    .filter(|p| running.panes.contains_key(p))
+            })
+            .map(|o| running.mux.owner_of(o).unwrap_or(o));
         if let Some(cwd) = str_param(params, "cwd")? {
             self.spawn_cwd = Some(cwd);
         }
-        let opened = self.open_companion(command, owner);
+        let opened = self.open_companion(command, owner, true);
         self.spawn_cwd = None;
         let pane = opened.map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
         if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {

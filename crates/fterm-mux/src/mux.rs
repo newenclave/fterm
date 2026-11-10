@@ -165,6 +165,26 @@ impl Tab {
     }
 }
 
+/// Adds `pane` to the companions of `owner` and shows it.
+fn push_companion(tab: &mut Tab, owner: PaneId, pane: PaneId) {
+    let list = match tab.companions.iter().position(|c| c.owner == owner) {
+        Some(i) => &mut tab.companions[i],
+        None => {
+            tab.companions.push(Companions {
+                owner,
+                panes: Vec::new(),
+                shown: None,
+                last: 0,
+            });
+            tab.companions.last_mut().expect("just added")
+        }
+    };
+    list.panes.push(pane);
+    let index = list.panes.len() - 1;
+    list.shown = Some(index);
+    list.last = index;
+}
+
 /// What `close_pane` closed.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Closed {
@@ -597,25 +617,33 @@ impl Mux {
         if !tab.layout.contains(owner) {
             return false;
         }
-        let list = match tab.companions.iter().position(|c| c.owner == owner) {
-            Some(i) => &mut tab.companions[i],
-            None => {
-                tab.companions.push(Companions {
-                    owner,
-                    panes: Vec::new(),
-                    shown: None,
-                    last: 0,
-                });
-                tab.companions.last_mut().expect("just added")
-            }
-        };
-        list.panes.push(pane);
-        let index = list.panes.len() - 1;
-        list.shown = Some(index);
-        list.last = index;
+        push_companion(tab, owner, pane);
         tab.active_pane = pane;
         if tab.zoomed.is_some_and(|z| z != owner) {
             tab.zoomed = None;
+        }
+        true
+    }
+
+    /// Adds `pane` as a shown companion of `owner` (in any tab; a companion means its owner). No tab, workspace,
+    /// or active pane changes: for a companion that an agent opens while the user works. `false` = no such pane.
+    pub fn add_companion_in(&mut self, owner: PaneId, pane: PaneId) -> bool {
+        let Some((w, i)) = self.find_pane(owner) else {
+            return false;
+        };
+        let tab = &mut self.workspaces[w].tabs[i];
+        let owner = tab.layout_pane(owner);
+        if !tab.layout.contains(owner) {
+            return false;
+        }
+        // The companion that had the keys is hidden now: the keys go to its pane.
+        let had_keys = tab
+            .companions
+            .iter()
+            .any(|c| c.owner == owner && c.panes.contains(&tab.active_pane));
+        push_companion(tab, owner, pane);
+        if had_keys {
+            tab.active_pane = owner;
         }
         true
     }
@@ -1968,6 +1996,38 @@ mod tests {
         );
         mux.toggle_companion();
         assert_eq!(mux.companion_dividers(AREA), [], "hidden: no line");
+    }
+
+    #[test]
+    fn a_companion_of_a_pane_in_another_tab_keeps_the_focus() {
+        let (mut mux, panes) = mux_with(2);
+        let (agent, user) = (panes[0], panes[1]);
+        mux.select(1);
+        let c = mux.new_pane_id();
+        assert!(mux.add_companion_in(agent, c));
+        assert_eq!(mux.active_index(), 1, "the user stays in their tab");
+        assert_eq!(mux.input_pane(), Some(user));
+        let tab0 = &mux.tabs()[0];
+        assert_eq!(
+            tab0.active_pane, agent,
+            "the agent's tab keeps its active pane"
+        );
+        assert_eq!(tab0.owner_of(c), Some(agent));
+        assert_eq!(mux.companions_of(agent), [c]);
+        // In the active tab too: shown, but the keys stay.
+        let d = mux.new_pane_id();
+        assert!(mux.add_companion_in(user, d));
+        assert_eq!(mux.input_pane(), Some(user));
+        assert!(
+            mux.pane_rects(AREA).iter().any(|(p, _)| *p == d),
+            "it is shown"
+        );
+        // A companion of a companion belongs to its owner; no such pane = false.
+        let e = mux.new_pane_id();
+        assert!(mux.add_companion_in(c, e));
+        assert_eq!(mux.tabs()[0].owner_of(e), Some(agent));
+        let f = mux.new_pane_id();
+        assert!(!mux.add_companion_in(PaneId(999), f));
     }
 
     #[test]

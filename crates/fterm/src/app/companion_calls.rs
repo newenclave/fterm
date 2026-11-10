@@ -13,10 +13,13 @@ pub(super) fn companion_side(side: fterm_config::load::CompanionSide) -> Directi
 impl App {
     /// Opens a companion of `owner` (`None` = the active pane, or its owner when it is a companion): `command` run by
     /// the shell, or the shell itself. It is shown and gets the keys.
+    /// `keep_focus` (an API client): the user stays where they are, and the companion starts in the folder of
+    /// `owner`; else the owner comes to the front and the companion gets the keys.
     pub(super) fn open_companion(
         &mut self,
         command: Option<String>,
         owner: Option<PaneId>,
+        keep_focus: bool,
     ) -> anyhow::Result<PaneId> {
         let running = self.running.as_mut().expect("the window is open");
         let owner = match owner {
@@ -29,8 +32,10 @@ impl App {
                 running.mux.owner_of(active).unwrap_or(active)
             }
         };
-        // The owner is in front, so the new companion is in its tab.
-        running.mux.reveal(owner);
+        // The owner is in front, so the new companion is in its tab (not for an API client).
+        if !keep_focus {
+            running.mux.reveal(owner);
+        }
         let area = running.tab_area();
         let rect = running
             .mux
@@ -43,11 +48,18 @@ impl App {
             fterm_mux::mux::companion_rects(rect, side, self.config.config.companion_size);
         let grid = running.grid_for(strip);
         self.spawn_command = command;
+        self.spawn_from = keep_focus.then_some(owner);
         let id = self.spawn_pane(grid, None);
         self.spawn_command = None;
+        self.spawn_from = None;
         let id = id?;
         let running = self.running.as_mut().expect("the window is open");
-        if !running.mux.add_companion(owner, id) {
+        let added = if keep_focus {
+            running.mux.add_companion_in(owner, id)
+        } else {
+            running.mux.add_companion(owner, id)
+        };
+        if !added {
             running.panes.remove(&id);
             anyhow::bail!("pane {} is not in a tab", owner.0);
         }
