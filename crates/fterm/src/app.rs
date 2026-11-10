@@ -624,6 +624,8 @@ pub struct App {
     spawn_remote: Option<String>,
     /// The `user@host` box of "Connect over SSH…".
     ssh_prompt: Option<crate::ai_chat::InputBox>,
+    /// A new pane of an API client starts in the folder of this pane (not of the active one).
+    spawn_from: Option<PaneId>,
     /// The copy mode keys typed so far, a jump that waits for its char, the search prompt.
     copy_input: copy_calls::CopyInput,
     /// A remote that connects now (its box).
@@ -744,6 +746,7 @@ impl App {
             adhoc_remotes: Vec::new(),
             spawn_remote: None,
             ssh_prompt: None,
+            spawn_from: None,
             copy_input: Default::default(),
             connecting: None,
             mux_free: Vec::new(),
@@ -2288,7 +2291,11 @@ impl App {
         // A new pane starts in the folder of the active pane (or the saved one), unless the profile
         // has its own folder. From a WSL pane it is the same distro: its folder is a Linux one.
         let (raw_cwd, active_wsl) = {
-            let active = self.running.as_ref().and_then(Running::active_pane);
+            let active = self.running.as_ref().and_then(|r| {
+                self.spawn_from
+                    .and_then(|id| r.panes.get(&id))
+                    .or_else(|| r.active_pane())
+            });
             let raw_cwd = self
                 .spawn_cwd
                 .clone()
@@ -2563,6 +2570,63 @@ impl App {
         };
         running.mux.set_color(tab, color);
         self.tab_changed();
+        Ok(id)
+    }
+
+    /// Splits `at` (in any tab) for an API client: the new pane does not take the focus, and the user stays in
+    /// the tab where they are.
+    fn split_beside(
+        &mut self,
+        at: PaneId,
+        direction: Direction,
+        profile: Option<&str>,
+    ) -> anyhow::Result<PaneId> {
+        self.split_beside_with(at, direction, |app, size| app.spawn_pane(size, profile))
+    }
+
+    /// `split_beside` with a maker of the new pane (a program, a scene). It starts in the folder of `at`.
+    fn split_beside_with(
+        &mut self,
+        at: PaneId,
+        direction: Direction,
+        make: impl FnOnce(&mut Self, GridSize) -> anyhow::Result<PaneId>,
+    ) -> anyhow::Result<PaneId> {
+        let running = self.running.as_ref().expect("the window is open");
+        let half = running.pane_area();
+        let half = match direction {
+            Direction::Right => Rect::new(half.x, half.y, half.width / 2.0, half.height),
+            Direction::Down => Rect::new(half.x, half.y, half.width, half.height / 2.0),
+        };
+        let size = running.grid_for(half);
+        self.spawn_from = Some(at);
+        let made = make(self, size);
+        self.spawn_from = None;
+        let id = made?;
+        let running = self.running.as_mut().unwrap();
+        // `at` may be a pane with no tab (the scratch, the dashboard): then next to the active pane.
+        if !running.mux.split_pane(at, id, direction)
+            && let Some(active) = running.mux.active_pane()
+        {
+            running.mux.split_pane(active, id, direction);
+        }
+        running.resize_all_panes();
+        self.tab_changed();
+        Ok(id)
+    }
+
+    /// A new tab for an API client (in the folder of `from`): the user stays in the tab where they are.
+    fn new_tab_behind(&mut self, from: PaneId, profile: Option<&str>) -> anyhow::Result<PaneId> {
+        let before = self.running.as_ref().and_then(|r| r.mux.active_pane());
+        self.spawn_from = Some(from);
+        let made = self.new_tab(profile);
+        self.spawn_from = None;
+        let id = made?;
+        if let Some(before) = before
+            && let Some(running) = &mut self.running
+            && running.mux.reveal(before)
+        {
+            self.tab_changed();
+        }
         Ok(id)
     }
 

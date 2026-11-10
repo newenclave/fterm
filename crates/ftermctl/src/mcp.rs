@@ -63,7 +63,7 @@ pub fn tools() -> Value {
         },
         {
             "name": "open_pane",
-            "description": "Open a new pane: a new tab, a split on the right or below, an overlay (a box over a pane that runs `command` and goes when it ends, for example a file manager or htop), or a companion (a strip of the pane `next_to` that runs `command` or a shell, for example `tail -f` of a log; the user hides and shows it with a key). Returns the new pane id.",
+            "description": "Open a new pane: a new tab, a split on the right or below, an overlay (a box over a pane that runs `command` and goes when it ends, for example a file manager or htop), or a companion (a strip of the pane `next_to` that runs `command` or a shell, for example `tail -f` of a log; the user hides and shows it with a key). A split goes next to your own pane (also when the user is in another tab); a new tab or split does not take the keys of the user. Returns the new pane id.",
             "inputSchema": { "type": "object", "properties": {
                 "place": { "type": "string", "enum": ["tab", "right", "down", "overlay", "companion"], "description": "Where. The default is a new tab." },
                 "command": { "type": "string", "description": "With place overlay or companion: the command to run (the shell runs it)." },

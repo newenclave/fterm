@@ -851,29 +851,38 @@ impl App {
         }
         let place = place_param(params)?;
         let profile = str_param(params, "profile")?;
-        if let Some(cwd) = str_param(params, "cwd")? {
-            self.spawn_cwd = Some(cwd);
-        }
-        // A split goes next to this pane (else next to the active one).
-        if let Some(next_to) = pane_param(params, "pane")?.map(PaneId) {
-            let running = self.running.as_mut().expect("checked in api_call");
-            if !running.panes.contains_key(&next_to) {
-                return Err(not_found(&format!("pane {}", next_to.0)));
+        let cwd = str_param(params, "cwd")?;
+        // A split goes next to `pane`, else next to the pane of the caller (an agent: its own pane, also when the
+        // user is in another tab), else next to the active one. The new pane never takes the keys of the user.
+        let next_to = match pane_param(params, "pane")?.map(PaneId) {
+            Some(pane) => Some(pane),
+            None => self.api_clients.get(&client).and_then(|c| c.pane),
+        };
+        let running = self.running.as_ref().expect("checked in api_call");
+        let next_to = match next_to {
+            Some(pane) if running.panes.contains_key(&pane) => pane,
+            Some(pane) if pane_param(params, "pane")?.is_some() => {
+                return Err(not_found(&format!("pane {}", pane.0)));
             }
-            running.mux.focus(next_to);
-        }
+            _ => running.mux.active_pane().ok_or_else(|| not_found("pane"))?,
+        };
+        // Set only now: an early error must not leave it for the next pane of the user.
+        self.spawn_cwd = cwd;
         let result = match place {
-            SpawnWhere::Tab => self.new_tab(profile.as_deref()).map(|_| ()),
-            SpawnWhere::SplitRight => self.split(Direction::Right, profile.as_deref()),
-            SpawnWhere::SplitDown => self.split(Direction::Down, profile.as_deref()),
+            SpawnWhere::Tab => self.new_tab_behind(next_to, profile.as_deref()),
+            SpawnWhere::SplitRight => {
+                self.split_beside(next_to, Direction::Right, profile.as_deref())
+            }
+            SpawnWhere::SplitDown => {
+                self.split_beside(next_to, Direction::Down, profile.as_deref())
+            }
         };
         self.spawn_cwd = None;
-        result.map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
-        let pane = self.running.as_ref().and_then(|r| r.mux.active_pane());
-        if let Some(p) = pane.and_then(|id| self.running.as_mut()?.panes.get_mut(&id)) {
+        let pane = result.map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
+        if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {
             p.opened_by = Some(client);
         }
-        Ok(json!({ "pane": pane.map(|p| p.0) }))
+        Ok(json!({ "pane": pane.0 }))
     }
 
     /// `spawn` with `place: "overlay"` and `wait: true`: the answer comes when the program ends, with its exit code.
@@ -1106,20 +1115,11 @@ impl App {
     /// `scene_open`: a Braille scene next to a pane (Phase 11). The client may draw in it at once.
     fn api_scene_open(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
         let direction = crate::api::scene_place(params)?;
-        if let Some(next_to) = pane_param(params, "pane")?.map(PaneId) {
-            let running = self.running.as_mut().expect("checked in api_call");
-            if !running.panes.contains_key(&next_to) {
-                return Err(not_found(&format!("pane {}", next_to.0)));
-            }
-            running.mux.focus(next_to);
-        }
-        self.split_with(direction, |app, size| Ok(app.spawn_scene(size)))
-            .map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
+        // Next to `pane`, else next to the pane of the caller; the user keeps the keys (see `api_spawn`).
+        let next_to = self.target_pane(client, params)?;
         let pane = self
-            .running
-            .as_ref()
-            .and_then(|r| r.mux.active_pane())
-            .ok_or_else(|| RpcError::new(RpcError::INTERNAL, "no pane"))?;
+            .split_beside_with(next_to, direction, |app, size| Ok(app.spawn_scene(size)))
+            .map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
         if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {
             p.opened_by = Some(client);
         }

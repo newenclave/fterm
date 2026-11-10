@@ -6,6 +6,12 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 
 ## [Unreleased]
 
+### Fixed
+- **An agent no longer opens panes in your tab.** When an agent in one tab opened a pane (`open_pane`, `ftermctl
+  spawn`) or a scene while you worked in another tab, the pane came into your tab and took your keys, so your
+  typing went to it. Now a split goes next to the agent's own pane, in its own folder, and a new tab opens in the
+  back. You keep your tab and your keys.
+
 ### Added
 - **How long toasts stay, for each level:** `notifications = { timeouts = { error = 30, attention = 120 } }`.
   A number is seconds; `false` means "until you close it". See [docs/CONFIG.md](docs/CONFIG.md#notifications).

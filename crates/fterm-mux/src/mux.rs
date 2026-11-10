@@ -946,6 +946,22 @@ impl Mux {
         }
     }
 
+    /// Splits `pane` (in any tab and workspace) and puts `new` in its second half. Unlike `split_active`, the
+    /// focus does not move: no tab, workspace, or active pane changes. For panes that a program or an agent opens
+    /// while the user works elsewhere. `false` = no such pane.
+    pub fn split_pane(&mut self, pane: PaneId, new: PaneId, direction: Direction) -> bool {
+        let Some((w, i)) = self.find_pane(pane) else {
+            return false;
+        };
+        let tab = &mut self.workspaces[w].tabs[i];
+        // An overlay or a companion has no place in the tree: the split goes next to its pane.
+        let at = match tab.overlay {
+            Some(o) if o.pane == pane => o.over,
+            _ => tab.layout_pane(pane),
+        };
+        tab.layout.split(at, new, direction)
+    }
+
     /// Gives the focus to `pane` (in the active tab).
     pub fn focus(&mut self, pane: PaneId) {
         if let Some(tab) = self.active_tab_mut()
@@ -1910,6 +1926,67 @@ mod tests {
         );
         mux.toggle_companion();
         assert_eq!(mux.companion_dividers(AREA), [], "hidden: no line");
+    }
+
+    #[test]
+    fn a_split_of_a_pane_in_another_tab_keeps_the_focus_of_the_user() {
+        // The bug: an agent in tab 0 opened a pane while the user worked in tab 1; the new pane went into tab 1
+        // and took the keys.
+        let (mut mux, panes) = mux_with(2);
+        let (agent, user) = (panes[0], panes[1]);
+        mux.select(1);
+        let new = mux.new_pane_id();
+        assert!(mux.split_pane(agent, new, Direction::Right));
+        assert_eq!(mux.active_index(), 1, "the user stays in their tab");
+        assert_eq!(mux.active_pane(), Some(user), "and keeps the keys");
+        let tab0 = &mux.tabs()[0];
+        assert_eq!(
+            tab0.layout.panes(),
+            [agent, new],
+            "the new pane is next to the agent"
+        );
+        assert_eq!(
+            tab0.active_pane, agent,
+            "the agent's tab keeps its active pane too"
+        );
+        assert_eq!(mux.tabs()[1].layout.panes(), [user]);
+    }
+
+    #[test]
+    fn a_split_from_an_overlay_or_a_companion_goes_next_to_its_pane() {
+        let (mut mux, panes) = mux_with(2);
+        let (a, user) = (panes[0], panes[1]);
+        let o = mux.new_pane_id();
+        assert!(mux.open_overlay(o, 80), "an overlay over `a` in tab 0");
+        let c = mux.new_pane_id();
+        mux.add_companion(a, c);
+        mux.select(1);
+        let from_overlay = mux.new_pane_id();
+        assert!(mux.split_pane(o, from_overlay, Direction::Right));
+        let from_companion = mux.new_pane_id();
+        assert!(mux.split_pane(c, from_companion, Direction::Down));
+        let mut tab0 = mux.tabs()[0].layout.panes();
+        tab0.sort();
+        let mut want = vec![a, from_overlay, from_companion];
+        want.sort();
+        assert_eq!(tab0, want, "both next to `a`, in tab 0");
+        assert_eq!(mux.tabs()[1].layout.panes(), [user]);
+        assert_eq!(mux.active_pane(), Some(user));
+    }
+
+    #[test]
+    fn a_split_of_a_pane_in_the_active_tab_keeps_the_focus_too() {
+        let (mut mux, panes) = mux_with(1);
+        let a = panes[0];
+        let new = mux.new_pane_id();
+        assert!(mux.split_pane(a, new, Direction::Down));
+        assert_eq!(mux.active_pane(), Some(a));
+        assert_eq!(mux.tabs()[0].layout.panes(), [a, new]);
+        let other = mux.new_pane_id();
+        assert!(
+            !mux.split_pane(PaneId(999), other, Direction::Down),
+            "no such pane"
+        );
     }
 
     #[test]
