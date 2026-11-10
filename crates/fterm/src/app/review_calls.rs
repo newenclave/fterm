@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::*;
 use crate::api::ApiRequest;
 use crate::review::{Decision, Outcome, Review, Start};
-use fterm_config::load::PlanReview;
+use fterm_config::load::{PlanReview, ReviewFocus, ReviewPlace};
 
 /// A review in a tab, and the grid size it was last drawn for.
 pub(super) struct ReviewPane {
@@ -63,7 +63,9 @@ impl App {
         let now = Instant::now();
         let review_deadline = now + asked.timeout;
         match crate::review::start(asked.plan_mode, self.plan_review()) {
-            Start::Open => self.start_review(event_loop, request, asked, near, review_deadline),
+            Start::Open => {
+                self.start_review(event_loop, request, asked, near, review_deadline, false)
+            }
             Start::Skip => {
                 let _ = request.reply.send(Ok(crate::review::skipped()));
             }
@@ -124,7 +126,15 @@ impl App {
         }
         let q = self.plan_questions.remove(0);
         if review {
-            self.start_review(event_loop, q.request, q.asked, q.near, q.review_deadline);
+            // The user asked for it (R): it comes to the front (see `ReviewFocus::Auto`).
+            self.start_review(
+                event_loop,
+                q.request,
+                q.asked,
+                q.near,
+                q.review_deadline,
+                true,
+            );
         } else {
             let _ = q.request.reply.send(Ok(crate::review::skipped()));
         }
@@ -159,9 +169,10 @@ impl App {
         asked: crate::api::ReviewRequest,
         near: Option<PaneId>,
         deadline: Instant,
+        asked_by_user: bool,
     ) {
         let review = Review::new(&asked.title, &asked.from, asked.items);
-        let Some(pane) = self.open_review(event_loop, review, near) else {
+        let Some(pane) = self.open_review(event_loop, review, near, asked_by_user) else {
             let _ = request
                 .reply
                 .send(Err(RpcError::new(RpcError::INTERNAL, "no window")));
@@ -175,14 +186,19 @@ impl App {
         });
     }
 
-    /// A new tab with the review. It becomes the active tab when the user looks at the pane that asked.
+    /// The review pane, at the pane `near` of the agent that asked, by `plan_review.place`: an overlay over it
+    /// (else a split), a split next to it (else a tab), or a tab right after its tab. It takes the keys by
+    /// `plan_review.focus`: with `auto`, when the user asked for it (R) or looks at `near`.
     fn open_review(
         &mut self,
         event_loop: &ActiveEventLoop,
         review: Review,
         near: Option<PaneId>,
+        asked_by_user: bool,
     ) -> Option<PaneId> {
         let focused = self.focused;
+        let settings = self.config.config.review;
+        let overlay_size = settings.size.unwrap_or(self.config.config.overlay_size);
         let running = self.running.as_mut()?;
         let size = running.grid_for(running.tab_area());
         let id = running.mux.new_pane_id();
@@ -216,12 +232,47 @@ impl App {
                 mux: None,
             },
         );
-        running
-            .mux
-            .add_tab(fterm_mux::Layout::Pane(id), id, Some(title.clone()));
-        let looking = focused && near.is_some() && running.mux.active_pane() == near;
-        if looking {
-            running.mux.select_last();
+        let looking = focused
+            && near.is_some()
+            && (running.mux.active_pane() == near || running.mux.input_pane() == near);
+        let near = near.filter(|p| running.panes.contains_key(p));
+        let mut place = settings.place;
+        let mut placed = false;
+        if let Some(near) = near {
+            if place == ReviewPlace::Overlay {
+                placed = running.mux.open_overlay_on(near, id, overlay_size);
+                if !placed {
+                    place = ReviewPlace::Split;
+                }
+            }
+            if place == ReviewPlace::Split && !placed {
+                placed = running
+                    .mux
+                    .split_pane(near, id, fterm_mux::Direction::Right);
+            }
+            if !placed {
+                running.mux.add_tab_after(
+                    near,
+                    fterm_mux::Layout::Pane(id),
+                    id,
+                    Some(title.clone()),
+                );
+                placed = true;
+            }
+        }
+        if !placed {
+            running
+                .mux
+                .add_tab(fterm_mux::Layout::Pane(id), id, Some(title.clone()));
+        }
+        running.resize_all_panes();
+        let go = match settings.focus {
+            ReviewFocus::Always => true,
+            ReviewFocus::Auto => asked_by_user || looking,
+            ReviewFocus::Never => false,
+        };
+        if go {
+            self.go_to_pane(id);
         }
         tracing::info!(pane = id.0, %title, "new review");
         self.draw_reviews();
@@ -261,10 +312,10 @@ impl App {
         self.draw_reviews();
     }
 
-    /// The active pane is a review.
+    /// The pane with the keys is a review (in a tab, a split, or an overlay).
     pub(super) fn active_review(&self) -> Option<PaneId> {
         let running = self.running.as_ref()?;
-        let pane = running.mux.active_pane()?;
+        let pane = running.mux.input_pane()?;
         running.panes.get(&pane)?.review.as_ref().map(|_| pane)
     }
 
@@ -350,10 +401,16 @@ impl App {
 
     /// Closes the tab of a review, unless it is the last tab (then the window would close).
     fn close_review_tab(&mut self, pane: PaneId) {
-        let many = self
-            .running
-            .as_ref()
-            .is_some_and(|r| r.mux.all_tabs().count() > 1);
+        // A review in an overlay or a split always goes; a review tab only when it is not the last tab.
+        let many = self.running.as_ref().is_some_and(|r| {
+            r.mux.all_tabs().count() > 1
+                || r.mux
+                    .all_tabs()
+                    .any(|t| t.overlay.is_some_and(|o| o.pane == pane))
+                || r.mux
+                    .all_tabs()
+                    .any(|t| t.layout.contains(pane) && t.layout.panes().len() > 1)
+        });
         if many {
             self.close_pane_now(pane);
         }

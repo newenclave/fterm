@@ -1,14 +1,32 @@
 # Review a plan
 
-An agent (Claude Code, OpenCode, a script) can show you its plan in a **Review tab**. You go through the plan
+An agent (Claude Code, OpenCode, a script) can show you its plan in a **Review**. You go through the plan
 item by item: mark an item Ok, write a comment, change its text, add an item, or remove one. Then you send it,
 and the agent gets your answer: "approved", or the list of your changes and comments.
 
 ## How it looks
-A new tab "Review: <the title>" opens, with a yellow dot and a notification. It becomes the active tab when
-you look at the pane that asked; else it waits until you go there (click the notification, or the tab).
+The Review "Review: <the title>" opens at the pane of the agent that asked, with a yellow dot and a notification.
+By default it is a box over that pane (an overlay), so you see it where the agent is. When it is over, the box goes.
 
-The tab shows the title, who asked, and every item of the plan with its number: headings, paragraphs,
+You go to it at once when you asked for it (R on the question of plan mode) or when you look at the pane of the
+agent. Else it waits for you: click the notification, or go to the tab of the agent.
+
+You choose where it opens and when you go to it:
+
+```lua
+plan_review = {
+  mode = "ask",       -- for plans of Claude Code plan mode: "ask", "always", or "never" (see below)
+  place = "overlay",  -- "overlay" (a box over the pane of the agent), "split" (a pane on its right),
+                      -- or "tab" (a tab right after the tab of the agent)
+  focus = "auto",     -- "auto" (as above), "always" (go to it at once, from any tab), or "never"
+  size = 80,          -- the size of the overlay in percent of the pane (default: overlay_size)
+},
+```
+
+`place` and `focus` are for every Review, also from scripts. When the tab of the agent has an overlay already, the
+Review opens as a split. A Review with no pane that asked (a script outside fterm) opens as a tab at the end.
+
+The Review shows the title, who asked, and every item of the plan with its number: headings, paragraphs,
 list items (nested items are further right), and code blocks. The agent gets the same numbers in the answer.
 A mark on the left says what you did:
 
@@ -30,8 +48,8 @@ A mark on the left says what you did:
 | E | Change the text of the item. |
 | A | Add a new item after this one. |
 | D, Delete | Remove on or off (an added item goes away at once). |
-| S, Ctrl + Enter | Send the review to the agent. The tab closes. |
-| Ctrl + Shift + W | Close the tab with no answer ("cancelled"). |
+| S, Ctrl + Enter | Send the review to the agent. The Review closes. |
+| Ctrl + Shift + W | Close the Review with no answer ("cancelled"). |
 
 In a comment or a text: Enter saves, Shift + Enter makes a new line, Esc cancels.
 Other keys (tabs, the palette) work as usual.
@@ -62,18 +80,18 @@ a `PreToolUse` hook for `ExitPlanMode`. Then, when Claude finishes a plan in pla
 
 The hook waits for you up to one hour. It runs `ftermctl review --hook` (ftermctl is next to fterm.exe).
 
-You choose when the Review tab opens with `plan_review` in `fterm.lua`:
+You choose when the Review opens with `plan_review` in `fterm.lua` (or with `mode` in the table form above):
 
 ```lua
 plan_review = "ask",     -- the default: fterm asks each time (R = review, Esc = the dialog of Claude)
-plan_review = "always",  -- each plan opens in a Review tab
+plan_review = "always",  -- each plan opens in a Review
 plan_review = "never",   -- Claude shows its own dialog; the hook does nothing
 ```
 
 The palette action **Review the plans of Claude Code: ask, always, never** (`plan_review_mode`) changes the mode
 while fterm runs: ask → always → never → ask. A toast says the new mode. It lasts until the config changes or
 fterm closes. `plan_review` is only for the plans of plan mode: when you ask an agent to show a plan
-(`review_plan`), or a script runs `ftermctl review`, the Review tab always opens.
+(`review_plan`), or a script runs `ftermctl review`, the Review always opens.
 
 ## Other agents and scripts
 - MCP tool `review_plan` with `plan` (markdown) and `title` (see [MCP.md](MCP.md)).

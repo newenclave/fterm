@@ -160,7 +160,7 @@ pub fn tools() -> Value {
         },
         {
             "name": "review_plan",
-            "description": "Show your plan to the user in an fterm Review tab and wait for the answer. The user marks each item Ok, comments on it, changes its text, adds or removes items. You get the decision (approved / changes / cancelled) and the feedback that names the items by number. Use it when you have a plan with several steps and want the user's review before you start.",
+            "description": "Show your plan to the user in an fterm Review and wait for the answer. The user marks each item Ok, comments on it, changes its text, adds or removes items. You get the decision (approved / changes / cancelled) and the feedback that names the items by number. Use it when you have a plan with several steps and want the user's review before you start.",
             "inputSchema": { "type": "object", "properties": {
                 "title": { "type": "string", "description": "A short title for the tab." },
                 "plan": { "type": "string", "description": "The plan as markdown: headings, list items (nested), paragraphs. Each one is an item to review." },

@@ -87,7 +87,7 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
 - `ftermctl ai input TEXT` puts a text into the input of the panel without sending it, for the user.
 
 **Ask the user to review a plan**
-- `review_plan` with `plan` (markdown) and `title` (`ftermctl review plan.md`) opens a Review tab and waits.
+- `review_plan` with `plan` (markdown) and `title` (`ftermctl review plan.md`) opens a Review over your pane and waits.
   The user marks each item Ok, comments on it, changes its text, adds or removes items.
 - You get the decision (`approved`, `changes`, or `cancelled`) and the feedback, which names the items by their
   numbers (headings and paragraphs count too). Change the plan by the feedback and ask again if needed.

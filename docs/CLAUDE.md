@@ -15,7 +15,7 @@ The dot for `done` and `error` goes away when you look at the pane.
 
 ## Review the plans of plan mode
 The same palette action also adds a hook for `ExitPlanMode`: when Claude finishes a plan in plan mode, fterm
-asks if you want to see it in a Review tab (R = yes, Esc = the dialog of Claude; `plan_review` in the config
+asks if you want to see it in a Review (R = yes, Esc = the dialog of Claude; `plan_review` in the config
 changes this). You mark each item Ok, comment, change, add, or remove items. All Ok accepts the plan;
 anything else goes back to Claude, which makes a new plan. See [REVIEW.md](REVIEW.md).
 

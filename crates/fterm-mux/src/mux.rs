@@ -286,6 +286,28 @@ impl Mux {
         id
     }
 
+    /// Adds a tab right after the tab of `near`, in its workspace (no such pane: at the end of the current
+    /// workspace). The active tab stays the same.
+    pub fn add_tab_after(
+        &mut self,
+        near: PaneId,
+        layout: Layout,
+        active_pane: PaneId,
+        title: Option<String>,
+    ) -> TabId {
+        let Some((w, i)) = self.find_pane(near) else {
+            return self.add_tab(layout, active_pane, title);
+        };
+        let tab = self.make_tab(layout, active_pane, title);
+        let id = tab.id;
+        let ws = &mut self.workspaces[w];
+        ws.tabs.insert(i + 1, tab);
+        if ws.active > i {
+            ws.active += 1;
+        }
+        id
+    }
+
     /// Adds a tab at the end of the workspace `name` (made when it is not there). It does not become active.
     pub fn add_tab_in(
         &mut self,
@@ -420,6 +442,26 @@ impl Mux {
         }
         // Over a pane of the layout: from a companion, over its pane (a companion ends with its own program).
         let over = tab.layout_pane(tab.active_pane);
+        tab.overlay = Some(Overlay {
+            pane,
+            over,
+            size: size.clamp(1, 100),
+            shown: true,
+        });
+        true
+    }
+
+    /// Opens `pane` as the overlay over `over` (in any tab and workspace; a companion means its pane). The focus
+    /// does not move. `false` = no such pane, or its tab has an overlay already.
+    pub fn open_overlay_on(&mut self, over: PaneId, pane: PaneId, size: u8) -> bool {
+        let Some((w, i)) = self.find_pane(over) else {
+            return false;
+        };
+        let tab = &mut self.workspaces[w].tabs[i];
+        if tab.overlay.is_some() {
+            return false;
+        }
+        let over = tab.layout_pane(over);
         tab.overlay = Some(Overlay {
             pane,
             over,
@@ -1926,6 +1968,62 @@ mod tests {
         );
         mux.toggle_companion();
         assert_eq!(mux.companion_dividers(AREA), [], "hidden: no line");
+    }
+
+    #[test]
+    fn an_overlay_on_a_pane_in_another_tab_keeps_the_focus() {
+        let (mut mux, panes) = mux_with(2);
+        let (agent, user) = (panes[0], panes[1]);
+        let c = mux.new_pane_id();
+        mux.add_companion(agent, c);
+        mux.select(1);
+        let review = mux.new_pane_id();
+        assert!(
+            mux.open_overlay_on(c, review, 80),
+            "from a companion: over its pane"
+        );
+        assert_eq!(mux.active_index(), 1);
+        assert_eq!(mux.input_pane(), Some(user), "the user keeps the keys");
+        let overlay = mux.tabs()[0].overlay.expect("tab 0 has the overlay");
+        assert_eq!(
+            (overlay.pane, overlay.over, overlay.shown),
+            (review, agent, true)
+        );
+        assert!(
+            !mux.open_overlay_on(agent, mux.tabs()[0].active_pane, 80),
+            "one overlay in a tab"
+        );
+        assert!(!mux.open_overlay_on(PaneId(999), PaneId(998), 80));
+        // Going there gives the overlay the keys.
+        assert!(mux.reveal(review));
+        assert_eq!(mux.input_pane(), Some(review));
+    }
+
+    #[test]
+    fn a_tab_after_the_tab_of_a_pane_keeps_the_active_tab() {
+        let (mut mux, panes) = mux_with(3);
+        mux.select(2);
+        let a = mux.new_pane_id();
+        mux.add_tab_after(panes[0], Layout::Pane(a), a, None);
+        let order: Vec<PaneId> = mux.tabs().iter().map(|t| t.active_pane).collect();
+        assert_eq!(
+            order,
+            [panes[0], a, panes[1], panes[2]],
+            "right after tab 0"
+        );
+        assert_eq!(mux.active_pane(), Some(panes[2]), "the active tab stays");
+        mux.select(0);
+        let b = mux.new_pane_id();
+        mux.add_tab_after(panes[2], Layout::Pane(b), b, None);
+        assert_eq!(mux.tabs().last().map(|t| t.active_pane), Some(b));
+        assert_eq!(mux.active_pane(), Some(panes[0]));
+        let c = mux.new_pane_id();
+        mux.add_tab_after(PaneId(999), Layout::Pane(c), c, None);
+        assert_eq!(
+            mux.tabs().last().map(|t| t.active_pane),
+            Some(c),
+            "no such pane: at the end"
+        );
     }
 
     #[test]

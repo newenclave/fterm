@@ -7,16 +7,24 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 ## [Unreleased]
 
 ### Fixed
+- **An overlay or a companion that ends with its pane answers at once.** A Review over an agent's pane, or an
+  `overlay --wait`, waited until its time ran out when that pane closed. Now the agent gets "cancelled" at once.
+- **After R on a plan question, the Review comes to the front.** Before, when you were in another tab, it opened
+  in the back, and you had to look for it.
 - **An agent no longer opens panes in your tab.** When an agent in one tab opened a pane (`open_pane`, `ftermctl
   spawn`) or a scene while you worked in another tab, the pane came into your tab and took your keys, so your
   typing went to it. Now a split goes next to the agent's own pane, in its own folder, and a new tab opens in the
   back. You keep your tab and your keys.
 
 ### Added
+- **Choose where a plan Review opens and when you go to it:** `plan_review = { place = "overlay" | "split" | "tab",
+  focus = "auto" | "always" | "never" }`. See [docs/REVIEW.md](docs/REVIEW.md#how-it-looks).
 - **How long toasts stay, for each level:** `notifications = { timeouts = { error = 30, attention = 120 } }`.
   A number is seconds; `false` means "until you close it". See [docs/CONFIG.md](docs/CONFIG.md#notifications).
 
 ### Changed
+- **A plan Review opens over the pane of the agent** (a box, like an overlay), not as a tab at the far right.
+  `plan_review = { place = "tab" }` gives a tab again (now right after the tab of the agent).
 - **Error toasts hide after 30 seconds now** (before, they stayed until you closed them). They are still in the
   Events panel. "Attention" toasts (an agent waits for you) still stay until you close them.
 

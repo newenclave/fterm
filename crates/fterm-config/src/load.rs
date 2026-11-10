@@ -373,6 +373,38 @@ impl Remote {
     }
 }
 
+/// Where a Review opens, at the pane of the agent that asked.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReviewPlace {
+    /// A box over the pane of the agent (the default).
+    #[default]
+    Overlay,
+    /// A pane on the right of the pane of the agent.
+    Split,
+    /// A tab right after the tab of the agent.
+    Tab,
+}
+
+/// When a Review takes the keys (the user goes to it).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReviewFocus {
+    /// When the user asked for it (R on the question) or looks at the pane of the agent.
+    #[default]
+    Auto,
+    Always,
+    /// Never: the yellow dot and a toast only.
+    Never,
+}
+
+/// Where a Review opens and when it takes the keys (the table form of `plan_review`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReviewConfig {
+    pub place: ReviewPlace,
+    pub focus: ReviewFocus,
+    /// The size of the overlay in percent of the pane (20..100); `None` = `overlay_size`.
+    pub size: Option<u8>,
+}
+
 /// When a plan of Claude Code plan mode (the `ExitPlanMode` hook) opens a Review tab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PlanReview {
@@ -498,6 +530,18 @@ impl ToastTimeouts {
             "attention" => &mut self.attention,
             _ => return None,
         })
+    }
+}
+
+/// The mode of `plan_review`: "always", "ask", or "never".
+fn plan_review_mode(mode: &str, path: &str) -> Result<PlanReview, String> {
+    match mode {
+        "always" => Ok(PlanReview::Always),
+        "ask" => Ok(PlanReview::Ask),
+        "never" => Ok(PlanReview::Never),
+        other => Err(format!(
+            "{path}: must be \"always\", \"ask\", or \"never\", got `{other}`"
+        )),
     }
 }
 
@@ -860,6 +904,8 @@ pub struct Config {
     pub palette_changes: bool,
     /// When a plan of Claude Code plan mode opens a Review tab.
     pub plan_review: PlanReview,
+    /// Where a Review opens and when it takes the keys (`plan_review = { place = ..., focus = ... }`).
+    pub review: ReviewConfig,
     /// The language of the UI: a code (`ru`), `system`, or a path to a `.json`. `None` = English.
     pub language: Option<String>,
     /// New panes live in the mux server: their programs go on when the window closes.
@@ -935,6 +981,7 @@ impl Default for Config {
             harmonize: HarmonizeConfig::default(),
             palette_changes: true,
             plan_review: PlanReview::default(),
+            review: ReviewConfig::default(),
             language: None,
             mux: false,
             remotes: Vec::new(),
@@ -1810,17 +1857,57 @@ impl Reader {
         if let Some(on) = bool_field(root, "mux", "mux")? {
             config.mux = on;
         }
-        if let Some(mode) = string_field(root, "plan_review", "plan_review")? {
-            config.plan_review = match mode.as_str() {
-                "always" => PlanReview::Always,
-                "ask" => PlanReview::Ask,
-                "never" => PlanReview::Never,
-                other => {
-                    return Err(format!(
-                        "plan_review: must be \"always\", \"ask\", or \"never\", got `{other}`"
-                    ));
+        match root
+            .get::<Value>("plan_review")
+            .map_err(|err| format!("plan_review: {err}"))?
+        {
+            Value::Nil => {}
+            Value::String(mode) => {
+                config.plan_review = plan_review_mode(&mode.to_string_lossy(), "plan_review")?;
+            }
+            Value::Table(t) => {
+                if let Some(mode) = string_field(&t, "mode", "plan_review.mode")? {
+                    config.plan_review = plan_review_mode(&mode, "plan_review.mode")?;
                 }
-            };
+                if let Some(place) = string_field(&t, "place", "plan_review.place")? {
+                    config.review.place = match place.as_str() {
+                        "overlay" => ReviewPlace::Overlay,
+                        "split" => ReviewPlace::Split,
+                        "tab" => ReviewPlace::Tab,
+                        other => {
+                            return Err(format!(
+                                "plan_review.place: must be \"overlay\", \"split\", or \"tab\", got `{other}`"
+                            ));
+                        }
+                    };
+                }
+                if let Some(focus) = string_field(&t, "focus", "plan_review.focus")? {
+                    config.review.focus = match focus.as_str() {
+                        "auto" => ReviewFocus::Auto,
+                        "always" => ReviewFocus::Always,
+                        "never" => ReviewFocus::Never,
+                        other => {
+                            return Err(format!(
+                                "plan_review.focus: must be \"auto\", \"always\", or \"never\", got `{other}`"
+                            ));
+                        }
+                    };
+                }
+                if let Some(size) = number_field(&t, "size", "plan_review.size")? {
+                    if !(20.0..=100.0).contains(&size) {
+                        return Err(format!(
+                            "plan_review.size: must be between 20 and 100 (percent), got {size}"
+                        ));
+                    }
+                    config.review.size = Some(size.round() as u8);
+                }
+            }
+            other => {
+                return Err(format!(
+                    "plan_review: expected \"ask\", \"always\", \"never\", or a table, got {}",
+                    other.type_name()
+                ));
+            }
         }
         if let Some(table) = table_field(root, "harmonize", "harmonize")? {
             let number = |key: &str| -> Result<Option<f32>, String> {
@@ -3903,6 +3990,55 @@ mod tests {
             PlanReview::Never
         );
         assert!(error(r#"return { plan_review = "yes" }"#).contains("plan_review"));
+    }
+
+    #[test]
+    fn where_the_review_opens_and_when_it_takes_the_focus() {
+        let plain = load("return {}").config;
+        assert_eq!(
+            plain.review,
+            ReviewConfig {
+                place: ReviewPlace::Overlay,
+                focus: ReviewFocus::Auto,
+                size: None,
+            }
+        );
+        let text = load(r#"return { plan_review = "always" }"#).config;
+        assert_eq!(text.plan_review, PlanReview::Always);
+        assert_eq!(
+            text.review,
+            ReviewConfig::default(),
+            "the text form keeps the defaults"
+        );
+        let table = load(
+            r#"return { plan_review = { mode = "never", place = "split", focus = "always", size = 60 } }"#,
+        )
+        .config;
+        assert_eq!(table.plan_review, PlanReview::Never);
+        assert_eq!(
+            table.review,
+            ReviewConfig {
+                place: ReviewPlace::Split,
+                focus: ReviewFocus::Always,
+                size: Some(60),
+            }
+        );
+        let some = load(r#"return { plan_review = { place = "tab", focus = "never" } }"#).config;
+        assert_eq!(some.plan_review, PlanReview::Ask, "no mode = ask");
+        assert_eq!(
+            (some.review.place, some.review.focus),
+            (ReviewPlace::Tab, ReviewFocus::Never)
+        );
+    }
+
+    #[test]
+    fn bad_review_settings_say_where() {
+        let bad = |src: &str| error(&format!("return {{ plan_review = {src} }}"));
+        assert!(bad(r#"{ place = "window" }"#).contains("plan_review.place"));
+        assert!(bad(r#"{ focus = "maybe" }"#).contains("plan_review.focus"));
+        assert!(bad(r#"{ mode = "yes" }"#).contains("plan_review.mode"));
+        assert!(bad(r#"{ size = 5 }"#).contains("plan_review.size"));
+        assert!(bad("5").contains("plan_review"));
     }
 
     #[test]

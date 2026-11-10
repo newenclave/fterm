@@ -933,7 +933,11 @@ impl App {
             return;
         };
         let seen = focused && running.visible_panes().contains(&pane);
-        let tab = running.pane_tab_title(pane).unwrap_or_default();
+        // A pane outside the tree (an overlay, a companion) has no tab title: its own title then.
+        let tab = running
+            .pane_tab_title(pane)
+            .or_else(|| running.panes.get(&pane).and_then(|p| p.app_title.clone()))
+            .unwrap_or_default();
         let Some(p) = running.panes.get_mut(&pane) else {
             return;
         };
@@ -2658,6 +2662,17 @@ impl App {
 
     /// Closes one pane now (no question). Returns false when it was the last pane of the last tab.
     fn close_pane_now(&mut self, pane: PaneId) -> bool {
+        // The overlay over it and its companions end with it: their waits and reviews get an answer too.
+        let with_it: Vec<PaneId> = self.running.as_ref().map_or_else(Vec::new, |r| {
+            r.mux
+                .overlay_of(pane)
+                .into_iter()
+                .chain(r.mux.companions_of(pane))
+                .collect()
+        });
+        for p in with_it {
+            self.api_pane_closed(p);
+        }
         self.api_pane_closed(pane);
         let Some(running) = &mut self.running else {
             return false;

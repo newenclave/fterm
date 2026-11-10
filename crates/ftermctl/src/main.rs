@@ -28,7 +28,7 @@ Panes and tabs:
                                          open a tab (or a split next to pane N); prints the new pane id
   focus N | close N [--force] | zoom [N] | title [--pane N] TEXT
   review FILE|- [--title T] [--timeout S]
-                                         show a plan (markdown) in a Review tab and wait: prints the
+                                         show a plan (markdown) in a Review and wait: prints the
                                          answer; exit 0 approved, 1 changes, 2 cancelled
   review --hook                          the same as a Claude Code hook for ExitPlanMode (docs/REVIEW.md)
   theme [NAME | --file x.json]           no NAME: list the themes (* = in use); NAME: use a theme
@@ -407,7 +407,7 @@ fn run_command(
     Ok(ExitCode::from(exit.clamp(0, 255) as u8))
 }
 
-/// `review`: shows a plan in a Review tab and waits for the user. With `--hook` it is a Claude Code
+/// `review`: shows a plan in a Review and waits for the user. With `--hook` it is a Claude Code
 /// `PreToolUse` hook for `ExitPlanMode`: the hook input comes on stdin, and the answer for Claude goes to
 /// stdout. Out of fterm, or with no answer, the hook says nothing, so Claude shows its own dialog.
 fn run_review(

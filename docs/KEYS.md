@@ -239,8 +239,8 @@ When a program runs in the pane (not the prompt), Enter does not type into it: t
 **Hints while you type** (turn on with `history = { hints = true }`): the rest of a command from the history
 shows in grey after the cursor. **Right arrow** or **End** takes it. Any other key works as usual.
 
-## A Review tab
-An agent can show you a plan in a Review tab (see [REVIEW.md](REVIEW.md)): Up / Down choose an item, Space marks it Ok,
+## A Review
+An agent can show you a plan in a Review (see [REVIEW.md](REVIEW.md)): Up / Down choose an item, Space marks it Ok,
 C comments, E changes the text, A adds an item, D removes, Shift + O marks the rest Ok, and S sends the review.
 
 ## The dock and its panels
