@@ -7,6 +7,9 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 ## [Unreleased]
 
 ### Fixed
+- **Toasts no longer jump up and down while Claude Code (or another program) draws.** Toasts move away from the
+  text cursor, and a program that draws moves its cursor many times a second. Now the toasts move once and stay
+  (at least 2 seconds, and they do not go back when the cursor leaves), and a hidden cursor does not move them.
 - **Paste works in a Review.** Ctrl+V, Ctrl+Shift+V, and Shift+Insert put the text into a comment, a changed text,
   or a new item (before, nothing came). In the list, paste opens a comment on the item with the text. Y copies
   the text of the item.

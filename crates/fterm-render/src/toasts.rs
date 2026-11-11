@@ -115,6 +115,63 @@ pub fn avoid_cursor(corner: Corner, stack: Rect, cursor: Rect) -> Corner {
     }
 }
 
+/// How long the stack stays in a corner after it moved there. A program that draws (Claude Code, other full-screen
+/// programs) moves its cursor many times a second: with no wait, the toasts would jump with it.
+pub const STAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Where the stack of toasts is, kept from one frame to the next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToastSpot {
+    pub corner: Corner,
+    /// The corner of the config when it was placed (a new one in the config places the stack again).
+    pub preferred: Corner,
+    /// When it came to this corner.
+    pub since: std::time::Instant,
+}
+
+/// The corner of a stack of `count` toasts. It starts in `preferred` (or the other corner when the cursor is
+/// there), and moves only when the cursor is under it, not sooner than `STAY` after the last move. It does not go
+/// back when the cursor leaves: the next stack (after all toasts went) starts in `preferred` again.
+pub fn place_stack(
+    spot: Option<ToastSpot>,
+    preferred: Corner,
+    count: usize,
+    area: Rect,
+    cell: CellMetrics,
+    cursor: Option<Rect>,
+    now: std::time::Instant,
+) -> ToastSpot {
+    let stack = |corner: Corner| {
+        let rects = layout_toasts(count, area, corner, cell);
+        let (Some(first), Some(last)) = (rects.first(), rects.last()) else {
+            return Rect::new(0.0, 0.0, 0.0, 0.0);
+        };
+        let top = first.y.min(last.y);
+        let bottom = (first.y + first.height).max(last.y + last.height);
+        Rect::new(first.x, top, first.width, bottom - top)
+    };
+    let away = |corner: Corner| match cursor {
+        Some(cursor) => avoid_cursor(corner, stack(corner), cursor),
+        None => corner,
+    };
+    let Some(spot) = spot.filter(|s| s.preferred == preferred) else {
+        return ToastSpot {
+            corner: away(preferred),
+            preferred,
+            since: now,
+        };
+    };
+    let next = away(spot.corner);
+    if next == spot.corner || now.saturating_duration_since(spot.since) < STAY {
+        return spot;
+    }
+    ToastSpot {
+        corner: next,
+        preferred,
+        since: now,
+    }
+}
+
 /// The quads of all toasts.
 pub fn build_toasts(
     toasts: &[ToastView],
@@ -307,6 +364,91 @@ mod tests {
             avoid_cursor(Corner::BottomRight, stack, away),
             Corner::BottomRight
         );
+    }
+
+    #[test]
+    fn the_stack_does_not_jump_when_a_program_moves_its_cursor() {
+        // The user's case: Claude Code draws, and its cursor goes under the toasts and away many times a second.
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let bottom = layout_toasts(2, AREA, Corner::BottomRight, CELL);
+        let under = Rect::new(bottom[1].x + 5.0, bottom[1].y + 5.0, 10.0, 20.0);
+        let away = Rect::new(10.0, 300.0, 10.0, 20.0);
+        let mut spot = None;
+        let mut corners = Vec::new();
+        for i in 0..20u64 {
+            let cursor = if i % 2 == 0 { under } else { away };
+            let now = t0 + Duration::from_millis(50 * i);
+            let s = place_stack(spot, Corner::BottomRight, 2, AREA, CELL, Some(cursor), now);
+            corners.push(s.corner);
+            spot = Some(s);
+        }
+        assert_eq!(corners[0], Corner::TopRight, "it moves away once");
+        assert!(
+            corners.iter().all(|c| *c == Corner::TopRight),
+            "and stays there: {corners:?}"
+        );
+    }
+
+    #[test]
+    fn the_stack_moves_again_only_after_a_while() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let top = layout_toasts(1, AREA, Corner::TopRight, CELL);
+        let bottom = layout_toasts(1, AREA, Corner::BottomRight, CELL);
+        let under_top = Rect::new(top[0].x + 5.0, top[0].y + 5.0, 10.0, 20.0);
+        let under_bottom = Rect::new(bottom[0].x + 5.0, bottom[0].y + 5.0, 10.0, 20.0);
+        let moved = place_stack(
+            None,
+            Corner::BottomRight,
+            1,
+            AREA,
+            CELL,
+            Some(under_bottom),
+            t0,
+        );
+        assert_eq!(moved.corner, Corner::TopRight);
+        let soon = t0 + Duration::from_millis(500);
+        let s = place_stack(
+            Some(moved),
+            Corner::BottomRight,
+            1,
+            AREA,
+            CELL,
+            Some(under_top),
+            soon,
+        );
+        assert_eq!(s.corner, Corner::TopRight, "not again so soon");
+        let later = t0 + STAY + Duration::from_millis(100);
+        let s = place_stack(
+            Some(s),
+            Corner::BottomRight,
+            1,
+            AREA,
+            CELL,
+            Some(under_top),
+            later,
+        );
+        assert_eq!(
+            s.corner,
+            Corner::BottomRight,
+            "the cursor stays there: now it moves"
+        );
+    }
+
+    #[test]
+    fn the_stack_is_in_its_corner_with_no_cursor_in_the_way() {
+        use std::time::Instant;
+        let now = Instant::now();
+        let away = Rect::new(10.0, 40.0, 10.0, 20.0);
+        for cursor in [None, Some(away)] {
+            let s = place_stack(None, Corner::BottomLeft, 3, AREA, CELL, cursor, now);
+            assert_eq!(s.corner, Corner::BottomLeft);
+        }
+        // A new corner in the config: the toasts go there at once.
+        let old = place_stack(None, Corner::BottomRight, 1, AREA, CELL, None, now);
+        let s = place_stack(Some(old), Corner::TopLeft, 1, AREA, CELL, None, now);
+        assert_eq!(s.corner, Corner::TopLeft);
     }
 
     #[test]

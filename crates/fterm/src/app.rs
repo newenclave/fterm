@@ -24,7 +24,7 @@ use fterm_render::tabbar::{
 };
 use fterm_render::theme::UiColors;
 use fterm_render::toasts::{
-    Corner, ToastLevel, ToastView, avoid_cursor, close_rect, layout_toasts,
+    Corner, ToastLevel, ToastSpot, ToastView, close_rect, layout_toasts, place_stack,
 };
 use fterm_term::alacritty_terminal::grid::{Dimensions, Scroll};
 use fterm_term::alacritty_terminal::index::{Point, Side};
@@ -624,6 +624,8 @@ pub struct App {
     spawn_remote: Option<String>,
     /// The `user@host` box of "Connect over SSH…".
     ssh_prompt: Option<crate::ai_chat::InputBox>,
+    /// The corner of the toasts now, so they do not jump with the cursor of a program that draws.
+    toast_spot: std::cell::Cell<Option<ToastSpot>>,
     /// A new pane of an API client starts in the folder of this pane (not of the active one).
     spawn_from: Option<PaneId>,
     /// The copy mode keys typed so far, a jump that waits for its char, the search prompt.
@@ -746,6 +748,7 @@ impl App {
             adhoc_remotes: Vec::new(),
             spawn_remote: None,
             ssh_prompt: None,
+            toast_spot: Default::default(),
             spawn_from: None,
             copy_input: Default::default(),
             connecting: None,
@@ -1589,41 +1592,42 @@ impl App {
         };
         let ids: Vec<u64> = self.center.toasts().iter().map(|t| t.id).collect();
         if ids.is_empty() {
+            // The next stack starts in its own corner again.
+            self.toast_spot.set(None);
             return Vec::new();
         }
         let cell = running.renderer.cell();
         let area = running.tab_area();
-        let mut corner = match position {
+        let preferred = match position {
             ToastPosition::BottomRight => Corner::BottomRight,
             ToastPosition::TopRight => Corner::TopRight,
             ToastPosition::BottomLeft => Corner::BottomLeft,
             ToastPosition::TopLeft => Corner::TopLeft,
             ToastPosition::Bottom => Corner::Bottom,
         };
-        let rects = layout_toasts(ids.len(), area, corner, cell);
-        // Do not cover the text cursor of the active pane.
-        if let (Some(first), Some(last), Some(cursor)) =
-            (rects.first(), rects.last(), self.cursor_rect())
-        {
-            let top = first.y.min(last.y);
-            let bottom = (first.y + first.height).max(last.y + last.height);
-            let stack = Rect::new(first.x, top, first.width, bottom - top);
-            corner = avoid_cursor(corner, stack, cursor);
-        }
-        ids.into_iter()
-            .zip(layout_toasts(
-                self.center.toasts().len(),
-                area,
-                corner,
-                cell,
-            ))
-            .collect()
+        // Do not cover the text cursor of the active pane, but do not jump with a cursor that a program moves
+        // while it draws (see `place_stack`).
+        let spot = place_stack(
+            self.toast_spot.get(),
+            preferred,
+            ids.len(),
+            area,
+            cell,
+            self.cursor_rect(),
+            Instant::now(),
+        );
+        self.toast_spot.set(Some(spot));
+        let rects = layout_toasts(ids.len(), area, spot.corner, cell);
+        ids.into_iter().zip(rects).collect()
     }
 
-    /// The text cursor of the active pane, in window pixels.
+    /// The text cursor of the active pane, in window pixels. `None` when the program hides it.
     fn cursor_rect(&self) -> Option<Rect> {
         let running = self.running.as_ref()?;
         let session = running.session()?;
+        if !session.with_term(|term| term.mode().contains(TermMode::SHOW_CURSOR)) {
+            return None;
+        }
         let cell = running.renderer.cell();
         let area = running.pane_area();
         let (line, column) = session.with_term(|term| {
