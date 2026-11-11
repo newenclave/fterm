@@ -238,8 +238,8 @@
     "reader.place_in": "{workspace}, tab {tab}, pane {pane}",
     "review.comment": "Comment:",
     "review.from": "from {agent}",
-    "review.input_keys": "Enter save · Shift+Enter new line · Esc cancel",
-    "review.keys": "S send · Space ok · C comment · E edit · A add · D remove · Shift+O rest ok · ↑↓",
+    "review.input_keys": "Enter save · Shift+Enter new line · Ctrl+V paste · Esc cancel",
+    "review.keys": "S send · Space ok · C comment · E edit · A add · D remove · Y copy · Shift+O rest ok · ↑↓",
     "review.new_item": "New item after this one:",
     "review.new_text": "New text:",
     "review.summary": {

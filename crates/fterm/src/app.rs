@@ -3013,6 +3013,10 @@ impl App {
         let Some(text) = self.clipboard.paste() else {
             return;
         };
+        // A Review has no program: the text goes into its input.
+        if let Some(pane) = self.active_review() {
+            return self.review_paste(pane, &text);
+        }
         let Some(session) = self.running.as_ref().and_then(Running::session) else {
             return;
         };

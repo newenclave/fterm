@@ -330,6 +330,13 @@ impl App {
             self.mods.shift_key(),
             self.mods.alt_key(),
         );
+        // Ctrl+V (Ctrl+Shift+V and Shift+Insert come through the `paste` action).
+        if super::overlay_calls::is_paste(&event.logical_key, event.physical_key, ctrl, shift) {
+            if let Some(text) = self.clipboard.paste() {
+                self.review_apply(pane, R::Paste(&text));
+            }
+            return;
+        }
         let text = event
             .text
             .as_deref()
@@ -354,6 +361,16 @@ impl App {
                 None => return,
             },
         };
+        self.review_apply(pane, key);
+    }
+
+    /// Text from the clipboard for the review that has the keys (the `paste` action).
+    pub(super) fn review_paste(&mut self, pane: PaneId, text: &str) {
+        self.review_apply(pane, crate::review::Key::Paste(text));
+    }
+
+    /// One key for the review `pane`: draw it again, send it, or copy what it gives.
+    fn review_apply(&mut self, pane: PaneId, key: crate::review::Key) {
         let Some(running) = self.running.as_mut() else {
             return;
         };
@@ -371,6 +388,7 @@ impl App {
                 let decision = rp.review.decision();
                 return self.finish_review(pane, decision);
             }
+            Outcome::Copy(text) => return self.copy_text(text),
         }
         self.draw_reviews();
         if let Some(running) = &self.running {

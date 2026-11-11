@@ -48,10 +48,13 @@ A mark on the left says what you did:
 | E | Change the text of the item. |
 | A | Add a new item after this one. |
 | D, Delete | Remove on or off (an added item goes away at once). |
+| Y | Copy the text of the item (your changed text, if you changed it). |
+| Ctrl + V, Ctrl + Shift + V, Shift + Insert | Paste: a comment on the item opens with the text (after its old comment). |
 | S, Ctrl + Enter | Send the review to the agent. The Review closes. |
 | Ctrl + Shift + W | Close the Review with no answer ("cancelled"). |
 
-In a comment or a text: Enter saves, Shift + Enter makes a new line, Esc cancels.
+In a comment or a text: Enter saves, Shift + Enter makes a new line, Ctrl + V (or Ctrl + Shift + V, Shift + Insert)
+pastes, Esc cancels. Pasted text keeps its lines.
 Other keys (tabs, the palette) work as usual.
 
 ## The answer

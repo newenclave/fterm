@@ -465,10 +465,12 @@ pub enum Key<'a> {
     Delete,
     /// Typed text (Space too).
     Text(&'a str),
+    /// Text from the clipboard (Ctrl+V, Ctrl+Shift+V, Shift+Insert).
+    Paste(&'a str),
 }
 
 /// What a key did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// The key is not for the review.
     Nothing,
@@ -476,6 +478,18 @@ pub enum Outcome {
     Changed,
     /// The user sends the review.
     Send,
+    /// Put this text into the clipboard (Y: the text of the selected item).
+    Copy(String),
+}
+
+/// Text from the clipboard for an input: one kind of new line, no control chars (a tab is a space).
+fn clean_paste(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .chars()
+        .map(|c| if c == '\t' { ' ' } else { c })
+        .filter(|c| *c == '\n' || !c.is_control())
+        .collect()
 }
 
 impl Review {
@@ -497,6 +511,13 @@ impl Review {
                 Key::Home => input.home(),
                 Key::End => input.end(),
                 Key::Text(text) => input.insert(text),
+                Key::Paste(text) => {
+                    let text = clean_paste(text);
+                    if text.is_empty() {
+                        return Outcome::Nothing;
+                    }
+                    input.insert(&text);
+                }
                 Key::Up | Key::Down | Key::PageUp | Key::PageDown => return Outcome::Nothing,
             }
             return Outcome::Changed;
@@ -510,6 +531,21 @@ impl Review {
             Key::End => self.move_by(isize::MAX / 2),
             Key::Delete => self.toggle_remove(),
             Key::Enter { ctrl: true, .. } => return Outcome::Send,
+            // Paste in the list: a comment on the selected item, with the text after its old comment.
+            Key::Paste(text) => {
+                let text = clean_paste(text);
+                if text.is_empty() {
+                    return Outcome::Nothing;
+                }
+                self.start_comment();
+                let Some(input) = self.input_mut() else {
+                    return Outcome::Nothing;
+                };
+                if !input.text.is_empty() && !input.text.ends_with(char::is_whitespace) {
+                    input.insert(" ");
+                }
+                input.insert(&text);
+            }
             Key::Text(text) => match text {
                 " " | "o" => self.toggle_ok(),
                 "O" => self.rest_ok(),
@@ -518,6 +554,14 @@ impl Review {
                 "a" | "A" => self.start_add(),
                 "d" | "D" => self.toggle_remove(),
                 "s" | "S" => return Outcome::Send,
+                "y" | "Y" => {
+                    return match self.items.get(self.selected) {
+                        Some(item) => {
+                            Outcome::Copy(item.edited.clone().unwrap_or_else(|| item.text.clone()))
+                        }
+                        None => Outcome::Nothing,
+                    };
+                }
                 _ => return Outcome::Nothing,
             },
             _ => return Outcome::Nothing,
@@ -977,6 +1021,74 @@ let x = 1;
         r.rest_ok();
         assert!(r.items.iter().all(|i| i.mark == Mark::Ok));
         assert_eq!(r.decision(), Decision::Approved);
+    }
+
+    #[test]
+    fn paste_goes_into_the_open_input() {
+        // The user's case: A (a new item), then a link from the clipboard.
+        let mut r = review();
+        r.start_add();
+        type_text(&mut r, "see ");
+        assert_eq!(
+            r.key(Key::Paste("https://example.com/a\r\nline 2\u{7}"), 10),
+            Outcome::Changed
+        );
+        assert_eq!(
+            r.input_mut().unwrap().text,
+            "see https://example.com/a\nline 2",
+            "CR LF is one new line, control chars go"
+        );
+        r.save_input();
+        assert!(
+            r.items
+                .iter()
+                .any(|i| i.added && i.text == "see https://example.com/a\nline 2")
+        );
+        // The comment and the edit inputs too.
+        r.start_comment();
+        r.key(Key::Paste("x"), 10);
+        assert_eq!(r.input_mut().unwrap().text, "x");
+        assert_eq!(
+            r.key(Key::Paste(""), 10),
+            Outcome::Nothing,
+            "nothing to paste"
+        );
+    }
+
+    #[test]
+    fn paste_in_the_list_opens_a_comment() {
+        let mut r = review();
+        r.move_by(1);
+        assert_eq!(
+            r.key(Key::Paste("https://example.com"), 10),
+            Outcome::Changed
+        );
+        assert!(matches!(r.mode, Mode::Comment(_)));
+        assert_eq!(r.input_mut().unwrap().text, "https://example.com");
+        r.save_input();
+        assert_eq!(r.items[1].comment.as_deref(), Some("https://example.com"));
+        // With a comment there: the text goes after it.
+        r.key(Key::Paste("more"), 10);
+        assert_eq!(r.input_mut().unwrap().text, "https://example.com more");
+    }
+
+    #[test]
+    fn y_copies_the_text_of_the_item() {
+        let mut r = review();
+        r.move_by(1);
+        assert_eq!(r.key(Key::Text("y"), 10), Outcome::Copy("two".into()));
+        r.start_edit();
+        type_text(&mut r, "2nd");
+        r.save_input();
+        assert_eq!(
+            r.key(Key::Text("Y"), 10),
+            Outcome::Copy("2nd".into()),
+            "the changed text"
+        );
+        // In an input, Y is a letter.
+        r.start_comment();
+        assert_eq!(r.key(Key::Text("Y"), 10), Outcome::Changed);
+        assert_eq!(r.input_mut().unwrap().text, "Y");
     }
 
     #[test]

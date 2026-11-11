@@ -7,6 +7,9 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 ## [Unreleased]
 
 ### Fixed
+- **Paste works in a Review.** Ctrl+V, Ctrl+Shift+V, and Shift+Insert put the text into a comment, a changed text,
+  or a new item (before, nothing came). In the list, paste opens a comment on the item with the text. Y copies
+  the text of the item.
 - **An overlay or a companion that ends with its pane answers at once.** A Review over an agent's pane, or an
   `overlay --wait`, waited until its time ran out when that pane closed. Now the agent gets "cancelled" at once.
 - **After R on a plan question, the Review comes to the front.** Before, when you were in another tab, it opened
