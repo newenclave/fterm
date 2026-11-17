@@ -6,6 +6,7 @@
 |---|---|---|
 | `fterm-term` | Runs the shell in a pty. Keeps the text grid. Colors. Grid size. Links. Pictures (OSC 1337). Remote sessions and snapshots for the mux server. | No |
 | `fterm-mux` | Workspaces, tabs, the tree of panes in each tab, overlays, the scratch shell, and companions. A pure model. | No |
+| `fterm-ui` | Parts of a UI that is drawn as text into a pane with no program (the Review, later forms): the input box, the looks of text and their ANSI drawing, the keys, text helpers. No UI words and no colors: the app gives them. | No |
 | `fterm-config` | The Luau config: settings, themes, languages (l10n), profiles, key bindings, Lua functions. | No |
 | `fterm-render` | Font, glyph atlas, tab bar, and drawing with wgpu. | Yes |
 | `fterm-history` | The history of commands and folders (JSON lines files). | No |

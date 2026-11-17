@@ -1,0 +1,13 @@
+[package]
+name = "fterm-ui"
+description = "UI parts for fterm drawn as text: inputs, looks, and keys (a pure model)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+unicode-width.workspace = true
+
+[lints]
+workspace = true

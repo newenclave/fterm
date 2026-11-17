@@ -5,6 +5,10 @@
 use serde_json::{Value, json};
 
 use crate::ai_chat::InputBox;
+pub use fterm_ui::key::Key;
+use fterm_ui::look::span;
+pub use fterm_ui::look::{Look, Row, Span};
+use fterm_ui::text::{cells, clean as clean_paste, fit};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -407,68 +411,6 @@ impl Review {
     }
 }
 
-/// How a part of a line looks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Look {
-    Title,
-    Dim,
-    Text,
-    Heading,
-    Ok,
-    Remove,
-    Changed,
-    Comment,
-    Code,
-    Input,
-    Cursor,
-}
-
-/// A part of a screen line.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Span {
-    pub text: String,
-    pub look: Look,
-}
-
-/// One screen line: its parts, the item it belongs to, and the selection background.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Row {
-    pub spans: Vec<Span>,
-    pub selected: bool,
-}
-
-impl Row {
-    /// The text with no looks (for tests).
-    #[cfg(test)]
-    pub fn plain(&self) -> String {
-        self.spans.iter().map(|s| s.text.as_str()).collect()
-    }
-}
-
-/// A key for a review, from the window (the app turns winit keys into these).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Key<'a> {
-    Up,
-    Down,
-    PageUp,
-    PageDown,
-    Home,
-    End,
-    Left,
-    Right,
-    Enter {
-        ctrl: bool,
-        shift: bool,
-    },
-    Escape,
-    Backspace,
-    Delete,
-    /// Typed text (Space too).
-    Text(&'a str),
-    /// Text from the clipboard (Ctrl+V, Ctrl+Shift+V, Shift+Insert).
-    Paste(&'a str),
-}
-
 /// What a key did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -480,16 +422,6 @@ pub enum Outcome {
     Send,
     /// Put this text into the clipboard (Y: the text of the selected item).
     Copy(String),
-}
-
-/// Text from the clipboard for an input: one kind of new line, no control chars (a tab is a space).
-fn clean_paste(text: &str) -> String {
-    text.replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .chars()
-        .map(|c| if c == '\t' { ' ' } else { c })
-        .filter(|c| *c == '\n' || !c.is_control())
-        .collect()
 }
 
 impl Review {
@@ -567,35 +499,6 @@ impl Review {
             _ => return Outcome::Nothing,
         }
         Outcome::Changed
-    }
-}
-
-/// The width of a text in cells.
-fn cells(text: &str) -> usize {
-    use unicode_width::UnicodeWidthChar;
-    text.chars().map(|c| c.width().unwrap_or(0)).sum()
-}
-
-/// The first `width` cells of a text.
-fn fit(text: &str, width: usize) -> String {
-    use unicode_width::UnicodeWidthChar;
-    let mut out = String::new();
-    let mut used = 0;
-    for c in text.chars() {
-        let w = c.width().unwrap_or(0);
-        if used + w > width {
-            break;
-        }
-        used += w;
-        out.push(c);
-    }
-    out
-}
-
-fn span(text: impl Into<String>, look: Look) -> Span {
-    Span {
-        text: text.into(),
-        look,
     }
 }
 
@@ -808,45 +711,41 @@ pub fn render(
     rows_n: usize,
     ui: &fterm_render::theme::UiColors,
 ) -> String {
-    use std::fmt::Write;
-    let fg = |c: fterm_term::alacritty_terminal::vte::ansi::Rgb| {
-        format!("\x1b[38;2;{};{};{}m", c.r, c.g, c.b)
+    use fterm_ui::look::{Rgb, Style};
+    let rgb = |c: fterm_term::alacritty_terminal::vte::ansi::Rgb| Rgb {
+        r: c.r,
+        g: c.g,
+        b: c.b,
     };
-    let bg = |c: fterm_term::alacritty_terminal::vte::ansi::Rgb| {
-        format!("\x1b[48;2;{};{};{}m", c.r, c.g, c.b)
+    let fg = |c| Style {
+        fg: Some(rgb(c)),
+        ..Style::default()
     };
-    let mut out = String::from("\x1b[H\x1b[?25l");
+    let style = |look: Look| match look {
+        Look::Title | Look::Heading => Style {
+            bold: true,
+            ..fg(ui.accent)
+        },
+        Look::Dim | Look::Code => fg(ui.text_dim),
+        Look::Text => fg(ui.text),
+        Look::Ok => fg(ui.success),
+        Look::Remove => Style {
+            strike: true,
+            ..fg(ui.error)
+        },
+        Look::Changed => fg(ui.warning),
+        Look::Comment => fg(ui.info),
+        Look::Input => Style {
+            bg: Some(rgb(ui.input_bg)),
+            ..fg(ui.text)
+        },
+        Look::Cursor => Style {
+            bg: Some(rgb(ui.text)),
+            ..fg(ui.surface_active)
+        },
+    };
     let lines = rows(review, cols, rows_n);
-    let count = lines.len();
-    for (n, row) in lines.into_iter().enumerate() {
-        let back = if row.selected {
-            bg(ui.selected)
-        } else {
-            "\x1b[49m".to_owned()
-        };
-        out.push_str("\x1b[0m");
-        out.push_str(&back);
-        for s in &row.spans {
-            let style = match s.look {
-                Look::Title | Look::Heading => format!("\x1b[1m{}", fg(ui.accent)),
-                Look::Dim | Look::Code => fg(ui.text_dim),
-                Look::Text => fg(ui.text),
-                Look::Ok => fg(ui.success),
-                Look::Remove => format!("\x1b[9m{}", fg(ui.error)),
-                Look::Changed => fg(ui.warning),
-                Look::Comment => fg(ui.info),
-                Look::Input => format!("{}{}", fg(ui.text), bg(ui.input_bg)),
-                Look::Cursor => format!("{}{}", fg(ui.surface_active), bg(ui.text)),
-            };
-            let _ = write!(out, "\x1b[0m{back}{style}{}", s.text);
-        }
-        // The rest of the line in the row's background.
-        let _ = write!(out, "\x1b[0m{back}\x1b[K\x1b[0m");
-        if n + 1 < count {
-            out.push_str("\r\n");
-        }
-    }
-    out
+    fterm_ui::look::render_ansi(&lines, style, rgb(ui.selected))
 }
 
 /// What a `review` call does now.

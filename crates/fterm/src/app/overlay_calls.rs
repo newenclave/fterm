@@ -63,19 +63,7 @@ pub(super) fn is_paste(key: &Key, physical: PhysicalKey, ctrl: bool, shift: bool
         || (shift && !ctrl && *key == Key::Named(NamedKey::Insert))
 }
 
-/// Pasted text for a box with one line: new lines and tabs are spaces, other control chars go.
-pub(super) fn one_line(text: &str) -> String {
-    let text = text.replace("\r\n", "\n");
-    let line: String = text
-        .chars()
-        .filter_map(|c| match c {
-            '\n' | '\r' | '\t' => Some(' '),
-            c if c.is_control() => None,
-            c => Some(c),
-        })
-        .collect();
-    line.trim().to_owned()
-}
+pub(super) use fterm_ui::text::one_line;
 
 /// The smallest overlay or scratch: 20 columns and 6 rows.
 pub(super) fn floating_min(cell: fterm_render::font::CellMetrics, padding: f32) -> (f32, f32) {

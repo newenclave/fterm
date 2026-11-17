@@ -7,6 +7,9 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 ## [Unreleased]
 
 ### Fixed
+- **The cursor in a box with many lines is where it should be.** In the input of the AI panel and in the comment
+  of a Review, the cursor was not seen at the end of a line that fills the whole width, and it was one cell off
+  after a wide char (Chinese, Japanese) that went to the next row.
 - **Toasts no longer jump up and down while Claude Code (or another program) draws.** Toasts move away from the
   text cursor, and a program that draws moves its cursor many times a second. Now the toasts move once and stay
   (at least 2 seconds, and they do not go back when the cursor leaves), and a hidden cursor does not move them.
