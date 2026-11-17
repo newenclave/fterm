@@ -56,6 +56,13 @@ pub fn gated(method: &str, params: &serde_json::Value) -> bool {
     }
 }
 
+/// The pane is the client's own: its pane (from `hello`), or a pane that it opened. Not a pane that it opened for a
+/// dialog: a scene or a picture needs no yes and can sit in the tab of another program, and a dialog over it would
+/// sit there too.
+pub fn owns(method: &str, its_pane: bool, opened_it: bool) -> bool {
+    its_pane || (opened_it && !matches!(method, "review" | "form"))
+}
+
 /// The lines of the question box.
 pub fn question(name: &str, tab: Option<usize>) -> Vec<String> {
     let who = match tab {
@@ -86,6 +93,16 @@ mod tests {
         assert!(!gated("form", &json!({})));
         assert!(!gated("form", &json!({ "pane": null })));
         assert!(!gated("review", &json!({ "items": ["a"] })));
+    }
+
+    #[test]
+    fn a_pane_that_a_client_opened_is_not_its_own_for_a_dialog() {
+        // A scene needs no yes and can sit in the tab of another program: a dialog over it would sit there too.
+        assert!(owns("send_text", false, true));
+        assert!(!owns("form", false, true));
+        assert!(!owns("review", false, true));
+        assert!(owns("form", true, false));
+        assert!(!owns("get_text", false, false));
     }
 
     fn base(always: &HashSet<String>) -> Check<'_> {

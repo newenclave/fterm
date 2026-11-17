@@ -78,6 +78,8 @@ pub struct ApiRequest {
     pub method: String,
     pub params: Value,
     pub reply: mpsc::Sender<Result<Value, RpcError>>,
+    /// When the call came (the time of a dialog counts from it, also when it waited for the access question).
+    pub asked: std::time::Instant,
 }
 
 /// The server calls this on the client threads. It passes each request to the event loop and waits.
@@ -102,6 +104,7 @@ impl Handler for Bridge {
             method: method.to_owned(),
             params,
             reply,
+            asked: std::time::Instant::now(),
         };
         let sent = self
             .proxy
@@ -124,6 +127,16 @@ impl Handler for Bridge {
             let _ = proxy.send_event(UserEvent::ApiGone(client));
         }
     }
+}
+
+/// The client of a call that came at `asked` still waits for its answer at `now` (it stops after `timeout_for`).
+pub fn still_waits(
+    asked: std::time::Instant,
+    method: &str,
+    params: &Value,
+    now: std::time::Instant,
+) -> bool {
+    now.saturating_duration_since(asked) < timeout_for(method, params)
 }
 
 /// How long a client thread waits for the app. `wait_for` and `ai_ask` with `wait` wait as long as
@@ -212,6 +225,8 @@ pub struct ReviewRequest {
     pub timeout: Duration,
     /// From the Claude Code plan mode hook: `plan_review` in the config says if the review opens.
     pub plan_mode: bool,
+    /// Who asked, as the request says (`from`, else the client name): for logic, not for the label (`from`).
+    pub agent: String,
 }
 
 /// `review`: `title`, `from` (default: the client name), `text` (markdown) or `items` (a list of texts),
@@ -243,6 +258,7 @@ pub fn review_param(params: &Value, client_name: &str) -> Result<ReviewRequest, 
     Ok(ReviewRequest {
         title: str_param(params, "title")?.unwrap_or_else(|| fterm_config::tr!("review.title")),
         from: dialog_from(params, client_name)?,
+        agent: dialog_agent(params, client_name)?,
         items,
         timeout: review_timeout(params),
         plan_mode: bool_param(params, "plan_mode")?.unwrap_or(false),
@@ -274,15 +290,26 @@ pub fn form_param(params: &Value, client_name: &str) -> Result<FormRequest, RpcE
 /// name than the client's, the client name comes next to it, so an agent can not make its dialog look like one of
 /// fterm or of another program alone.
 fn dialog_from(params: &Value, client_name: &str) -> Result<String, RpcError> {
-    let client = fterm_ui::text::one_line(client_name);
-    let from = str_param(params, "from")?
-        .map(|from| fterm_ui::text::one_line(&from))
-        .filter(|from| !from.is_empty());
-    Ok(match from {
-        Some(from) if from != client && !client.is_empty() => format!("{from} ({client})"),
-        Some(from) => from,
-        None => client,
+    let client = dialog_name(client_name);
+    Ok(match dialog_agent(params, client_name)? {
+        from if from == client => from,
+        // A client with no name: a mark, so the name of the request is never alone.
+        from if client.is_empty() => format!("{from} (?)"),
+        from => format!("{from} ({client})"),
     })
+}
+
+/// Who asked, as the request says: `from` (on one line, cut), else the client name.
+fn dialog_agent(params: &Value, client_name: &str) -> Result<String, RpcError> {
+    let from = str_param(params, "from")?
+        .map(|from| dialog_name(&from))
+        .filter(|from| !from.is_empty());
+    Ok(from.unwrap_or_else(|| dialog_name(client_name)))
+}
+
+/// A name for a dialog: one line, at most 20 cells (a long name must not push the rest of the header out).
+fn dialog_name(name: &str) -> String {
+    fterm_ui::text::fit(&fterm_ui::text::one_line(name), 20)
 }
 
 /// How long a review waits: `timeout_ms`, one hour by default, at most a day.
@@ -505,6 +532,12 @@ mod tests {
         );
         let same = review_param(&json!({"items": ["a"], "from": "claude"}), "claude").unwrap();
         assert_eq!(same.from, "claude");
+        // The plan mode hook: ftermctl asks for claude. The label has both; the logic uses the agent.
+        let hook = review_param(&json!({"items": ["a"], "from": "claude"}), "ftermctl").unwrap();
+        assert_eq!(
+            (hook.from.as_str(), hook.agent.as_str()),
+            ("claude (ftermctl)", "claude")
+        );
         assert_eq!(r.timeout, std::time::Duration::from_secs(1));
         let long = review_param(&json!({"items": ["a"], "timeout_ms": 1e12}), "x").unwrap();
         assert_eq!(
@@ -530,6 +563,21 @@ mod tests {
     }
 
     #[test]
+    fn a_call_that_waited_too_long_is_not_run() {
+        let at = std::time::Instant::now();
+        let secs = Duration::from_secs;
+        assert!(still_waits(at, "send_text", &json!({}), at + secs(60)));
+        assert!(
+            !still_waits(at, "send_text", &json!({}), at + secs(121)),
+            "its client gave up after two minutes"
+        );
+        assert!(
+            still_waits(at, "form", &json!({}), at + secs(600)),
+            "a form waits 30 minutes"
+        );
+    }
+
+    #[test]
     fn a_form_request() {
         let fields = json!([{ "id": "a", "type": "text" }]);
         let r = form_param(&json!({ "fields": fields }), "claude").unwrap();
@@ -548,6 +596,19 @@ mod tests {
         );
         let same = form_param(&json!({ "fields": fields, "from": "claude" }), "claude").unwrap();
         assert_eq!(same.form.from, "claude");
+        let nameless =
+            form_param(&json!({ "fields": fields, "from": "Windows Security" }), "").unwrap();
+        assert_eq!(
+            nameless.form.from, "Windows Security (?)",
+            "a client with no name"
+        );
+        let long =
+            form_param(&json!({ "fields": fields, "from": "x".repeat(300) }), "bot").unwrap();
+        assert!(
+            long.form.from.ends_with(" (bot)") && fterm_ui::text::cells(&long.form.from) == 20 + 6,
+            "a long name is cut, the client name stays: {}",
+            long.form.from
+        );
         assert_eq!(r.timeout, Duration::from_secs(1));
         let e = form_param(&json!({ "fields": [{ "id": "a", "type": "nope" }] }), "x").unwrap_err();
         assert_eq!(e.code, RpcError::INVALID_PARAMS);

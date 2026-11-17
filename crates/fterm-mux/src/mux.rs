@@ -55,6 +55,10 @@ pub struct Overlay {
     pub size: u8,
     /// It is shown; hidden, its program lives on and the pane under it has the keys.
     pub shown: bool,
+    /// Opened on a pane (a dialog over the pane of an agent): it has the keys only while that pane is the active
+    /// one, so it never takes the keys of another pane that you type in. An overlay that you open yourself has the
+    /// keys of its tab.
+    pub follows: bool,
 }
 
 /// The overlay of the window: a program over the tab in front (any tab), shown or hidden.
@@ -401,7 +405,7 @@ impl Mux {
             return Some(w.pane);
         }
         self.overlay()
-            .filter(|o| o.shown)
+            .filter(|o| o.shown && (!o.follows || self.active_pane() == Some(o.over)))
             .map(|o| o.pane)
             .or_else(|| self.active_pane())
     }
@@ -467,6 +471,7 @@ impl Mux {
             over,
             size: size.clamp(1, 100),
             shown: true,
+            follows: false,
         });
         true
     }
@@ -487,6 +492,7 @@ impl Mux {
             over,
             size: size.clamp(1, 100),
             shown: true,
+            follows: true,
         });
         true
     }
@@ -852,7 +858,12 @@ impl Mux {
             list.shown = Some(index);
             list.last = index;
         }
-        self.focus(pane);
+        // Going to an overlay goes to the pane under it (a dialog has the keys while that pane has them).
+        let target = tab
+            .overlay
+            .filter(|o| o.pane == pane)
+            .map_or(pane, |o| o.over);
+        self.focus(target);
         true
     }
 
@@ -1176,6 +1187,34 @@ mod tests {
         mux.select(0);
         assert_eq!(mux.pane_tab(overlay), mux.pane_tab(over));
         assert!(mux.is_floating(overlay) && !mux.is_floating(over));
+    }
+
+    #[test]
+    fn a_dialog_overlay_has_the_keys_only_while_its_pane_has_them() {
+        // A dialog over the pane of an agent must not take the keys of the pane that you type in.
+        let area = Rect::new(0.0, 0.0, 1000.0, 600.0);
+        let (mut mux, panes) = mux_with(1);
+        let agent = panes[0];
+        let you = mux.new_pane_id();
+        assert!(mux.split_pane(agent, you, Direction::Right));
+        mux.focus(you);
+        let dialog = mux.new_pane_id();
+        assert!(mux.open_overlay_on(agent, dialog, 80));
+        assert_eq!(mux.input_pane(), Some(you), "you keep your keys");
+        assert_eq!(mux.floating_rects(area, (0.0, 0.0)).len(), 1, "it is seen");
+        // Going to it goes to the pane under it: then it has the keys.
+        assert!(mux.reveal(dialog));
+        assert_eq!(mux.active_pane(), Some(agent));
+        assert_eq!(mux.input_pane(), Some(dialog));
+        // Your pane zoomed: the dialog is not seen, and it has no keys.
+        mux.focus(you);
+        mux.toggle_zoom();
+        assert_eq!(mux.input_pane(), Some(you));
+        // An overlay that you opened yourself (over the active pane) keeps the keys of the tab.
+        let (mut mux, _) = mux_with(1);
+        let yours = mux.new_pane_id();
+        assert!(mux.open_overlay(yours, 80));
+        assert_eq!(mux.input_pane(), Some(yours));
     }
 
     #[test]

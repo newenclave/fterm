@@ -751,15 +751,16 @@ pub fn skipped() -> Value {
     json!({ "decision": "skipped", "feedback": "", "items": [] })
 }
 
-/// The question before a plan of plan mode opens in a Review tab.
-pub fn question_lines(from: &str, title: &str) -> Vec<String> {
+/// The question before a plan of plan mode opens in a Review tab. `label` = who asked, with the client name when
+/// it is another name (`claude (ftermctl)`); `agent` = the name in the request, whose own dialog Esc gives.
+pub fn question_lines(label: &str, agent: &str, title: &str) -> Vec<String> {
     let mut lines = vec![
-        fterm_config::tr!("box.plan", agent = from, title = title),
+        fterm_config::tr!("box.plan", agent = label, title = title),
         String::new(),
         fterm_config::tr!("box.plan_review"),
-        fterm_config::tr!("box.plan_dialog", agent = from),
+        fterm_config::tr!("box.plan_dialog", agent = agent),
     ];
-    if from == "claude" {
+    if agent == "claude" {
         // The dialog of Claude Code can open the plan in your editor.
         lines.push(fterm_config::tr!("box.plan_editor"));
     }
@@ -802,8 +803,9 @@ mod tests {
 
     #[test]
     fn the_question_before_a_plan_review() {
-        let lines = question_lines("claude", "Themes");
-        assert_eq!(lines[0], "claude has a plan: Themes");
+        // The plan mode hook: ftermctl asks for claude. The label shows both; the logic uses the agent.
+        let lines = question_lines("claude (ftermctl)", "claude", "Themes");
+        assert_eq!(lines[0], "claude (ftermctl) has a plan: Themes");
         assert!(lines.iter().any(|l| l.contains("R = review it here")));
         assert!(
             lines
@@ -814,7 +816,7 @@ mod tests {
             lines.iter().any(|l| l.contains("Ctrl+G")),
             "Claude Code can edit the plan in an editor"
         );
-        let other = question_lines("opencode", "Themes");
+        let other = question_lines("opencode", "opencode", "Themes");
         assert!(!other.iter().any(|l| l.contains("Ctrl+G")), "only Claude");
     }
 

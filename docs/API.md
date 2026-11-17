@@ -26,6 +26,10 @@ Agents (Claude Code, OpenCode), scripts, and `ftermctl` use it. MCP is in [MCP.m
 
   "Allow" is for this connection. "Always" is for this client name until fterm closes.
   Your call waits while the question is open (up to two minutes).
+- A **dialog** (`review`, `form`) at **another pane** (`pane` is not your own pane) needs the same yes. Over another
+  program, a dialog could look like that program asks for something (a password). A pane that you opened with
+  `scene_open` or `show_image` is not your own here. With no `pane`, a dialog opens at your own pane (or in a new
+  tab): no question.
 - A pane with **remote control off** cannot be read or typed into by any other client.
   Turn it off and on with the action `toggle_remote_control` (in the command palette).
 - `api = { ask = false }` in the config: no questions (only "remote control off" still stops clients).
@@ -85,7 +89,7 @@ A missing `pane` means: the pane of the client (from `hello`), else the active p
 | `zoom` | `pane` | |
 | `set_title` | `pane`, `title` (the title of its tab; empty = the automatic title) | |
 | `set_tab_color` | `pane`, `color`: `"#rrggbb"` or `"#rgb"`; `"none"` or `null` = no color | |
-| `review` | `text` (a markdown plan) or `items` (a list of texts); `title`, `from` (default: the client name), `pane` (the pane that asks), `timeout_ms` (default one hour, at most a day), `plan_mode` (true = from the Claude Code plan mode hook: `plan_review` in the config says if the tab opens). It waits for the user (see [REVIEW.md](REVIEW.md)). | `decision` (`approved`, `changes`, `cancelled`, or `skipped` when a `plan_mode` review did not open), `feedback` (text for an agent), `items` (`text`, `mark`, `comment`, `edited`, `added`); `timed_out` when the time ran out |
+| `review` | `text` (a markdown plan) or `items` (a list of texts); `title`, `from` (default: the client name; another name is shown with the client name, `claude (ftermctl)`), `pane` (the pane that asks; another pane than yours needs a yes), `timeout_ms` (default one hour, at most a day; it counts from the call, also while fterm asks the user for access), `plan_mode` (true = from the Claude Code plan mode hook: `plan_review` in the config says if the tab opens). It waits for the user (see [REVIEW.md](REVIEW.md)). | `decision` (`approved`, `changes`, `cancelled`, or `skipped` when a `plan_mode` review did not open), `feedback` (text for an agent), `items` (`text`, `mark`, `comment`, `edited`, `added`); `timed_out` when the time ran out |
 | `themes` | | `current` (the theme in use), `themes` (all names) |
 | `set_theme` | `name` (a theme name), or `theme` (a whole theme as JSON, see [THEMES.md](THEMES.md)). It lasts until fterm closes or the config changes. | `name` |
 | `notify` | `title`, `body`, `level` (`info`, `success`, `warning`, `error`, `attention`) | |

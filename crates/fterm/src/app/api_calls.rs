@@ -180,8 +180,11 @@ impl App {
                 Err(_) => return Verdict::Allow,
                 Ok(pane) => {
                     let p = &running.panes[&pane];
-                    let own = client.and_then(|c| c.pane) == Some(pane)
-                        || p.opened_by == Some(request.client);
+                    let own = crate::access::owns(
+                        &request.method,
+                        client.and_then(|c| c.pane) == Some(pane),
+                        p.opened_by == Some(request.client),
+                    );
                     (own, p.remote)
                 }
             }
@@ -242,8 +245,13 @@ impl App {
                 self.api_always.insert(client.name.clone());
             }
         }
+        let now = Instant::now();
         for request in ask.requests {
-            self.api_call(event_loop, request);
+            // A call whose client stopped waiting while the question was open does not run now (the client may
+            // have tried again, and text would be typed twice).
+            if crate::api::still_waits(request.asked, &request.method, &request.params, now) {
+                self.api_call(event_loop, request);
+            }
         }
         if let Some(running) = &self.running {
             running.window.request_redraw();
@@ -257,6 +265,8 @@ impl App {
         self.ai_waits.retain(|w| w.client != client);
         self.api_questions.retain(|a| a.client != client);
         self.dialog_client_gone(client);
+        // Its plan questions too: R would open a Review that nobody waits for.
+        self.plan_questions.retain(|q| q.request.client != client);
         self.picture_client_gone(client);
         if let Some(running) = &self.running {
             running.window.request_redraw();

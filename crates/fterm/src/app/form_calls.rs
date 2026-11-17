@@ -9,7 +9,9 @@ use fterm_ui::field::{Hint, Problem, Word};
 use fterm_ui::form::{Form, Outcome};
 use fterm_ui::key::Key as FormKey;
 
-use super::dialog_calls::{Dialog, DialogInput, DialogKind, PendingDialog, dialog_input};
+use super::dialog_calls::{
+    Dialog, DialogInput, DialogKind, PendingDialog, dialog_deadline, dialog_input,
+};
 use super::*;
 use crate::api::ApiRequest;
 
@@ -39,7 +41,13 @@ impl App {
                 return;
             }
         };
-        let deadline = Instant::now() + asked.timeout;
+        let Some(deadline) = dialog_deadline(request.asked, asked.timeout, Instant::now()) else {
+            // It waited for the access question until its time was over: its client stopped waiting.
+            let mut answer = Form::cancelled();
+            answer["timed_out"] = true.into();
+            let _ = request.reply.send(Ok(answer));
+            return;
+        };
         let title = tr!("form.tab", title = asked.form.title);
         let dialog = Dialog::Form(Box::new(asked.form));
         let Some(pane) = self.place_dialog(event_loop, dialog, title, near, false) else {

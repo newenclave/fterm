@@ -4,7 +4,9 @@ use std::time::Instant;
 
 use fterm_api::RpcError;
 
-use super::dialog_calls::{Dialog, DialogInput, DialogKind, PendingDialog, dialog_input};
+use super::dialog_calls::{
+    Dialog, DialogInput, DialogKind, PendingDialog, dialog_deadline, dialog_input,
+};
 use super::*;
 use crate::api::ApiRequest;
 use crate::review::{Outcome, Review, Start};
@@ -52,7 +54,13 @@ impl App {
             }
         };
         let now = Instant::now();
-        let review_deadline = now + asked.timeout;
+        let Some(review_deadline) = dialog_deadline(request.asked, asked.timeout, now) else {
+            // It waited for the access question until its time was over: its client stopped waiting.
+            let mut answer = DialogKind::Review.cancelled();
+            answer["timed_out"] = true.into();
+            let _ = request.reply.send(Ok(answer));
+            return;
+        };
         match crate::review::start(asked.plan_mode, self.plan_review()) {
             Start::Open => {
                 self.start_review(event_loop, request, asked, near, review_deadline, false)
@@ -61,7 +69,7 @@ impl App {
                 let _ = request.reply.send(Ok(crate::review::skipped()));
             }
             Start::Ask => {
-                let lines = crate::review::question_lines(&asked.from, &asked.title);
+                let lines = crate::review::question_lines(&asked.from, &asked.agent, &asked.title);
                 let title = lines[0].clone();
                 let body = tr!("toast.plan_question_body", agent = asked.from);
                 self.plan_questions.push(PlanQuestion {
@@ -116,7 +124,12 @@ impl App {
             return;
         }
         let q = self.plan_questions.remove(0);
-        if review {
+        if review && q.review_deadline <= Instant::now() {
+            // Its time ran out while the question was open: no Review.
+            let mut answer = DialogKind::Review.cancelled();
+            answer["timed_out"] = true.into();
+            let _ = q.request.reply.send(Ok(answer));
+        } else if review {
             // The user asked for it (R): it comes to the front (see `ReviewFocus::Auto`).
             self.start_review(
                 event_loop,

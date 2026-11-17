@@ -364,7 +364,9 @@ impl Running {
             .tabs()
             .iter()
             .map(|tab| {
-                let panes = tab.layout.panes();
+                // The overlay too: a dialog over the pane of an agent waits for you there.
+                let mut panes = tab.layout.panes();
+                panes.extend(tab.overlay.map(|o| o.pane));
                 tab_badge(
                     panes
                         .iter()
@@ -421,9 +423,10 @@ impl Running {
             .all_tabs()
             .filter(|tab| Some(tab.id) != active)
             .filter_map(|tab| {
+                let mut panes = tab.layout.panes();
+                panes.extend(tab.overlay.map(|o| o.pane));
                 tab_badge(
-                    tab.layout
-                        .panes()
+                    panes
                         .iter()
                         .filter_map(|id| self.panes.get(id)?.agent.as_ref()),
                 )
@@ -1179,7 +1182,8 @@ impl App {
                     .collect();
                 let mut entries = Vec::new();
                 for (tab, title) in running.mux.all_tabs().zip(&titles) {
-                    for pane in tab.layout.panes() {
+                    let overlay = tab.overlay.map(|o| o.pane);
+                    for pane in tab.layout.panes().into_iter().chain(overlay) {
                         if let Some(p) = running.panes.get(&pane)
                             && let Some(state) = p.agent.as_ref()
                         {

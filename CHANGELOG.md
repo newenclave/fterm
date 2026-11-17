@@ -44,12 +44,14 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   A number is seconds; `false` means "until you close it". See [docs/CONFIG.md](docs/CONFIG.md#notifications).
 
 ### Changed
-- **A form or a Review at another pane needs your yes.** When a program asks to open one at a pane that is not its
-  own (`pane`), fterm asks first, as it does for `send_text` into that pane. Over another program, a dialog could
-  look like that program asks for a password. A dialog also shows the name of the program that asked next to the
-  name it gives (`from claude (ftermctl)`).
+- **A form or a Review at another pane needs your yes**, the same rule as for `send_text` into that pane: when a
+  program asks to open one at a pane that is not its own (`pane`), fterm asks first. A dialog also shows the client
+  name next to the name that the request gives (`from claude (ftermctl)`). Both names come from the program, so
+  this is no guard against a bad program on your computer.
 - **A plan Review opens over the pane of the agent** (a box, like an overlay), not as a tab at the far right.
-  `plan_review = { place = "tab" }` gives a tab again (now right after the tab of the agent).
+  The box gets your keys only while the pane of the agent is your active pane: when you type in another pane of
+  that tab, your keys stay there. The dot of the tab shows that it waits. `plan_review = { place = "tab" }` gives
+  a tab again (now right after the tab of the agent).
 - **Error toasts hide after 30 seconds now** (before, they stayed until you closed them). They are still in the
   Events panel. "Attention" toasts (an agent waits for you) still stay until you close them.
 

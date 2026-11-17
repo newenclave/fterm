@@ -39,6 +39,17 @@ impl DialogKind {
     }
 }
 
+/// When the dialog of a call that came at `asked` ends. `None` when its time is over already (the call waited for
+/// the access question, and its client stopped waiting): then no dialog opens.
+pub(super) fn dialog_deadline(
+    asked: Instant,
+    timeout: std::time::Duration,
+    now: Instant,
+) -> Option<Instant> {
+    let deadline = asked + timeout;
+    (deadline > now).then_some(deadline)
+}
+
 /// What a new dialog pane shows.
 pub(super) enum Dialog {
     Review(crate::review::Review),
@@ -147,6 +158,8 @@ impl App {
             ReviewFocus::Auto => asked_by_user || looking,
             ReviewFocus::Never => false,
         };
+        // An overlay dialog has the keys only while the pane under it (the agent's) is the active pane, so it
+        // never takes the keys of another pane that you type in. Going to it goes to that pane.
         if go {
             self.go_to_pane(id);
         }
@@ -378,6 +391,23 @@ mod tests {
 
     fn named(k: NamedKey) -> Key {
         Key::Named(k)
+    }
+
+    #[test]
+    fn the_time_of_a_dialog_counts_from_the_call() {
+        let now = Instant::now();
+        let secs = std::time::Duration::from_secs;
+        assert_eq!(dialog_deadline(now, secs(5), now), Some(now + secs(5)));
+        // The call waited 10 s for the access question: 5 s are left.
+        assert_eq!(
+            dialog_deadline(now, secs(15), now + secs(10)),
+            Some(now + secs(15))
+        );
+        assert_eq!(
+            dialog_deadline(now, secs(5), now + secs(10)),
+            None,
+            "its time is over: no dialog"
+        );
     }
 
     #[test]

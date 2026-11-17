@@ -9,7 +9,9 @@ The Review "Review: <the title>" opens at the pane of the agent that asked, with
 By default it is a box over that pane (an overlay), so you see it where the agent is. When it is over, the box goes.
 
 You go to it at once when you asked for it (R on the question of plan mode) or when you look at the pane of the
-agent. Else it waits for you: click the notification, or go to the tab of the agent.
+agent. Else it waits for you: click the notification, or go to the pane of the agent (the dot of its tab is
+yellow). The box gets your keys only while the pane of the agent is your active pane: when you type in another
+pane of that tab, your keys stay there.
 
 You choose where it opens and when you go to it:
 
