@@ -98,8 +98,9 @@ The first time an agent wants to read or type into a pane that is **not its own*
 fterm asks you: Allow, Always (for this agent name until fterm closes), or No.
 A pane with remote control off (`toggle_remote_control` in the command palette) is never used by agents.
 Reading the AI chat (`ai_read`, `ai_ask`) needs the same yes: the chat can have text of your panes.
-A Review or a form of an agent closes when the agent stops waiting for it (for example you press Esc in
-Claude Code and it cancels the call).
+A Review or a form of an agent closes when the agent stops waiting for it: its MCP client cancels the call,
+or the agent ends.
+A form gives the agent the text of every field, also of a password field.
 `ai_ask` uses your AI key and costs money, so it is off until you set `ai = { api_access = true }`.
 See [API.md](API.md#who-may-do-what).
 

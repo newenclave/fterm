@@ -86,7 +86,7 @@ Events and messages:
 
 Other:
   form FILE|- [--timeout S]              show a form to the user (JSON, see docs/FORMS.md) and print the
-                                         answer as JSON; exit code 0 = saved, 1 = not saved
+                                         answer as JSON; exit code 0 = saved, 2 = not saved, 1 = error
   call METHOD [JSON|-]                   any API call (see docs/API.md); `-` = the JSON comes on stdin
   mcp                                    an MCP server on stdin/stdout (see docs/MCP.md)
   mux list | mux stop                    the panes of the mux server; stop = end them all and the server
@@ -298,7 +298,11 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         }
         Command::Call { method, params } => run_call(cli, method, params),
         Command::CallStdin { method } => {
-            let params = read_json_stdin()?;
+            let params = if std::env::var_os(run::EXIT_ON_EOF_ENV).is_some() {
+                read_params_and_watch_stdin()?
+            } else {
+                read_json_stdin()?
+            };
             run_call(cli, method, &params)
         }
         Command::Form { source, timeout_ms } => run_form(cli, source, *timeout_ms),
@@ -391,9 +395,6 @@ fn run_command(
     Ok(ExitCode::from(exit.clamp(0, 255) as u8))
 }
 
-/// `review`: shows a plan in a Review and waits for the user. With `--hook` it is a Claude Code
-/// `PreToolUse` hook for `ExitPlanMode`: the hook input comes on stdin, and the answer for Claude goes to
-/// stdout. Out of fterm, or with no answer, the hook says nothing, so Claude shows its own dialog.
 /// Any API call; the exit code says if it worked.
 fn run_call(cli: &Cli, method: &str, params: &Value) -> Result<ExitCode, String> {
     let mut client = connect(cli.window)?;
@@ -429,8 +430,27 @@ fn read_json_stdin() -> Result<Value, String> {
         .map_err(|err| format!("bad JSON on stdin: {err}"))
 }
 
-/// `form FILE|-`: shows the form and prints the answer as JSON. Exit code 0 = saved, 1 = not saved (cancelled,
-/// the time ran out, the pane closed): then write nothing.
+/// The params of a long call of `ftermctl mcp`: one line on stdin. Then stdin stays open, and when it closes (the
+/// parent ended, also when it was killed), this ftermctl ends: its connection goes, so fterm closes the dialog.
+fn read_params_and_watch_stdin() -> Result<Value, String> {
+    use std::io::{BufRead, Read};
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|err| format!("cannot read stdin: {err}"))?;
+    let params = serde_json::from_str(line.trim_start_matches('\u{feff}'))
+        .map_err(|err| format!("bad JSON on stdin: {err}"))?;
+    std::thread::spawn(|| {
+        let mut rest = Vec::new();
+        let _ = std::io::stdin().lock().read_to_end(&mut rest);
+        std::process::exit(2);
+    });
+    Ok(params)
+}
+
+/// `form FILE|-`: shows the form and prints the answer as JSON. Exit code 0 = saved, 2 = not saved (cancelled,
+/// the time ran out, the pane closed): then write nothing; 1 = an error.
 fn run_form(cli: &Cli, source: &str, timeout_ms: Option<u64>) -> Result<ExitCode, String> {
     let mut spec = if source == "-" {
         read_json_stdin()?
@@ -455,10 +475,13 @@ fn run_form(cli: &Cli, source: &str, timeout_ms: Option<u64>) -> Result<ExitCode
     Ok(if answer["status"] == "saved" {
         ExitCode::SUCCESS
     } else {
-        ExitCode::FAILURE
+        ExitCode::from(2)
     })
 }
 
+/// `review`: shows a plan in a Review and waits for the user. With `--hook` it is a Claude Code
+/// `PreToolUse` hook for `ExitPlanMode`: the hook input comes on stdin, and the answer for Claude goes to
+/// stdout. Out of fterm, or with no answer, the hook says nothing, so Claude shows its own dialog.
 fn run_review(
     cli: &Cli,
     source: Option<&str>,

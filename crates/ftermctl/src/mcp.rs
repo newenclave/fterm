@@ -169,7 +169,7 @@ pub fn tools() -> Value {
         },
         {
             "name": "show_form",
-            "description": "Show a form to the user and wait for the answer: to edit settings (of any file) or to ask several questions at once. Read the file yourself, build `fields` with the values that are in it now, and keep your own map from each field id to its key. Field types: group (a heading), checkbox, text, password, number (min, max, integer), multiline, radio (up to 8 options), select (many options). Common keys: id, label, help, value (missing = not set), required, clearable; text: pattern, placeholder, max. You get status `saved` with `values` and `changed` (the ids that the user changed), or `cancelled` with no values: then write nothing. On saved: read the file again, back it up, and change only the keys in `changed`. More: the recipe \"Edit settings with a form\" in the guide (`ftermctl guide`).",
+            "description": "Show a form to the user and wait for the answer: to edit settings (of any file) or to ask several questions at once. Read the file yourself, build `fields` with the values that are in it now, and keep your own map from each field id to its key. Field types: group (a heading), checkbox, text, password, number (min, max, integer), multiline, radio (up to 8 options), select (many options). Common keys: id, label, help, value (missing = not set), required, clearable; text: pattern, placeholder, max. You get status `saved` with `values` and `changed` (the ids that the user changed), or `cancelled` with no values: then write nothing. On saved: read the file again, back it up, and change only the keys in `changed`. You get the text of every field, also of a password field. More: the recipe \"Ask the user to change settings (a form)\" in the guide (`ftermctl guide`).",
             "inputSchema": { "type": "object", "properties": {
                 "title": { "type": "string", "description": "A short title, for example \"Git settings\"." },
                 "text": { "type": "string", "description": "A line or two under the title, for example the file that you change." },
@@ -715,14 +715,35 @@ struct Window {
     window: Option<u32>,
     name: String,
     client: Option<fterm_api::client::Client>,
+    /// The socket of the window (found once), for this connection and for the children of long calls.
+    socket: Option<String>,
 }
 
 impl Window {
     fn client(&mut self) -> Result<&mut fterm_api::client::Client, String> {
         if self.client.is_none() {
-            self.client = Some(crate::run::connect_as(self.window, &self.name)?);
+            let socket = match self.socket() {
+                Some(socket) => socket,
+                None => crate::run::find_socket(self.window)?,
+            };
+            match crate::run::connect_socket(&socket, &self.name) {
+                Ok(client) => self.client = Some(client),
+                Err(err) => {
+                    // The window may be gone (fterm closed): look for it again next time.
+                    self.socket = None;
+                    return Err(err);
+                }
+            }
         }
         Ok(self.client.as_mut().expect("just made"))
+    }
+
+    /// The socket of the window, found the first time (`None` = no window now).
+    fn socket(&mut self) -> Option<String> {
+        if self.socket.is_none() {
+            self.socket = crate::run::find_socket(self.window).ok();
+        }
+        self.socket.clone()
     }
 }
 
@@ -733,9 +754,10 @@ impl Backend for Window {
 
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let result = self.client()?.call(method, params);
-        // A broken connection (fterm closed): connect again next time.
+        // A broken connection (fterm closed): look for the window and connect again next time.
         if let Err(fterm_api::client::ClientError::Io(_)) = &result {
             self.client = None;
+            self.socket = None;
         }
         result.map_err(|err| err.to_string())
     }
@@ -795,11 +817,29 @@ fn cancel(running: &Shared) {
     }
 }
 
-/// The backend of a long call: a child `ftermctl` with its own connection (`call METHOD -`, the params on stdin).
+/// The backend of a long call: a child `ftermctl` with its own connection (`call METHOD -`, the params as a line
+/// on stdin). Its stdin stays open while it runs: when this process ends in any way, the child ends too (see
+/// `run::EXIT_ON_EOF_ENV`), so a dialog never outlives the MCP server.
 struct ChildCall {
     window: Option<u32>,
+    /// The socket of the main connection (with no `--window`), so the child talks to the same window.
+    socket: Option<String>,
     name: String,
     running: Shared,
+}
+
+impl ChildCall {
+    /// The same call in this process (when the child can not start): it works, but it can not be cancelled.
+    fn in_process(&self, method: &str, params: Value) -> Result<Value, String> {
+        if self.running.lock().is_ok_and(|r| r.cancelled) {
+            return Err("cancelled".to_owned());
+        }
+        let mut client = match &self.socket {
+            Some(socket) => crate::run::connect_socket(socket, &self.name)?,
+            None => crate::run::connect_as(self.window, &self.name)?,
+        };
+        client.call(method, params).map_err(|err| err.to_string())
+    }
 }
 
 impl Backend for ChildCall {
@@ -811,20 +851,45 @@ impl Backend for ChildCall {
         use std::io::{Read, Write};
         use std::process::{Command, Stdio};
 
-        let exe = std::env::current_exe().map_err(|err| format!("cannot find ftermctl: {err}"))?;
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(err) => {
+                eprintln!(
+                    "ftermctl mcp: cannot find ftermctl ({err}): {method} runs here, it can not be cancelled"
+                );
+                return self.in_process(method, params);
+            }
+        };
         let mut command = Command::new(exe);
         if let Some(window) = self.window {
             command.args(["--window", &window.to_string()]);
+        } else if let Some(socket) = &self.socket {
+            command.env(fterm_api::discovery::SOCKET_ENV, socket);
         }
         command
             .args(["--json", "call", method, "-"])
             .env(crate::run::NAME_ENV, &self.name)
+            .env(crate::run::EXIT_ON_EOF_ENV, "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = command
-            .spawn()
-            .map_err(|err| format!("cannot start ftermctl: {err}"))?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // No console window for the child (the MCP server may run with none).
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(err) => {
+                // For example the file of ftermctl was replaced by an update.
+                eprintln!(
+                    "ftermctl mcp: cannot start ftermctl ({err}): {method} runs here, it can not be cancelled"
+                );
+                return self.in_process(method, params);
+            }
+        };
         let mut stdin = child.stdin.take().ok_or("no stdin")?;
         let mut stdout = child.stdout.take().ok_or("no stdout")?;
         let mut stderr = child.stderr.take().ok_or("no stderr")?;
@@ -836,17 +901,37 @@ impl Backend for ChildCall {
             }
             r.child = Some(child);
         }
-        let _ = stdin.write_all(params.to_string().as_bytes());
-        drop(stdin);
+        // One line; stdin stays open until the child is done (it ends when stdin closes).
+        let _ = stdin.write_all(format!("{params}\n").as_bytes());
+        let _ = stdin.flush();
+        // stderr on its own thread, so a full stderr pipe can not stop the child.
+        let errors = std::thread::spawn(move || {
+            let mut text = String::new();
+            let _ = stderr.read_to_string(&mut text);
+            text
+        });
         let mut out = String::new();
-        let mut err = String::new();
         let _ = stdout.read_to_string(&mut out);
-        let _ = stderr.read_to_string(&mut err);
-        let status = self
-            .running
-            .lock()
-            .ok()
-            .and_then(|mut r| r.child.as_mut().and_then(|c| c.wait().ok()));
+        // Wait for its end, with the lock held only for a moment (a cancel must get it).
+        let status = loop {
+            let done = match self.running.lock() {
+                Ok(mut r) => match r.child.as_mut() {
+                    // An error: it is not ours to wait for any more (done).
+                    Some(child) => match child.try_wait() {
+                        Ok(status) => status.map(Some),
+                        Err(_) => Some(None),
+                    },
+                    None => Some(None),
+                },
+                Err(_) => Some(None),
+            };
+            if let Some(status) = done {
+                break status;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        drop(stdin);
+        let err = errors.join().unwrap_or_default();
         if self.running.lock().is_ok_and(|r| r.cancelled) {
             return Err("cancelled".to_owned());
         }
@@ -870,6 +955,24 @@ impl Backend for ChildCall {
     }
 }
 
+/// The long calls that run, by request id (shared by the main loop and the threads of the calls).
+#[derive(Clone, Default)]
+struct LongCalls(std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Shared>>>);
+
+/// Cancels the long calls that still run when the MCP server ends (also with an error or a panic). A kill of the
+/// server runs no code: then the children end by themselves (their stdin closes).
+struct CancelOnEnd(LongCalls);
+
+impl Drop for CancelOnEnd {
+    fn drop(&mut self) {
+        if let Ok(calls) = self.0.0.lock() {
+            for running in calls.values() {
+                cancel(running);
+            }
+        }
+    }
+}
+
 /// One line from the client as JSON. A UTF-8 BOM in front (PowerShell 5.1 sends one) is skipped.
 pub fn parse_line(line: &str) -> Result<Value, serde_json::Error> {
     serde_json::from_str(line.trim_start_matches('\u{feff}'))
@@ -885,18 +988,19 @@ fn write_answer(answer: &Value) -> Result<(), String> {
 }
 
 /// Reads stdin and writes stdout until the client closes stdin. A tool that waits for the user (a form, a Review)
-/// runs on its own thread, so the client can cancel it (`notifications/cancelled`) while it waits.
+/// runs on its own thread, so the client can cancel it (`notifications/cancelled`) while it waits. When the client
+/// closes stdin (the end of the session) or this server ends, the dialogs of the long calls close.
 pub fn serve(window: Option<u32>) -> Result<(), String> {
-    use std::collections::HashMap;
     use std::io::BufRead;
-    use std::sync::{Arc, Mutex};
 
     let mut server = Server::new(Window {
         window,
         name: "mcp".to_owned(),
         client: None,
+        socket: None,
     });
-    let long: Arc<Mutex<HashMap<String, Shared>>> = Arc::default();
+    let long = LongCalls::default();
+    let _end = CancelOnEnd(long.clone());
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let line = line.map_err(|err| err.to_string())?;
@@ -915,27 +1019,59 @@ pub fn serve(window: Option<u32>) -> Result<(), String> {
             }
         };
         if let Some(id) = cancelled(&message) {
-            if let Some(running) = long.lock().ok().and_then(|mut l| l.remove(&id.to_string())) {
+            if let Some(running) = long
+                .0
+                .lock()
+                .ok()
+                .and_then(|mut l| l.remove(&id.to_string()))
+            {
                 cancel(&running);
             }
             continue;
         }
         if let Some(id) = long_call(&message) {
+            let key = id.to_string();
             let running = Shared::default();
-            if let Ok(mut l) = long.lock() {
-                l.insert(id.to_string(), running.clone());
+            let taken = long.0.lock().is_ok_and(|mut l| {
+                if l.contains_key(&key) {
+                    return true;
+                }
+                l.insert(key.clone(), running.clone());
+                false
+            });
+            if taken {
+                write_answer(&json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": { "code": -32600, "message": "a call with this id runs already" },
+                }))?;
+                continue;
             }
             let name = server.backend.name.clone();
+            let socket = server.backend.socket();
             let long = long.clone();
             std::thread::spawn(move || {
                 let mut worker = Server::new(ChildCall {
                     window,
+                    socket,
                     name,
                     running: running.clone(),
                 });
-                let answer = worker.handle(&message);
-                if let Ok(mut l) = long.lock() {
-                    l.remove(&id.to_string());
+                let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    worker.handle(&message)
+                }))
+                .unwrap_or_else(|_| {
+                    Some(json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32603, "message": "the tool failed" },
+                    }))
+                });
+                if let Ok(mut l) = long.0.lock()
+                    && l.get(&key)
+                        .is_some_and(|r| std::sync::Arc::ptr_eq(r, &running))
+                {
+                    l.remove(&key);
                 }
                 if running.lock().is_ok_and(|r| !r.cancelled)
                     && let Some(answer) = answer
@@ -947,12 +1083,6 @@ pub fn serve(window: Option<u32>) -> Result<(), String> {
         }
         if let Some(answer) = server.handle(&message) {
             write_answer(&answer)?;
-        }
-    }
-    // The client is gone: its dialogs go too.
-    if let Ok(l) = long.lock() {
-        for running in l.values() {
-            cancel(running);
         }
     }
     Ok(())
@@ -1154,6 +1284,19 @@ mod tests {
                 "{name} is not in GUIDE.md"
             );
         }
+    }
+
+    #[test]
+    fn a_dead_window_is_forgotten() {
+        // fterm closed and came back with another socket: the next call must look for the window again.
+        let mut w = Window {
+            window: None,
+            name: "test".into(),
+            client: None,
+            socket: Some(format!("fterm-test-dead-{}", std::process::id())),
+        };
+        assert!(w.call("list", json!({})).is_err());
+        assert_eq!(w.socket, None, "the dead socket is forgotten");
     }
 
     #[test]

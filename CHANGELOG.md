@@ -39,8 +39,8 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   lines, radio buttons, and lists. You change the values and save (Ctrl+S) or cancel (Esc). The agent gets the new
   values and reads and writes the file itself, so any settings file works. A form opens like a plan Review
   (`plan_review.place` and `focus`). See [docs/FORMS.md](docs/FORMS.md).
-- **An agent can cancel a Review or a form.** When Claude Code cancels the MCP call (for example you press Esc),
-  the Review or the form closes at once.
+- **An agent can cancel a Review or a form.** When the MCP client of the agent cancels the call, or the agent
+  ends, the Review or the form closes at once.
 - **`ftermctl call METHOD -`** reads the JSON of the call from stdin (it can be longer than a command line).
   `FTERM_CLIENT_NAME` sets the name that ftermctl gives itself.
 - **Choose where a plan Review opens and when you go to it:** `plan_review = { place = "overlay" | "split" | "tab",

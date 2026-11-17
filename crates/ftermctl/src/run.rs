@@ -4,15 +4,24 @@ use fterm_api::client::Client;
 use fterm_api::discovery::{SOCKET_ENV, find, instances_dir};
 use serde_json::{Value, json};
 
-/// Connects to the window and says who we are (`name` is shown in the access question).
-pub fn connect_as(window: Option<u32>, name: &str) -> Result<Client, String> {
+/// The socket of the window: `--window`, else the env var of fterm, else the newest window.
+pub fn find_socket(window: Option<u32>) -> Result<String, String> {
     let env_socket = std::env::var(SOCKET_ENV).ok();
     // `--window` wins over the env var.
     let env_socket = if window.is_some() { None } else { env_socket };
-    let socket = find(&instances_dir(), env_socket.as_deref(), window)
-        .ok_or("no fterm window found (is fterm running?)")?;
+    find(&instances_dir(), env_socket.as_deref(), window)
+        .ok_or_else(|| "no fterm window found (is fterm running?)".to_owned())
+}
+
+/// Connects to the window and says who we are (`name` is shown in the access question).
+pub fn connect_as(window: Option<u32>, name: &str) -> Result<Client, String> {
+    connect_socket(&find_socket(window)?, name)
+}
+
+/// Connects to the window of `socket` and says who we are.
+pub fn connect_socket(socket: &str, name: &str) -> Result<Client, String> {
     let mut client =
-        Client::connect(&socket).map_err(|err| format!("cannot connect to {socket}: {err}"))?;
+        Client::connect(socket).map_err(|err| format!("cannot connect to {socket}: {err}"))?;
     client
         .call("hello", json!({ "name": name, "pane": own_pane() }))
         .map_err(|err| err.to_string())?;
@@ -26,6 +35,10 @@ pub fn connect(window: Option<u32>) -> Result<Client, String> {
 /// The name that ftermctl gives itself (`hello`): `ftermctl`, or this env var (`ftermctl mcp` sets it for the
 /// `ftermctl` that it starts for a long call, so the dialog shows the name of the agent).
 pub const NAME_ENV: &str = "FTERM_CLIENT_NAME";
+
+/// Set by `ftermctl mcp` for the `ftermctl` of a long call: the params come as one line on stdin, and stdin stays
+/// open; when it closes (the parent ended in any way), this ftermctl ends too, so fterm closes the dialog.
+pub const EXIT_ON_EOF_ENV: &str = "FTERM_EXIT_ON_EOF";
 
 /// The client name from the env var: `ftermctl` when it is not there or empty.
 pub fn client_name(env: Option<String>) -> String {

@@ -100,7 +100,8 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
   `radio` (up to 8 `options`), `select` (many `options`). Each field: `id` (your own name), `label`, `value`, `help`;
   `required`, `clearable` (may be "not set"); texts: `pattern`, `placeholder`, `max`.
 - The answer: `status` `saved` with `values` and `changed` (the ids that the user changed), or `cancelled` with
-  no values: then write nothing.
+  no values: then write nothing. You get the text of every field, also of a `password` field: do not ask for
+  secrets that you do not need.
 - The recipe for a settings file:
   1. Read the file. Make a field for each setting with the value that is in the file now (a number as `number`,
      a setting that is not in the file with no `value`). Keep your map from each `id` to its key.
@@ -109,8 +110,9 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
      showed, set the new value (`null` = remove the setting); if not, the file changed meanwhile: ask the user.
   4. Copy the file first (`<file>.bak-fterm`), then change only those keys. Keep the rest and the comments, and
      escape the values for the format (quotes in TOML and Lua, no new lines in .ini files).
-  5. For `fterm.lua`: the names and defaults are in `sample.lua` and `docs/CONFIG.md`. After you write it, wait
-     for the notification "Config reloaded" or "Config error"; on an error, put the copy back and tell the user.
+  5. For `fterm.lua`: the names and defaults are in `docs/CONFIG.md` and `crates/fterm-config/src/sample.lua` of
+     the fterm repository. After you write it, fterm loads it again and shows the user "Config reloaded" or
+     "Config error". You can not see it: ask the user. On an error, put the copy back.
 
 **Other tools**
 - `focus_pane` shows a pane to the user (its tab, and the keyboard goes there). Use it when the user
@@ -189,7 +191,7 @@ and a broken file keeps the old config (the user sees the error).
 | A message | `ftermctl send-message N TEXT`, `ftermctl read-messages` |
 | A notification | `ftermctl notify TITLE --body TEXT --level info` |
 | A plan review | `ftermctl review plan.md` (waits; exit 0 approved, 1 changes, 2 cancelled) |
-| A form | `ftermctl form spec.json` (or `-`; waits; prints the answer as JSON; exit 0 saved, 1 not saved) |
+| A form | `ftermctl form spec.json` (or `-`; waits; prints the answer as JSON; exit 0 saved, 2 not saved or a wrong command line) |
 | A theme | `ftermctl theme` (list), `ftermctl theme NAME` |
 | A tab color | `ftermctl tab-color --pane N "#rrggbb"` (or `none`; quote the color: `#` starts a comment in shells) |
 | A scene | `ftermctl scene`, `ftermctl draw --pane N JSON` (or `-` for stdin) |
