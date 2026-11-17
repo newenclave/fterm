@@ -17,6 +17,8 @@ pub enum Look {
     Code,
     Input,
     Cursor,
+    /// A problem (a value that is not valid).
+    Error,
 }
 
 /// A part of a screen line.

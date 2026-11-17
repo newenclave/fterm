@@ -450,7 +450,13 @@ impl Review {
                     }
                     input.insert(&text);
                 }
-                Key::Up | Key::Down | Key::PageUp | Key::PageDown => return Outcome::Nothing,
+                Key::Up
+                | Key::Down
+                | Key::PageUp
+                | Key::PageDown
+                | Key::Tab
+                | Key::BackTab
+                | Key::Save => return Outcome::Nothing,
             }
             return Outcome::Changed;
         }
@@ -743,6 +749,7 @@ pub fn render(
             bg: Some(rgb(ui.text)),
             ..fg(ui.surface_active)
         },
+        Look::Error => fg(ui.error),
     };
     let lines = rows(review, cols, rows_n);
     fterm_ui::look::render_ansi(&lines, style, rgb(ui.selected))

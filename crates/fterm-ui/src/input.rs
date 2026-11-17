@@ -17,6 +17,11 @@ impl InputBox {
         self.cursor
     }
 
+    /// Puts the cursor at a char index (kept in the text).
+    pub fn set_cursor(&mut self, at: usize) {
+        self.cursor = at.min(self.text.chars().count());
+    }
+
     pub fn insert(&mut self, text: &str) {
         self.clamp();
         let at = self.byte(self.cursor);

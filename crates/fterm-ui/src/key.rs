@@ -21,4 +21,10 @@ pub enum Key<'a> {
     Text(&'a str),
     /// Text from the clipboard (Ctrl+V, Ctrl+Shift+V, Shift+Insert).
     Paste(&'a str),
+    /// Tab: the next field of a form.
+    Tab,
+    /// Shift+Tab: the field before.
+    BackTab,
+    /// Ctrl+S: save a form.
+    Save,
 }
