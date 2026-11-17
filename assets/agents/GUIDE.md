@@ -93,6 +93,25 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
   numbers (headings and paragraphs count too). Change the plan by the feedback and ask again if needed.
 - Use it for a plan with several steps, before you start the work.
 
+**Ask the user to change settings (a form)**
+- `show_form` with `title`, `text`, and `fields` (`ftermctl form spec.json`) shows a form over your pane and waits.
+  Use it to change settings of any file with the user, or to ask several questions at once.
+- Field types: `group` (a heading), `checkbox`, `text`, `password`, `number` (`min`, `max`, `integer`), `multiline`,
+  `radio` (up to 8 `options`), `select` (many `options`). Each field: `id` (your own name), `label`, `value`, `help`;
+  `required`, `clearable` (may be "not set"); texts: `pattern`, `placeholder`, `max`.
+- The answer: `status` `saved` with `values` and `changed` (the ids that the user changed), or `cancelled` with
+  no values: then write nothing.
+- The recipe for a settings file:
+  1. Read the file. Make a field for each setting with the value that is in the file now (a number as `number`,
+     a setting that is not in the file with no `value`). Keep your map from each `id` to its key.
+  2. Show the form. On anything but `saved`, write nothing.
+  3. On `saved`: **read the file again**. For each id in `changed`: if the file still has the value that the form
+     showed, set the new value (`null` = remove the setting); if not, the file changed meanwhile: ask the user.
+  4. Copy the file first (`<file>.bak-fterm`), then change only those keys. Keep the rest and the comments, and
+     escape the values for the format (quotes in TOML and Lua, no new lines in .ini files).
+  5. For `fterm.lua`: the names and defaults are in `sample.lua` and `docs/CONFIG.md`. After you write it, wait
+     for the notification "Config reloaded" or "Config error"; on an error, put the copy back and tell the user.
+
 **Other tools**
 - `focus_pane` shows a pane to the user (its tab, and the keyboard goes there). Use it when the user
   should look at something now, not for your own work.
@@ -170,6 +189,7 @@ and a broken file keeps the old config (the user sees the error).
 | A message | `ftermctl send-message N TEXT`, `ftermctl read-messages` |
 | A notification | `ftermctl notify TITLE --body TEXT --level info` |
 | A plan review | `ftermctl review plan.md` (waits; exit 0 approved, 1 changes, 2 cancelled) |
+| A form | `ftermctl form spec.json` (or `-`; waits; prints the answer as JSON; exit 0 saved, 1 not saved) |
 | A theme | `ftermctl theme` (list), `ftermctl theme NAME` |
 | A tab color | `ftermctl tab-color --pane N "#rrggbb"` (or `none`; quote the color: `#` starts a comment in shells) |
 | A scene | `ftermctl scene`, `ftermctl draw --pane N JSON` (or `-` for stdin) |
@@ -177,4 +197,4 @@ and a broken file keeps the old config (the user sees the error).
 | The AI panel | `ftermctl ai read [--last N]`, `ftermctl ai ask --wait TEXT`, `ftermctl ai input TEXT` |
 
 `ftermctl help` lists everything. The docs for people are in the fterm repository: `docs/MCP.md`,
-`docs/API.md`, and `docs/SCENE.md`.
+`docs/API.md`, `docs/SCENE.md`, and `docs/FORMS.md`.

@@ -73,6 +73,7 @@ When FTERM_PANE_ID is set, you run in the fterm terminal: run `ftermctl guide` o
 | `list_themes` | The color themes of fterm; the theme in use has a `*`. |
 | `set_theme` | Changes all colors of the window until fterm closes: a theme by name, or a whole theme as JSON (the agent can make one). |
 | `review_plan` | Shows the agent's plan in a Review (over the agent's pane) and waits: you mark each item Ok, comment, change, add, or remove items. The agent gets the decision and your feedback (see [REVIEW.md](REVIEW.md)). |
+| `show_form` | Shows you a form (over the agent's pane) and waits: checkboxes, texts, numbers, texts with many lines, radio groups, and lists. The agent gets the new values, or "not saved". The agent uses it to change settings with you: it reads and writes the file itself (see [FORMS.md](FORMS.md)). |
 | `dashboard_tile` | Puts a tile on the dashboard of the user (Ctrl+Shift+D): `id`, `title`, `status`, `state`, `lines`, `values` (a chart); the same `id` changes it, `remove` takes it away. For the progress of a long task. |
 | `set_tab_color` | Gives the tab a color (a line at its top), for example red when tests fail. `"none"` takes it away. |
 | `open_scene` | Opens a Braille scene (a pane to draw into) on the right or below. Gives its id, its size in dots, and the aspect of the dots. |
@@ -97,6 +98,8 @@ The first time an agent wants to read or type into a pane that is **not its own*
 fterm asks you: Allow, Always (for this agent name until fterm closes), or No.
 A pane with remote control off (`toggle_remote_control` in the command palette) is never used by agents.
 Reading the AI chat (`ai_read`, `ai_ask`) needs the same yes: the chat can have text of your panes.
+A Review or a form of an agent closes when the agent stops waiting for it (for example you press Esc in
+Claude Code and it cancels the call).
 `ai_ask` uses your AI key and costs money, so it is off until you set `ai = { api_access = true }`.
 See [API.md](API.md#who-may-do-what).
 

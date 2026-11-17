@@ -35,6 +35,15 @@ pub enum Command {
         timeout_ms: Option<u64>,
         hook: bool,
     },
+    /// `form FILE|-`: a form (JSON) for the user; the answer is printed as JSON.
+    Form {
+        source: String,
+        timeout_ms: Option<u64>,
+    },
+    /// `call METHOD -`: the params come on stdin (they can be longer than a command line).
+    CallStdin {
+        method: String,
+    },
     /// `theme --file x.json`: ftermctl reads the file (fterm may have another current folder).
     ThemeFile {
         path: String,
@@ -776,9 +785,26 @@ fn command(word: &str, args: &[String]) -> Result<Command, String> {
                 args.to_vec()
             },
         },
+        "form" => {
+            let w = read(&["timeout"], &[])?;
+            let source = w
+                .words
+                .first()
+                .cloned()
+                .ok_or("form needs a file (JSON, see docs/FORMS.md) or `-` (stdin)")?;
+            Command::Form {
+                source,
+                timeout_ms: w.number("timeout")?.map(|s| s * 1000),
+            }
+        }
         "call" => {
             let method = args.first().ok_or("call needs a method name")?;
             let rest = args[1..].join(" ");
+            if rest.trim() == "-" {
+                return Ok(Command::CallStdin {
+                    method: method.clone(),
+                });
+            }
             let params = if rest.trim().is_empty() {
                 Value::Null
             } else {
@@ -1209,6 +1235,32 @@ mod tests {
             cli("draw --pane 4 -").unwrap().command,
             Command::DrawStdin { pane: Some(4) },
             "`-` = the commands come on stdin"
+        );
+    }
+
+    #[test]
+    fn forms() {
+        assert_eq!(
+            cli("form spec.json --timeout 60").unwrap().command,
+            Command::Form {
+                source: "spec.json".into(),
+                timeout_ms: Some(60_000),
+            }
+        );
+        assert_eq!(
+            cli("form -").unwrap().command,
+            Command::Form {
+                source: "-".into(),
+                timeout_ms: None,
+            }
+        );
+        assert!(cli("form").is_err(), "form needs a file or -");
+        assert_eq!(
+            cli("call form -").unwrap().command,
+            Command::CallStdin {
+                method: "form".into()
+            },
+            "`-` = the params come on stdin"
         );
     }
 

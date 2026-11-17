@@ -6,7 +6,7 @@
 |---|---|---|
 | `fterm-term` | Runs the shell in a pty. Keeps the text grid. Colors. Grid size. Links. Pictures (OSC 1337). Remote sessions and snapshots for the mux server. | No |
 | `fterm-mux` | Workspaces, tabs, the tree of panes in each tab, overlays, the scratch shell, and companions. A pure model. | No |
-| `fterm-ui` | Parts of a UI that is drawn as text into a pane with no program (the Review, later forms): the input box, the looks of text and their ANSI drawing, the keys, text helpers. No UI words and no colors: the app gives them. | No |
+| `fterm-ui` | Parts of a UI that is drawn as text into a pane with no program (the Review, forms): the input box, the looks of text and their ANSI drawing, the keys, text helpers, and the form model (`field.rs`, `form.rs`: the fields from JSON, keys, rows, the answer). No UI words and no colors: the app gives them. | No |
 | `fterm-config` | The Luau config: settings, themes, languages (l10n), profiles, key bindings, Lua functions. | No |
 | `fterm-render` | Font, glyph atlas, tab bar, and drawing with wgpu. | Yes |
 | `fterm-history` | The history of commands and folders (JSON lines files). | No |
@@ -176,8 +176,14 @@ processes and real escape codes.
   in the code is in `en.json`, that each key of `en.json` is used, and that `notify(` calls have no English
   literals.
 
-## The Review
+## The Review and forms
 
+- A Review and a form are **dialogs**: a pane with no program at the pane of the agent that asked. They share
+  `app/dialog_calls.rs`: the place (`plan_review.place`: an overlay, a split, or a tab), who gets the keys (an
+  overlay of a dialog has the keys only while the pane under it is the active pane), the waiting call
+  (`PendingDialog`), and its answer when the user ends it, the time runs out, its pane or tab closes, or the
+  client goes away. A form is `fterm_ui::form::Form` in `Pane::form` (`app/form_calls.rs`: the API method
+  `form`, the keys, the words, the drawing). See [FORMS.md](FORMS.md).
 - `fterm/src/review.rs` is the model (no window code): items from markdown or from a list, each one marked
   Ok, commented, changed, added, or removed, and the result for the agent. The app draws it into the grid of
   a pane (`Pane::review`), like a scene, and gives it the keys. The pane is an overlay over the pane of the

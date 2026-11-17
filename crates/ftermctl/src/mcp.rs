@@ -168,6 +168,16 @@ pub fn tools() -> Value {
             }, "required": ["plan"] }
         },
         {
+            "name": "show_form",
+            "description": "Show a form to the user and wait for the answer: to edit settings (of any file) or to ask several questions at once. Read the file yourself, build `fields` with the values that are in it now, and keep your own map from each field id to its key. Field types: group (a heading), checkbox, text, password, number (min, max, integer), multiline, radio (up to 8 options), select (many options). Common keys: id, label, help, value (missing = not set), required, clearable; text: pattern, placeholder, max. You get status `saved` with `values` and `changed` (the ids that the user changed), or `cancelled` with no values: then write nothing. On saved: read the file again, back it up, and change only the keys in `changed`. More: the recipe \"Edit settings with a form\" in the guide (`ftermctl guide`).",
+            "inputSchema": { "type": "object", "properties": {
+                "title": { "type": "string", "description": "A short title, for example \"Git settings\"." },
+                "text": { "type": "string", "description": "A line or two under the title, for example the file that you change." },
+                "fields": { "type": "array", "items": { "type": "object" }, "description": "The fields, for example [{\"id\": \"user.name\", \"type\": \"text\", \"label\": \"Name\", \"value\": \"Ann\", \"required\": true}, {\"id\": \"commit.gpgsign\", \"type\": \"checkbox\", \"label\": \"Sign commits\", \"value\": true}]." },
+                "timeout_seconds": { "type": "integer", "description": "How long to wait. The default is 1800." }
+            }, "required": ["fields"] }
+        },
+        {
             "name": "list_themes",
             "description": "List the color themes of fterm (built-in ones and files). The theme in use has a `*`.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -524,6 +534,22 @@ self.backend.call("review", params).map(|v| {
                     )
                 })
             }),
+            "show_form" => need("fields").and_then(|_| {
+                let mut params = pick(&[("title", "title"), ("text", "text"), ("fields", "fields")]);
+                if let Some(ms) = seconds("timeout_seconds") {
+                    params["timeout_ms"] = json!(ms);
+                }
+                self.backend.call("form", params).map(|v| {
+                    let lead = if v["status"] == "saved" {
+                        "Saved. Read the file again, back it up, and change only the keys in `changed`."
+                    } else {
+                        "Not saved (cancelled, the time ran out, or the pane closed): write nothing."
+                    };
+                    format!("{lead}
+
+{}", pretty(v))
+                })
+            }),
             "list_themes" => self.backend.call("themes", json!({})).map(|v| {
                 let current = v["current"].as_str().unwrap_or_default();
                 v["themes"]
@@ -731,39 +757,202 @@ impl Backend for Window {
     }
 }
 
+/// The tools that wait for the user (a form, a Review): they run in a child `ftermctl` on their own connection,
+/// so a cancel of the client can end them (fterm sees the child go and closes the dialog).
+const LONG_TOOLS: &[&str] = &["show_form", "review_plan"];
+
+/// A `tools/call` of a tool that waits for the user: its id.
+pub fn long_call(message: &Value) -> Option<Value> {
+    let name = message["params"]["name"].as_str()?;
+    (message["method"] == "tools/call" && LONG_TOOLS.contains(&name))
+        .then(|| message.get("id").cloned())
+        .flatten()
+}
+
+/// `notifications/cancelled`: the id of the request that the client does not wait for any more.
+pub fn cancelled(message: &Value) -> Option<Value> {
+    (message["method"] == "notifications/cancelled")
+        .then(|| message["params"]["requestId"].clone())
+        .filter(|id| !id.is_null())
+}
+
+/// A long call that runs: its child `ftermctl`, and whether the client cancelled it.
+#[derive(Default)]
+struct Running {
+    child: Option<std::process::Child>,
+    cancelled: bool,
+}
+
+type Shared = std::sync::Arc<std::sync::Mutex<Running>>;
+
+/// Ends a long call: its child goes, so fterm closes the dialog. No answer is sent for it (MCP says so).
+fn cancel(running: &Shared) {
+    if let Ok(mut r) = running.lock() {
+        r.cancelled = true;
+        if let Some(child) = r.child.as_mut() {
+            let _ = child.kill();
+        }
+    }
+}
+
+/// The backend of a long call: a child `ftermctl` with its own connection (`call METHOD -`, the params on stdin).
+struct ChildCall {
+    window: Option<u32>,
+    name: String,
+    running: Shared,
+}
+
+impl Backend for ChildCall {
+    fn set_client_name(&mut self, name: &str) {
+        self.name = name.to_owned();
+    }
+
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        use std::io::{Read, Write};
+        use std::process::{Command, Stdio};
+
+        let exe = std::env::current_exe().map_err(|err| format!("cannot find ftermctl: {err}"))?;
+        let mut command = Command::new(exe);
+        if let Some(window) = self.window {
+            command.args(["--window", &window.to_string()]);
+        }
+        command
+            .args(["--json", "call", method, "-"])
+            .env(crate::run::NAME_ENV, &self.name)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
+            .map_err(|err| format!("cannot start ftermctl: {err}"))?;
+        let mut stdin = child.stdin.take().ok_or("no stdin")?;
+        let mut stdout = child.stdout.take().ok_or("no stdout")?;
+        let mut stderr = child.stderr.take().ok_or("no stderr")?;
+        {
+            let mut r = self.running.lock().map_err(|_| "a broken lock")?;
+            if r.cancelled {
+                // The cancel came while it started.
+                let _ = child.kill();
+            }
+            r.child = Some(child);
+        }
+        let _ = stdin.write_all(params.to_string().as_bytes());
+        drop(stdin);
+        let mut out = String::new();
+        let mut err = String::new();
+        let _ = stdout.read_to_string(&mut out);
+        let _ = stderr.read_to_string(&mut err);
+        let status = self
+            .running
+            .lock()
+            .ok()
+            .and_then(|mut r| r.child.as_mut().and_then(|c| c.wait().ok()));
+        if self.running.lock().is_ok_and(|r| r.cancelled) {
+            return Err("cancelled".to_owned());
+        }
+        if !status.is_some_and(|s| s.success()) {
+            let err = err.trim().trim_start_matches("ftermctl: ");
+            return Err(if err.is_empty() {
+                "ftermctl failed".to_owned()
+            } else {
+                err.to_owned()
+            });
+        }
+        serde_json::from_str(&out).map_err(|e| format!("a bad answer from ftermctl: {e}"))
+    }
+
+    fn run_and_wait(&mut self, _: Option<u64>, _: &str, _: u64) -> Result<Value, String> {
+        Err("not for a long call".to_owned())
+    }
+
+    fn read_file(&mut self, path: &str) -> Result<Vec<u8>, String> {
+        std::fs::read(path).map_err(|err| format!("cannot read {path}: {err}"))
+    }
+}
+
 /// One line from the client as JSON. A UTF-8 BOM in front (PowerShell 5.1 sends one) is skipped.
 pub fn parse_line(line: &str) -> Result<Value, serde_json::Error> {
     serde_json::from_str(line.trim_start_matches('\u{feff}'))
 }
 
-/// Reads stdin and writes stdout until the client closes stdin.
+/// One answer on stdout (the main loop and the threads of long calls write; a line at a time).
+fn write_answer(answer: &Value) -> Result<(), String> {
+    use std::io::Write;
+    let text = serde_json::to_string(answer).unwrap_or_default();
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "{text}").map_err(|err| err.to_string())?;
+    stdout.flush().map_err(|err| err.to_string())
+}
+
+/// Reads stdin and writes stdout until the client closes stdin. A tool that waits for the user (a form, a Review)
+/// runs on its own thread, so the client can cancel it (`notifications/cancelled`) while it waits.
 pub fn serve(window: Option<u32>) -> Result<(), String> {
-    use std::io::{BufRead, Write};
+    use std::collections::HashMap;
+    use std::io::BufRead;
+    use std::sync::{Arc, Mutex};
 
     let mut server = Server::new(Window {
         window,
         name: "mcp".to_owned(),
         client: None,
     });
+    let long: Arc<Mutex<HashMap<String, Shared>>> = Arc::default();
     let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout().lock();
     for line in stdin.lock().lines() {
         let line = line.map_err(|err| err.to_string())?;
         if line.trim().is_empty() {
             continue;
         }
-        let answer = match parse_line(&line) {
-            Ok(message) => server.handle(&message),
-            Err(err) => Some(json!({
-                "jsonrpc": "2.0",
-                "id": null,
-                "error": { "code": -32700, "message": err.to_string() },
-            })),
+        let message = match parse_line(&line) {
+            Ok(message) => message,
+            Err(err) => {
+                write_answer(&json!({
+                    "jsonrpc": "2.0",
+                    "id": null,
+                    "error": { "code": -32700, "message": err.to_string() },
+                }))?;
+                continue;
+            }
         };
-        if let Some(answer) = answer {
-            let text = serde_json::to_string(&answer).unwrap_or_default();
-            writeln!(stdout, "{text}").map_err(|err| err.to_string())?;
-            stdout.flush().map_err(|err| err.to_string())?;
+        if let Some(id) = cancelled(&message) {
+            if let Some(running) = long.lock().ok().and_then(|mut l| l.remove(&id.to_string())) {
+                cancel(&running);
+            }
+            continue;
+        }
+        if let Some(id) = long_call(&message) {
+            let running = Shared::default();
+            if let Ok(mut l) = long.lock() {
+                l.insert(id.to_string(), running.clone());
+            }
+            let name = server.backend.name.clone();
+            let long = long.clone();
+            std::thread::spawn(move || {
+                let mut worker = Server::new(ChildCall {
+                    window,
+                    name,
+                    running: running.clone(),
+                });
+                let answer = worker.handle(&message);
+                if let Ok(mut l) = long.lock() {
+                    l.remove(&id.to_string());
+                }
+                if running.lock().is_ok_and(|r| !r.cancelled)
+                    && let Some(answer) = answer
+                {
+                    let _ = write_answer(&answer);
+                }
+            });
+            continue;
+        }
+        if let Some(answer) = server.handle(&message) {
+            write_answer(&answer)?;
+        }
+    }
+    // The client is gone: its dialogs go too.
+    if let Ok(l) = long.lock() {
+        for running in l.values() {
+            cancel(running);
         }
     }
     Ok(())
@@ -801,6 +990,14 @@ mod tests {
                 }),
                 "get_text" => json!({ "pane": 1, "text": "hello\nworld" }),
                 "send_message" => json!({ "id": 3 }),
+                "form" if params["title"] == "no" => {
+                    json!({ "status": "cancelled", "changed": [] })
+                }
+                "form" => json!({
+                    "status": "saved",
+                    "values": { "user.name": "Bob" },
+                    "changed": ["user.name"],
+                }),
                 "review" => json!({
                     "decision": "changes",
                     "feedback": "Changes requested:\n- Item 2: comment: more tests",
@@ -960,6 +1157,63 @@ mod tests {
     }
 
     #[test]
+    fn calls_that_wait_for_the_user_can_be_cancelled() {
+        let call = |name: &str| request(5, "tools/call", json!({ "name": name, "arguments": {} }));
+        assert_eq!(long_call(&call("show_form")), Some(json!(5)));
+        assert_eq!(long_call(&call("review_plan")), Some(json!(5)));
+        assert_eq!(
+            long_call(&call("list_panes")),
+            None,
+            "a short call runs at once"
+        );
+        assert_eq!(
+            long_call(
+                &json!({ "jsonrpc": "2.0", "method": "tools/call", "params": { "name": "show_form" } })
+            ),
+            None,
+            "no id: nobody waits for it"
+        );
+        let cancel = json!({ "jsonrpc": "2.0", "method": "notifications/cancelled",
+                             "params": { "requestId": 5, "reason": "the user pressed Esc" } });
+        assert_eq!(cancelled(&cancel), Some(json!(5)));
+        assert_eq!(cancelled(&call("show_form")), None);
+    }
+
+    #[test]
+    fn a_form_for_the_user() {
+        let mut s = server();
+        let fields = json!([{ "id": "user.name", "type": "text", "value": "Ann" }]);
+        let result = tool(
+            &mut s,
+            "show_form",
+            json!({ "title": "Git", "text": "~/.gitconfig", "fields": fields, "timeout_seconds": 60 }),
+        );
+        assert_eq!(result["isError"], json!(false), "{result}");
+        assert_eq!(
+            s.backend.calls[0],
+            (
+                "form".into(),
+                json!({ "title": "Git", "text": "~/.gitconfig", "fields": fields, "timeout_ms": 60_000 })
+            )
+        );
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("Saved"), "{text}");
+        assert!(
+            text.contains(r#""user.name": "Bob""#),
+            "the values as JSON: {text}"
+        );
+        let result = tool(
+            &mut s,
+            "show_form",
+            json!({ "title": "no", "fields": fields }),
+        );
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("Not saved"), "write nothing: {text}");
+        let result = tool(&mut s, "show_form", json!({}));
+        assert_eq!(result["isError"], json!(true), "fields are needed");
+    }
+
+    #[test]
     fn the_tools_have_schemas() {
         let list = server()
             .handle(&request(1, "tools/list", json!({})))
@@ -989,6 +1243,7 @@ mod tests {
             "list_themes",
             "set_theme",
             "review_plan",
+            "show_form",
         ] {
             assert!(names.contains(&name), "{name}");
         }

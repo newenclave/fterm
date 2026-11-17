@@ -20,7 +20,17 @@ pub fn connect_as(window: Option<u32>, name: &str) -> Result<Client, String> {
 }
 
 pub fn connect(window: Option<u32>) -> Result<Client, String> {
-    connect_as(window, "ftermctl")
+    connect_as(window, &client_name(std::env::var(NAME_ENV).ok()))
+}
+
+/// The name that ftermctl gives itself (`hello`): `ftermctl`, or this env var (`ftermctl mcp` sets it for the
+/// `ftermctl` that it starts for a long call, so the dialog shows the name of the agent).
+pub const NAME_ENV: &str = "FTERM_CLIENT_NAME";
+
+/// The client name from the env var: `ftermctl` when it is not there or empty.
+pub fn client_name(env: Option<String>) -> String {
+    env.filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "ftermctl".to_owned())
 }
 
 /// The pane where this program runs (inside fterm).
@@ -124,4 +134,16 @@ pub fn run_and_wait_with(
         "took_ms": event.params["took_ms"],
         "output": output["text"],
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_client_name() {
+        assert_eq!(client_name(None), "ftermctl");
+        assert_eq!(client_name(Some(String::new())), "ftermctl", "empty");
+        assert_eq!(client_name(Some("claude-code".into())), "claude-code");
+    }
 }

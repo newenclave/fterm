@@ -85,7 +85,9 @@ Events and messages:
   subscribe [EVENT...]                   print events as JSON lines (Ctrl+C to stop)
 
 Other:
-  call METHOD [JSON]                     any API call (see docs/API.md)
+  form FILE|- [--timeout S]              show a form to the user (JSON, see docs/FORMS.md) and print the
+                                         answer as JSON; exit code 0 = saved, 1 = not saved
+  call METHOD [JSON|-]                   any API call (see docs/API.md); `-` = the JSON comes on stdin
   mcp                                    an MCP server on stdin/stdout (see docs/MCP.md)
   mux list | mux stop                    the panes of the mux server; stop = end them all and the server
   mux serve [SECONDS|inf]                run the mux server; it ends SECONDS (default 60) after its last pane
@@ -294,30 +296,12 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Call { method, params } => {
-            let mut client = connect(cli.window)?;
-            let answer = client
-                .call(method, params.clone())
-                .map_err(|err| err.to_string())?;
-            // `overlay --wait`: the exit code of the program is the exit code of ftermctl.
-            if method == "spawn" && params.get("wait").and_then(Value::as_bool) == Some(true) {
-                if cli.json {
-                    print_answer(cli.json, method, &answer);
-                }
-                let code = answer.get("exit").and_then(Value::as_i64).unwrap_or(1);
-                return Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)));
-            }
-            print_answer(cli.json, method, &answer);
-            if method == "ai_ask"
-                && let Some(error) = answer.get("error").and_then(Value::as_str)
-            {
-                if !cli.json {
-                    eprintln!("ftermctl: the AI answer failed: {error}");
-                }
-                return Ok(ExitCode::FAILURE);
-            }
-            Ok(ExitCode::SUCCESS)
+        Command::Call { method, params } => run_call(cli, method, params),
+        Command::CallStdin { method } => {
+            let params = read_json_stdin()?;
+            run_call(cli, method, &params)
         }
+        Command::Form { source, timeout_ms } => run_form(cli, source, *timeout_ms),
         Command::Run {
             pane,
             text,
@@ -410,6 +394,71 @@ fn run_command(
 /// `review`: shows a plan in a Review and waits for the user. With `--hook` it is a Claude Code
 /// `PreToolUse` hook for `ExitPlanMode`: the hook input comes on stdin, and the answer for Claude goes to
 /// stdout. Out of fterm, or with no answer, the hook says nothing, so Claude shows its own dialog.
+/// Any API call; the exit code says if it worked.
+fn run_call(cli: &Cli, method: &str, params: &Value) -> Result<ExitCode, String> {
+    let mut client = connect(cli.window)?;
+    let answer = client
+        .call(method, params.clone())
+        .map_err(|err| err.to_string())?;
+    // `overlay --wait`: the exit code of the program is the exit code of ftermctl.
+    if method == "spawn" && params.get("wait").and_then(Value::as_bool) == Some(true) {
+        if cli.json {
+            print_answer(cli.json, method, &answer);
+        }
+        let code = answer.get("exit").and_then(Value::as_i64).unwrap_or(1);
+        return Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)));
+    }
+    print_answer(cli.json, method, &answer);
+    if method == "ai_ask"
+        && let Some(error) = answer.get("error").and_then(Value::as_str)
+    {
+        if !cli.json {
+            eprintln!("ftermctl: the AI answer failed: {error}");
+        }
+        return Ok(ExitCode::FAILURE);
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// JSON from stdin (a UTF-8 BOM in front is skipped: PowerShell 5.1 writes one).
+fn read_json_stdin() -> Result<Value, String> {
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+        .map_err(|err| format!("cannot read stdin: {err}"))?;
+    serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|err| format!("bad JSON on stdin: {err}"))
+}
+
+/// `form FILE|-`: shows the form and prints the answer as JSON. Exit code 0 = saved, 1 = not saved (cancelled,
+/// the time ran out, the pane closed): then write nothing.
+fn run_form(cli: &Cli, source: &str, timeout_ms: Option<u64>) -> Result<ExitCode, String> {
+    let mut spec = if source == "-" {
+        read_json_stdin()?
+    } else {
+        let text = std::fs::read_to_string(source)
+            .map_err(|err| format!("cannot read {source}: {err}"))?;
+        serde_json::from_str(text.trim_start_matches('\u{feff}'))
+            .map_err(|err| format!("bad JSON in {source}: {err}"))?
+    };
+    if !spec.is_object() {
+        return Err("a form is a JSON object (see docs/FORMS.md)".to_owned());
+    }
+    if let Some(ms) = timeout_ms {
+        spec["timeout_ms"] = json!(ms);
+    }
+    let mut client = connect(cli.window)?;
+    let answer = client.call("form", spec).map_err(|err| err.to_string())?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&answer).unwrap_or_default()
+    );
+    Ok(if answer["status"] == "saved" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
 fn run_review(
     cli: &Cli,
     source: Option<&str>,

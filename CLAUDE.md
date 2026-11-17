@@ -53,12 +53,13 @@ Read `docs/ARCHITECTURE.md` for detail. The big picture:
 | `fterm-mux` | Pure model: workspaces, tabs, pane tree (`Layout` of `Pane`/`Split`), rects, neighbors, zoom, overlays, the scratch shell, companions. |
 | `fterm-config` | Runs `fterm.lua` in sandboxed Luau (`mlua`); settings, themes (`theme.rs`), UI languages (`l10n.rs`), profiles, keymap (`keys.rs`), copy mode keys (`copy_keys.rs`). `sample.lua` is the default config. |
 | `fterm-render` | wgpu renderer: glyph atlases (mask + color), builtin box/Braille glyphs, tab bar, dock, toasts, overlays. One draw call per frame. |
+| `fterm-ui` | Pure parts of a UI drawn as text into a pane with no program: the input box, looks and their ANSI drawing, keys, text helpers, and the form model (`field.rs`, `form.rs`). No UI words and no colors. |
 | `fterm-history` | Command/folder history in JSON-lines files shared by many windows (append-only writes). |
 | `fterm-scene` | Braille canvas: draw ops and plots for scene panes. |
 | `fterm-api` | JSON-RPC 2.0 over a local socket (named pipe / unix socket); server, client, discovery (`instances/<pid>.json`), the agent guide. |
 | `fterm-server` | The mux server (`fterm --mux-server`, `ftermctl mux serve`): programs of mux panes live there and go on when the window closes; its client for the window. See `docs/MUX.md`. |
 | `fterm-ai` | Streaming clients for the AI panel (Anthropic, OpenAI-like, Ollama), SSE parsing. |
-| `fterm` | The app: winit event loop, wires everything. `app.rs` is the core; `app/*_calls.rs` group the app by feature (API, AI, session, review, mux, workspaces, links, overlays, companions, copy mode, dashboard, picture markup, agents, recent panes). Pure models with tests next to it: `ai_chat.rs`, `review.rs`, `panels.rs`, `themes.rs`, `link_open.rs`, `dashboard.rs`, `markup.rs`, `agent_info.rs`, `recent.rs`. |
+| `fterm` | The app: winit event loop, wires everything. `app.rs` is the core; `app/*_calls.rs` group the app by feature (API, AI, session, review, dialogs (shared by the Review and forms), forms, mux, workspaces, links, overlays, companions, copy mode, dashboard, picture markup, agents, recent panes). Pure models with tests next to it: `ai_chat.rs`, `review.rs`, `panels.rs`, `themes.rs`, `link_open.rs`, `dashboard.rs`, `markup.rs`, `agent_info.rs`, `recent.rs`. |
 | `ftermctl` | Console CLI and the stdio MCP server (`ftermctl mcp`) that talk to a running window over the API socket; `ftermctl review --hook`, `agent-event --hook`, `agent-session --hook`, and `statusline` are what Claude Code runs; `ftermctl mux serve` and `mux proxy` run the mux server on another machine (reached over SSH). |
 
 Key flows that span files:
@@ -76,11 +77,13 @@ Key flows that span files:
   the handler in `fterm/src/app/api_calls.rs`, the CLI in `ftermctl/src/cli.rs` (+ output in `main.rs`),
   the MCP tool in `ftermctl/src/mcp.rs`, and the docs `docs/API.md`, `docs/MCP.md`, and
   `assets/agents/GUIDE.md` (the guide shipped to agents and installed as a Claude Code skill).
-- **Special panes:** a scene pane (`Pane::scene`, also the dashboard), a Review (`Pane::review`), and a picture
-  pane (`Pane::picture_pane`) have no program; the app draws their model and gives them the keys.
+- **Special panes:** a scene pane (`Pane::scene`, also the dashboard), a Review (`Pane::review`), a form
+  (`Pane::form`), and a picture pane (`Pane::picture_pane`) have no program; the app draws their model and gives
+  them the keys. A Review and a form are dialogs (`app/dialog_calls.rs`): an overlay of a dialog has the keys only
+  while the pane under it is the active pane.
 - **Panes outside the layout tree:** overlays, the scratch shell, and companions are in `Mux` next to the `Layout`.
   Code that walks the panes of a tab must not assume that the tree has them all.
-- **Slow API calls** (`wait_for`, `screenshot`, `ai_ask` with `wait`, `review`, `show_image` with `wait`, `spawn` of
+- **Slow API calls** (`wait_for`, `screenshot`, `ai_ask` with `wait`, `review`, `form`, `show_image` with `wait`, `spawn` of
   an overlay with `wait`) branch off in `api_call` before
   `api_dispatch`, keep `ApiRequest::reply`, and answer later; add a long call to `timeout_for` in `api.rs` too.
 - **Mux panes:** the server runs the program in a normal `Session` (with a `tap` on its output); the window keeps
