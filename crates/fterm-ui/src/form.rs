@@ -12,6 +12,9 @@ use crate::text::{cells, fit, wrap};
 /// The most fields of a form.
 pub const MAX_FIELDS: usize = 200;
 
+/// The form is laid out for at least this many cells (a narrower pane cuts the rows).
+const MIN_COLS: usize = 20;
+
 /// What has the focus: a field, or one of the buttons at the bottom.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Focus {
@@ -109,9 +112,9 @@ impl Form {
         self.focus
     }
 
-    /// Something differs from the request.
+    /// The user edited something (Esc then asks again).
     pub fn changed(&self) -> bool {
-        self.fields.iter().any(Field::changed)
+        self.fields.iter().any(Field::edited)
     }
 
     /// The answer of a saved form: all values (untouched ones exactly as they came) and the ids that changed.
@@ -157,6 +160,7 @@ impl Form {
 
     /// The cells of the label column and of the values for `cols` cells.
     fn widths(&self, cols: usize) -> (usize, usize) {
+        let cols = cols.max(MIN_COLS);
         let longest = self
             .fields
             .iter()
@@ -263,8 +267,8 @@ impl Form {
 
     /// The screen of the form for `cols` x `lines` cells: the header, the fields (scrolled so the cursor is seen),
     /// the buttons, and the keys.
-    pub fn screen(&mut self, cols: usize, lines: usize, word: &dyn Fn(Word) -> String) -> Screen {
-        let cols = cols.max(20);
+    pub fn screen(&mut self, pane: usize, lines: usize, word: &dyn Fn(Word) -> String) -> Screen {
+        let cols = pane.max(MIN_COLS);
         let (label_w, value_w) = self.widths(cols);
         let full = |spans: Vec<Span>, selected: bool| Row { spans, selected };
 
@@ -292,11 +296,21 @@ impl Form {
             ));
         }
         header.push(full(vec![], false));
-        // A long text must leave room for the fields and the buttons.
-        header.truncate(lines.saturating_sub(4).max(1));
+        // A long text must leave room for the fields and the buttons; a cut shows a mark.
+        let most = lines.saturating_sub(4).max(1);
+        if header.len() > most {
+            header.truncate(most);
+            if most > 1
+                && let Some(last) = header.last_mut()
+            {
+                *last = full(vec![span(" …", Look::Dim)], false);
+            }
+        }
 
         // The fields.
         let mut body: Vec<Row> = Vec::new();
+        // The rows of the focused field (with its help and problem), and its row that must be seen.
+        let mut whole = (0, 0);
         let mut target = 0;
         let mut cursor_at = None;
         let focus = self.focus;
@@ -328,6 +342,9 @@ impl Form {
                     ],
                     false,
                 ));
+            }
+            if focused {
+                whole = (first, body.len().saturating_sub(1));
             }
         }
 
@@ -375,10 +392,17 @@ impl Form {
             ),
         ];
 
-        // The fields scroll so the cursor row is seen (and the field from its start when it fits).
+        // The fields scroll so the focused field is seen when it fits, and its cursor row always.
         let room = lines.saturating_sub(header.len() + footer.len()).max(1);
         if !matches!(focus, Focus::Field(_)) {
             target = body.len().saturating_sub(1);
+            whole = (target, target);
+        }
+        if whole.1 >= self.top + room {
+            self.top = whole.1 + 1 - room;
+        }
+        if whole.0 < self.top {
+            self.top = whole.0;
         }
         if target < self.top {
             self.top = target;
@@ -398,9 +422,9 @@ impl Form {
         rows.truncate(lines.max(1));
         // No row is wider than the pane (it would wrap and move the whole screen).
         for row in &mut rows {
-            clip(row, cols);
+            clip(row, pane);
         }
-        let cursor = cursor.filter(|(r, c)| *r < rows.len() && *c < cols);
+        let cursor = cursor.filter(|(r, c)| *r < rows.len() && *c < pane);
         Screen { rows, cursor }
     }
 }
@@ -754,6 +778,8 @@ mod tests {
             form(json!({ "fields": [{ "id": "token", "type": "password", "value": "s3cret" }] }));
         let all = format!("{f:?}");
         assert!(!all.contains("s3cret"), "{all}");
+        let kind = format!("{:?}", f.fields()[0].kind);
+        assert!(!kind.contains("s3cret"), "{kind}");
     }
 
     #[test]
@@ -1123,5 +1149,149 @@ mod tests {
             { "id": "url.\"https://x\".insteadOf", "type": "text", "value": "y" },
         ]}));
         assert_eq!(values(&f)["url.\"https://x\".insteadOf"], "y");
+    }
+
+    #[test]
+    fn a_number_with_no_value_checks_what_the_user_typed() {
+        // Second review, finding 1: "12px" gave null, the same as the request, so it was not checked and saved.
+        let mut f = form(json!({ "fields": [
+            { "id": "n", "type": "number" },
+            { "id": "r", "type": "number", "required": true },
+        ]}));
+        typing(&mut f, "12px");
+        assert_eq!(field(&f, "n").problem(), Some(Problem::NotNumber));
+        f.key(Key::Tab, W);
+        assert_eq!(
+            f.key(Key::Save, W),
+            Outcome::Changed,
+            "no save with a text that is not a number"
+        );
+        assert_eq!(f.focus(), Focus::Field(0));
+        assert_eq!(
+            f.key(Key::Escape, W),
+            Outcome::Changed,
+            "Esc asks again: the user typed something"
+        );
+    }
+
+    #[test]
+    fn down_goes_past_a_crlf_line_that_fills_its_row() {
+        // Second review, finding 2: the CR took the place of the last char, and Down came back to it.
+        let cols = 20; // the value is 12 cells wide
+        let mut f = form(json!({ "fields": [
+            { "id": "m", "type": "multiline", "value": "abcdefghijkl\r\nmn\r\nop", "rows": 5 },
+        ]}));
+        for _ in 0..6 {
+            f.key(Key::Up, cols);
+        }
+        f.key(Key::Home, cols);
+        for _ in 0..3 {
+            f.key(Key::Down, cols);
+        }
+        f.key(Key::Text("X"), cols);
+        assert_eq!(values(&f)["m"], "abcdefghijkl\r\nmn\r\nXop");
+        // One Down from the first line: the end of that line, before its CR LF.
+        for _ in 0..6 {
+            f.key(Key::Up, cols);
+        }
+        f.key(Key::Home, cols);
+        f.key(Key::Down, cols);
+        f.key(Key::Text("Y"), cols);
+        assert_eq!(values(&f)["m"], "abcdefghijklY\r\nmn\r\nXop");
+    }
+
+    #[test]
+    fn an_open_list_at_the_bottom_shows_its_options() {
+        // Second review, finding 3: only the highlighted option was seen.
+        let mut list: Vec<Value> = (0..20)
+            .map(|i| json!({ "id": format!("t{i}"), "type": "text" }))
+            .collect();
+        list.push(
+            json!({ "id": "s", "type": "select", "options": ["one", "two", "three", "four"] }),
+        );
+        let mut f = form(json!({ "fields": list }));
+        go(&mut f, "s");
+        f.screen(W, 15, &words);
+        f.key(
+            Key::Enter {
+                ctrl: false,
+                shift: false,
+            },
+            W,
+        );
+        let screen = f.screen(W, 15, &words);
+        let seen: Vec<String> = screen.rows.iter().map(|r| r.plain()).collect();
+        for option in ["one", "two", "three", "four"] {
+            assert!(
+                seen.iter().any(|r| r.contains(option)),
+                "{option}: {seen:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_placeholder_shows_for_a_field_with_no_value() {
+        // Second review, finding 4: a field with no value showed "(not set)" or an empty input.
+        let mut f = form(json!({ "fields": [
+            { "id": "a", "type": "text", "placeholder": "your name" },
+            { "id": "m", "type": "multiline", "placeholder": "notes here" },
+        ]}));
+        let all: Vec<String> = f
+            .screen(W, 20, &words)
+            .rows
+            .iter()
+            .map(|r| r.plain())
+            .collect();
+        assert!(
+            all.iter().any(|r| r.contains("your name")),
+            "focused: {all:#?}"
+        );
+        assert!(
+            all.iter().any(|r| r.contains("notes here")),
+            "not focused: {all:#?}"
+        );
+    }
+
+    #[test]
+    fn a_narrow_pane_gets_no_wide_rows() {
+        // Second review, finding 5: rows were cut at 20 cells, not at the pane.
+        let mut f = git();
+        for cols in [8, 12, 19] {
+            let screen = f.screen(cols, 30, &words);
+            for row in &screen.rows {
+                assert!(cells(&row.plain()) <= cols, "{cols}: {:?}", row.plain());
+            }
+            if let Some((_, c)) = screen.cursor {
+                assert!(c < cols, "{cols}: the cursor at {c}");
+            }
+        }
+    }
+
+    #[test]
+    fn keys_and_drawing_use_the_same_widths() {
+        // Second review, finding 5: in a narrow pane, Up moved by rows that were not drawn.
+        let mut f = form(json!({ "fields": [
+            { "id": "a", "type": "text" },
+            { "id": "m", "type": "multiline", "value": "abcdefghij" },
+        ]}));
+        go(&mut f, "m");
+        f.screen(12, 20, &words);
+        f.key(Key::Up, 12);
+        assert_eq!(
+            f.focus(),
+            Focus::Field(0),
+            "the value is drawn on one row, so Up leaves it"
+        );
+    }
+
+    #[test]
+    fn a_cut_text_shows_a_mark() {
+        // Second review, finding 6: a long text was cut with no sign.
+        let mut f = form(json!({ "text": "word ".repeat(400), "fields": [
+            { "id": "a", "type": "text", "value": "v" },
+        ]}));
+        let screen = f.screen(40, 12, &words);
+        let all: Vec<String> = screen.rows.iter().map(|r| r.plain()).collect();
+        assert!(all.iter().any(|r| r.contains('…')), "{all:#?}");
     }
 }

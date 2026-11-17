@@ -86,7 +86,7 @@ pub struct List {
     pub at: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum Kind {
     /// A heading, no value.
     Group,
@@ -157,6 +157,22 @@ impl std::fmt::Debug for Field {
     }
 }
 
+impl std::fmt::Debug for Kind {
+    /// Only the kind, no values: a password must not get into a log.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Kind::Group => "Group",
+            Kind::Checkbox { .. } => "Checkbox",
+            Kind::Text { password: true, .. } => "Password",
+            Kind::Text { .. } => "Text",
+            Kind::Number { .. } => "Number",
+            Kind::Multiline { .. } => "Multiline",
+            Kind::Radio { .. } => "Radio",
+            Kind::Select { .. } => "Select",
+        })
+    }
+}
+
 /// Did a field use a key, or is it for the form (to go to another field)?
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Handled {
@@ -176,7 +192,7 @@ fn line_text(text: &str) -> String {
 }
 
 /// The char that is drawn for a char of a value: one char for one char, so the cursor index stays the same.
-/// A tab is a space, a CR (of CR LF) has no width, another control char is a mark; in one line, a new line is a
+/// A tab is a space, a CR alone has no width, another control char is a mark; in one line, a new line is a
 /// space. The value keeps the real chars.
 fn shown_char(c: char, one_line: bool) -> char {
     match c {
@@ -192,6 +208,30 @@ fn shown_char(c: char, one_line: bool) -> char {
 
 fn shown(text: &str, one_line: bool) -> String {
     text.chars().map(|c| shown_char(c, one_line)).collect()
+}
+
+/// A multi-line value as it is drawn: the CR of a CR LF is left out (the new line is one char), the other chars
+/// are drawn one for one (`shown_char`). Also gives, for each place in the drawn text, the place in the value;
+/// the end of a line is the place before its CR, so the cursor never gets between the CR and the LF.
+fn drawn(text: &str) -> (String, Vec<usize>) {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut places = Vec::with_capacity(chars.len() + 1);
+    for (j, &c) in chars.iter().enumerate() {
+        if c == '\r' && chars.get(j + 1) == Some(&'\n') {
+            continue;
+        }
+        let after_cr = c == '\n' && j > 0 && chars[j - 1] == '\r';
+        places.push(if after_cr { j - 1 } else { j });
+        out.push(shown_char(c, false));
+    }
+    places.push(chars.len());
+    (out, places)
+}
+
+/// The place in the drawn text (`drawn`) of a place in the value.
+fn drawn_place(places: &[usize], at: usize) -> usize {
+    places.partition_point(|&p| p < at)
 }
 
 /// Typed or pasted text for an input with many lines: one kind of new line (LF), tabs kept, no other control chars.
@@ -627,9 +667,20 @@ impl Field {
         !self.is_group() && self.value() != self.original
     }
 
-    /// Checks a field that the user changed (an old value that breaks a rule never blocks saving).
+    /// The user edited it: its text is not the one of the start (a number "12px" gives no value, the same
+    /// as a request with no value, but it is edited), or its value changed.
+    pub fn edited(&self) -> bool {
+        match &self.kind {
+            Kind::Text { input, .. }
+            | Kind::Number { input, .. }
+            | Kind::Multiline { input, .. } => input.text != self.start,
+            _ => self.changed(),
+        }
+    }
+
+    /// Checks a field that the user edited (an old value that breaks a rule never blocks saving).
     pub fn problem(&self) -> Option<Problem> {
-        if !self.changed() {
+        if !self.edited() {
             return None;
         }
         let text_problem = |text: &str, rules: &TextRules| {
@@ -816,10 +867,11 @@ impl Field {
                         return Handled::Used;
                     }
                     Key::Up | Key::Down => {
-                        // By the rows that are drawn (of the shown text, char for char).
+                        // By the rows that are drawn.
+                        let (text, places) = drawn(&input.text);
                         let mut d = InputBox::default();
-                        d.set(&shown(&input.text, false));
-                        d.set_cursor(input.cursor());
+                        d.set(&text);
+                        d.set_cursor(drawn_place(&places, input.cursor()));
                         let moved = if key == Key::Up {
                             d.up(width)
                         } else {
@@ -828,10 +880,7 @@ impl Field {
                         if !moved {
                             return Handled::Not;
                         }
-                        input.set_cursor(d.cursor());
-                        if inside_crlf(&input.text, input.cursor()) {
-                            input.left();
-                        }
+                        input.set_cursor(places[d.cursor()]);
                         return Handled::Used;
                     }
                     _ => return Handled::Not,
@@ -999,10 +1048,10 @@ impl Field {
                 ..
             } => {
                 let mut spans = lead(true);
-                if unset && !focused {
+                if input.text.is_empty() && !placeholder.is_empty() {
+                    spans.extend(placeholder_spans(placeholder, value_w, focused));
+                } else if unset && !focused {
                     spans.push(not_set());
-                } else if input.text.is_empty() && !focused && !placeholder.is_empty() {
-                    spans.push(span(fit(placeholder, value_w), Look::Dim));
                 } else {
                     let text: String = if *password {
                         "•".repeat(input.text.chars().count())
@@ -1040,10 +1089,10 @@ impl Field {
                 placeholder,
                 ..
             } => {
-                // Drawn from the shown text (char for char, so the cursor index is the same).
+                let (text, places) = drawn(&input.text);
                 let mut d = InputBox::default();
-                d.set(&shown(&input.text, false));
-                d.set_cursor(input.cursor());
+                d.set(&text);
+                d.set_cursor(drawn_place(&places, input.cursor()));
                 let (lines, (cl, cc)) = d.layout(value_w);
                 // The view follows the cursor (a long value never hides it).
                 if focused {
@@ -1057,11 +1106,10 @@ impl Field {
                 for n in 0..*view {
                     let mut spans = lead(n == 0);
                     let line = lines.get(*top + n).cloned().unwrap_or_default();
-                    if n == 0 && unset && !focused {
+                    if n == 0 && input.text.is_empty() && !placeholder.is_empty() {
+                        spans.extend(placeholder_spans(placeholder, value_w, focused));
+                    } else if n == 0 && unset && !focused {
                         spans.push(not_set());
-                    } else if n == 0 && input.text.is_empty() && !focused && !placeholder.is_empty()
-                    {
-                        spans.push(span(fit(placeholder, value_w), Look::Dim));
                     } else if focused && *top + n == cl {
                         let before = fit(&line, cc);
                         let rest: String = line.chars().skip(before.chars().count()).collect();
@@ -1268,6 +1316,18 @@ fn one_line_view(text: &str, cursor: usize, width: usize, focused: bool) -> (Vec
         out.push(span(format!("{rest}{}", " ".repeat(fill)), Look::Input));
     }
     (out, at)
+}
+
+/// The placeholder of an empty input (after the cursor when it is focused).
+fn placeholder_spans(placeholder: &str, width: usize, focused: bool) -> Vec<Span> {
+    if focused {
+        vec![
+            span(" ", Look::Cursor),
+            span(fit(placeholder, width.saturating_sub(1)), Look::Dim),
+        ]
+    } else {
+        vec![span(fit(placeholder, width), Look::Dim)]
+    }
 }
 
 /// Wraps a help text to `width` cells (for the form).
