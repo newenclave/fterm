@@ -43,6 +43,19 @@ pub fn check(c: &Check) -> Verdict {
     }
 }
 
+/// The calls that need a yes for a pane that is not the client's own: they read it, type into it, or act on it. A
+/// dialog (`review`, `form`) only when it asks to open at a pane (`pane`): over another program it can take the keys
+/// and look like that program asks for something (a password).
+pub fn gated(method: &str, params: &serde_json::Value) -> bool {
+    match method {
+        "send_text" | "get_text" | "close" | "wait_for" | "read_messages" | "spawn"
+        | "screenshot" | "ai_read" | "ai_ask" | "ai_clear" | "agent_session" | "agent_event"
+        | "agent_usage" => true,
+        "review" | "form" => params.get("pane").is_some_and(|p| !p.is_null()),
+        _ => false,
+    }
+}
+
 /// The lines of the question box.
 pub fn question(name: &str, tab: Option<usize>) -> Vec<String> {
     let who = match tab {
@@ -60,6 +73,20 @@ pub fn question(name: &str, tab: Option<usize>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn which_calls_need_a_yes() {
+        use serde_json::json;
+        assert!(gated("send_text", &json!({})));
+        assert!(gated("get_text", &json!({ "pane": 3 })));
+        assert!(!gated("list", &json!({})));
+        // A dialog only when it asks to open at a pane: there it can look like that pane asks for a password.
+        assert!(gated("form", &json!({ "pane": 3 })));
+        assert!(gated("review", &json!({ "pane": 3 })));
+        assert!(!gated("form", &json!({})));
+        assert!(!gated("form", &json!({ "pane": null })));
+        assert!(!gated("review", &json!({ "items": ["a"] })));
+    }
 
     fn base(always: &HashSet<String>) -> Check<'_> {
         Check {

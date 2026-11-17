@@ -242,7 +242,7 @@ pub fn review_param(params: &Value, client_name: &str) -> Result<ReviewRequest, 
     }
     Ok(ReviewRequest {
         title: str_param(params, "title")?.unwrap_or_else(|| fterm_config::tr!("review.title")),
-        from: str_param(params, "from")?.unwrap_or_else(|| client_name.to_owned()),
+        from: dialog_from(params, client_name)?,
         items,
         timeout: review_timeout(params),
         plan_mode: bool_param(params, "plan_mode")?.unwrap_or(false),
@@ -260,14 +260,28 @@ pub struct FormRequest {
 /// `timeout_ms` (default 30 minutes, at most a day), `pane` (read by the caller).
 pub fn form_param(params: &Value, client_name: &str) -> Result<FormRequest, RpcError> {
     let mut form = fterm_ui::form::Form::from_json(params).map_err(RpcError::invalid_params)?;
-    let from = str_param(params, "from")?.unwrap_or_else(|| client_name.to_owned());
-    form.from = fterm_ui::text::one_line(&from);
+    form.from = dialog_from(params, client_name)?;
     if form.title.is_empty() {
         form.title = fterm_config::tr!("form.title");
     }
     Ok(FormRequest {
         form,
         timeout: form_timeout(params),
+    })
+}
+
+/// Who asked, for a dialog: `from` of the request (default: the client name), on one line. When it is another
+/// name than the client's, the client name comes next to it, so an agent can not make its dialog look like one of
+/// fterm or of another program alone.
+fn dialog_from(params: &Value, client_name: &str) -> Result<String, RpcError> {
+    let client = fterm_ui::text::one_line(client_name);
+    let from = str_param(params, "from")?
+        .map(|from| fterm_ui::text::one_line(&from))
+        .filter(|from| !from.is_empty());
+    Ok(match from {
+        Some(from) if from != client && !client.is_empty() => format!("{from} ({client})"),
+        Some(from) => from,
+        None => client,
     })
 }
 
@@ -486,8 +500,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             (r.title.as_str(), r.from.as_str(), r.items.len()),
-            ("Review", "opencode", 2)
+            ("Review", "opencode (x)", 2),
+            "another name than the client: the client name too"
         );
+        let same = review_param(&json!({"items": ["a"], "from": "claude"}), "claude").unwrap();
+        assert_eq!(same.from, "claude");
         assert_eq!(r.timeout, std::time::Duration::from_secs(1));
         let long = review_param(&json!({"items": ["a"], "timeout_ms": 1e12}), "x").unwrap();
         assert_eq!(
@@ -525,7 +542,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.form.title, "Git");
-        assert_eq!(r.form.from, "bot x", "one line");
+        assert_eq!(
+            r.form.from, "bot x (claude)",
+            "one line, and the client name"
+        );
+        let same = form_param(&json!({ "fields": fields, "from": "claude" }), "claude").unwrap();
+        assert_eq!(same.form.from, "claude");
         assert_eq!(r.timeout, Duration::from_secs(1));
         let e = form_param(&json!({ "fields": [{ "id": "a", "type": "nope" }] }), "x").unwrap_err();
         assert_eq!(e.code, RpcError::INVALID_PARAMS);

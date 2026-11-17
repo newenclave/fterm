@@ -165,23 +165,7 @@ impl App {
                 "questions to the AI panel use the user's key: set ai = { api_access = true } in fterm.lua",
             );
         }
-        let gated = matches!(
-            request.method.as_str(),
-            "send_text"
-                | "get_text"
-                | "close"
-                | "wait_for"
-                | "read_messages"
-                | "spawn"
-                | "screenshot"
-                | "ai_read"
-                | "ai_ask"
-                | "ai_clear"
-                | "agent_session"
-                | "agent_event"
-                | "agent_usage"
-        );
-        if !gated {
+        if !crate::access::gated(&request.method, &request.params) {
             return Verdict::Allow;
         }
         let client = self.api_clients.get(&request.client);
