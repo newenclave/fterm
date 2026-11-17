@@ -112,45 +112,94 @@ impl Server {
     }
 }
 
+/// Where the connection of a client is: a call runs now, the handler heard that the client went away.
+#[derive(Default)]
+struct Line {
+    calling: bool,
+    told: bool,
+}
+
+/// How many lines of a client may wait while one of its calls runs (then its writes wait, as before).
+const QUEUED_LINES: usize = 16;
+
 /// Reads the requests of one client and answers them, until the client goes away.
+///
+/// A call may wait long (a Review, a form). The lines are read on their own thread, so when the client goes away
+/// while its call waits, the handler hears it at once (the waiting call can then end). A call that a client sent
+/// just before it went away (before the call started here) still runs, and the handler hears "gone" after it: a
+/// client that sends a long call and goes away at once without waiting for the answer is not seen early. The end
+/// of the reading (also a client that only closes its writing side, or a line that is not UTF-8) counts as "gone".
 fn serve(
     inner: &Inner,
     handler: &dyn Handler,
     id: ClientId,
-    reader: impl BufRead,
+    reader: impl BufRead + Send,
     writer: &Mutex<Box<dyn Write + Send>>,
 ) {
-    for line in reader.lines() {
-        let Ok(line) = line else {
-            break;
-        };
-        if line.trim().is_empty() {
-            continue;
+    let line_state = Mutex::new(Line::default());
+    let tell = || {
+        let first = line_state
+            .lock()
+            .map(|mut s| !std::mem::replace(&mut s.told, true))
+            .unwrap_or(false);
+        if first {
+            handler.disconnected(id);
         }
-        let answer = match parse_request(&line) {
-            Err(err) => Some(Response::err(Value::Null, err)),
-            Ok(request) => {
-                let result = match request.method.as_str() {
-                    "subscribe" => subscribe(inner, id, &request.params, true),
-                    "unsubscribe" => subscribe(inner, id, &request.params, false),
-                    _ => handler.call(id, &request.method, request.params),
+    };
+    std::thread::scope(|scope| {
+        let (lines, incoming) = std::sync::mpsc::sync_channel::<String>(QUEUED_LINES);
+        let (state, tell) = (&line_state, &tell);
+        scope.spawn(move || {
+            for line in reader.lines() {
+                let Ok(line) = line else {
+                    break;
                 };
-                request.id.map(|rid| match result {
-                    Ok(value) => Response::ok(rid, value),
-                    Err(err) => Response::err(rid, err),
-                })
+                if lines.send(line).is_err() {
+                    return;
+                }
             }
-        };
-        if let Some(answer) = answer
-            && write_line(writer, &encode(&answer)).is_err()
-        {
-            break;
+            if state.lock().is_ok_and(|s| s.calling) {
+                tell();
+            }
+        });
+        for line in incoming {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let answer = match parse_request(&line) {
+                Err(err) => Some(Response::err(Value::Null, err)),
+                Ok(request) => {
+                    let result = match request.method.as_str() {
+                        "subscribe" => subscribe(inner, id, &request.params, true),
+                        "unsubscribe" => subscribe(inner, id, &request.params, false),
+                        _ => {
+                            if let Ok(mut s) = state.lock() {
+                                s.calling = true;
+                            }
+                            let result = handler.call(id, &request.method, request.params);
+                            if let Ok(mut s) = state.lock() {
+                                s.calling = false;
+                            }
+                            result
+                        }
+                    };
+                    request.id.map(|rid| match result {
+                        Ok(value) => Response::ok(rid, value),
+                        Err(err) => Response::err(rid, err),
+                    })
+                }
+            };
+            if let Some(answer) = answer
+                && write_line(writer, &encode(&answer)).is_err()
+            {
+                break;
+            }
         }
-    }
+    });
     if let Ok(mut clients) = inner.clients.lock() {
         clients.remove(&id);
     }
-    handler.disconnected(id);
+    tell();
 }
 
 /// `subscribe { events: ["command_done", ...] }` (`"*"` = all events) and `unsubscribe` (the same params).

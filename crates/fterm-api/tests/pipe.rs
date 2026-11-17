@@ -175,6 +175,99 @@ fn a_closed_client_is_noticed() {
     );
 }
 
+/// A handler whose `wait` call waits until its client is gone (or 5 seconds), like a Review or a form.
+#[derive(Default)]
+struct Waiter {
+    gone: Mutex<Vec<ClientId>>,
+    changed: std::sync::Condvar,
+    /// `wait` calls that started, `echo` calls that ran.
+    started: AtomicU32,
+    echoed: AtomicU32,
+}
+
+impl Handler for Waiter {
+    fn call(&self, client: ClientId, method: &str, _params: Value) -> Result<Value, RpcError> {
+        match method {
+            "echo" => {
+                self.echoed.fetch_add(1, Ordering::SeqCst);
+                Ok(json!("echo"))
+            }
+            "wait" => {
+                let gone = self.gone.lock().unwrap();
+                self.started.fetch_add(1, Ordering::SeqCst);
+                let (_gone, timeout) = self
+                    .changed
+                    .wait_timeout_while(gone, Duration::from_secs(5), |g| !g.contains(&client))
+                    .unwrap();
+                Ok(json!(if timeout.timed_out() {
+                    "timed out"
+                } else {
+                    "gone"
+                }))
+            }
+            other => Err(RpcError::no_method(other)),
+        }
+    }
+
+    fn disconnected(&self, client: ClientId) {
+        self.gone.lock().unwrap().push(client);
+        self.changed.notify_all();
+    }
+}
+
+#[test]
+fn a_client_that_goes_away_while_its_call_waits_is_noticed_at_once() {
+    let handler = Arc::new(Waiter::default());
+    let server = Server::start(&unique_name(), handler.clone()).expect("the server starts");
+    let mut stream = connect(server.name()).unwrap();
+    stream
+        .write_all(encode(&Request::new(1, "wait", Value::Null)).as_bytes())
+        .unwrap();
+    // The call runs (not only sent) before the client goes away.
+    let sent = std::time::Instant::now();
+    while handler.started.load(Ordering::SeqCst) == 0 && sent.elapsed() < Duration::from_secs(4) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        handler.started.load(Ordering::SeqCst),
+        1,
+        "the call started"
+    );
+    let started = std::time::Instant::now();
+    drop(stream);
+    while handler.gone.lock().unwrap().is_empty() && started.elapsed() < Duration::from_secs(4) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the handler hears it while the call waits: {:?}",
+        started.elapsed()
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(handler.gone.lock().unwrap().len(), 1, "once");
+    assert_eq!(server.client_count(), 0);
+    // A client that sends a call and goes away without waiting still gets its call done.
+    let mut stream = connect(server.name()).unwrap();
+    stream
+        .write_all(encode(&Request::new(2, "echo", Value::Null)).as_bytes())
+        .unwrap();
+    drop(stream);
+    let sent = std::time::Instant::now();
+    while handler.gone.lock().unwrap().len() < 2 && sent.elapsed() < Duration::from_secs(4) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(handler.echoed.load(Ordering::SeqCst), 1, "its call ran");
+    assert_eq!(handler.gone.lock().unwrap().len(), 2);
+    // The server still works.
+    assert_eq!(
+        Client::connect(server.name())
+            .unwrap()
+            .call("echo", Value::Null)
+            .unwrap(),
+        json!("echo")
+    );
+}
+
 #[test]
 fn windows_are_found() {
     let dir = std::env::temp_dir().join(format!("fterm-instances-{}", std::process::id()));
