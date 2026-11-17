@@ -58,12 +58,14 @@ impl App {
                 })
                 .unwrap_or_default()
         };
-        // A Review tab waits for an agent that is gone after a restart: it is not saved.
+        // A Review or a form waits for an agent that is gone after a restart: it is not saved.
         let is_review = |tab: &fterm_mux::mux::Tab| {
-            tab.layout
-                .panes()
-                .iter()
-                .all(|p| running.panes.get(p).is_some_and(|p| p.review.is_some()))
+            tab.layout.panes().iter().all(|p| {
+                running
+                    .panes
+                    .get(p)
+                    .is_some_and(|p| p.review.is_some() || p.form.is_some())
+            })
         };
         let saved: Vec<&fterm_mux::mux::Tab> = running
             .mux

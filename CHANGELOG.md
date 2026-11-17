@@ -24,8 +24,20 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   spawn`), a scene, or a companion while you worked in another tab, the pane came into your tab and took your
   keys, so your typing went to it. Now a split or a companion goes next to the agent's own pane, in its own folder,
   and a new tab opens in the back. You keep your tab and your keys.
+- **Chinese, Japanese, and Korean input works in a Review comment.** The text of the input method went nowhere.
+- **A Review answers at once when it can not go on.** When you closed its tab, or the program of the pane under it
+  ended, the agent waited up to an hour and then got an answer with no decision. When the program that asked for
+  the Review ended, the Review stayed open. Now the agent gets "cancelled" at once, and the Review closes.
+- **`wait_for` and the `pane_closed` event work when a whole tab closes.** Before, they came only for a pane that
+  closed alone.
+- **Closing a Review or a picture pane no longer says that a program runs in it** (`ftermctl close` needed
+  `--force`).
 
 ### Added
+- **Forms: an agent can ask you to change settings.** The API call `form` shows a form over the pane of the agent:
+  checkboxes, text and number inputs, inputs with many lines, radio buttons, and lists. You change the values and
+  save (Ctrl+S) or cancel (Esc). The agent gets the new values and reads and writes the file itself, so any
+  settings file works. A form opens like a plan Review (`plan_review.place` and `focus`).
 - **Choose where a plan Review opens and when you go to it:** `plan_review = { place = "overlay" | "split" | "tab",
   focus = "auto" | "always" | "never" }`. See [docs/REVIEW.md](docs/REVIEW.md#how-it-looks).
 - **How long toasts stay, for each level:** `notifications = { timeouts = { error = 30, attention = 120 } }`.

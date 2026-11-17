@@ -293,6 +293,9 @@ impl App {
 
     /// The IME gave text: it goes into a text that is typed in the active picture pane. `true` when it did.
     pub(super) fn markup_ime(&mut self, text: &str) -> bool {
+        if self.keys_elsewhere() {
+            return false;
+        }
         let Some(pane) = self.active_picture() else {
             return false;
         };
@@ -489,7 +492,10 @@ impl App {
         let pasted = origin.filter(|o| {
             self.running.as_ref().is_some_and(|r| {
                 r.panes.get(o).is_some_and(|p| {
-                    p.picture_pane.is_none() && p.scene.is_none() && p.review.is_none()
+                    p.picture_pane.is_none()
+                        && p.scene.is_none()
+                        && p.review.is_none()
+                        && p.form.is_none()
                 })
             })
         });

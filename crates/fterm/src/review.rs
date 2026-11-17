@@ -200,6 +200,11 @@ impl Review {
         }
     }
 
+    /// An input (a comment, an edit, a new item) is open.
+    pub fn typing(&self) -> bool {
+        !matches!(self.mode, Mode::Browse)
+    }
+
     /// Moves the selection.
     pub fn move_by(&mut self, delta: isize) {
         let last = self.items.len().saturating_sub(1);
@@ -717,42 +722,7 @@ pub fn render(
     rows_n: usize,
     ui: &fterm_render::theme::UiColors,
 ) -> String {
-    use fterm_ui::look::{Rgb, Style};
-    let rgb = |c: fterm_term::alacritty_terminal::vte::ansi::Rgb| Rgb {
-        r: c.r,
-        g: c.g,
-        b: c.b,
-    };
-    let fg = |c| Style {
-        fg: Some(rgb(c)),
-        ..Style::default()
-    };
-    let style = |look: Look| match look {
-        Look::Title | Look::Heading => Style {
-            bold: true,
-            ..fg(ui.accent)
-        },
-        Look::Dim | Look::Code => fg(ui.text_dim),
-        Look::Text => fg(ui.text),
-        Look::Ok => fg(ui.success),
-        Look::Remove => Style {
-            strike: true,
-            ..fg(ui.error)
-        },
-        Look::Changed => fg(ui.warning),
-        Look::Comment => fg(ui.info),
-        Look::Input => Style {
-            bg: Some(rgb(ui.input_bg)),
-            ..fg(ui.text)
-        },
-        Look::Cursor => Style {
-            bg: Some(rgb(ui.text)),
-            ..fg(ui.surface_active)
-        },
-        Look::Error => fg(ui.error),
-    };
-    let lines = rows(review, cols, rows_n);
-    fterm_ui::look::render_ansi(&lines, style, rgb(ui.selected))
+    crate::ui_look::render(&rows(review, cols, rows_n), ui)
 }
 
 /// What a `review` call does now.
@@ -799,6 +769,17 @@ pub fn question_lines(from: &str, title: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_of_an_input_method_only_while_typing() {
+        // In browse mode a letter is a command (S sends): text of an input method must not get there.
+        let mut r = Review::new("t", "a", from_items(&["one".into()]));
+        assert!(!r.typing());
+        r.start_comment();
+        assert!(r.typing());
+        r.cancel_input();
+        assert!(!r.typing());
+    }
 
     #[test]
     fn a_plan_of_plan_mode_follows_plan_review() {

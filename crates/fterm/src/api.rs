@@ -44,6 +44,7 @@ pub const METHODS: &[&str] = &[
     "themes",
     "set_theme",
     "review",
+    "form",
     "ai_read",
     "ai_ask",
     "ai_input",
@@ -142,6 +143,9 @@ pub fn timeout_for(method: &str, params: &Value) -> Duration {
     }
     if method == "review" || (method == "show_image" && picture_wait(params)) {
         return review_timeout(params) + BASE;
+    }
+    if method == "form" {
+        return form_timeout(params) + BASE;
     }
     // An overlay with `wait`: the answer comes when the user closes the program (24 hours at most, as the app).
     if method == "spawn"
@@ -245,12 +249,44 @@ pub fn review_param(params: &Value, client_name: &str) -> Result<ReviewRequest, 
     })
 }
 
+/// A `form` call: the form and how long it waits.
+#[derive(Debug)]
+pub struct FormRequest {
+    pub form: fterm_ui::form::Form,
+    pub timeout: Duration,
+}
+
+/// `form`: the form (`title`, `text`, `fields`; see docs/FORMS.md), `from` (default: the client name),
+/// `timeout_ms` (default 30 minutes, at most a day), `pane` (read by the caller).
+pub fn form_param(params: &Value, client_name: &str) -> Result<FormRequest, RpcError> {
+    let mut form = fterm_ui::form::Form::from_json(params).map_err(RpcError::invalid_params)?;
+    let from = str_param(params, "from")?.unwrap_or_else(|| client_name.to_owned());
+    form.from = fterm_ui::text::one_line(&from);
+    if form.title.is_empty() {
+        form.title = fterm_config::tr!("form.title");
+    }
+    Ok(FormRequest {
+        form,
+        timeout: form_timeout(params),
+    })
+}
+
 /// How long a review waits: `timeout_ms`, one hour by default, at most a day.
 fn review_timeout(params: &Value) -> Duration {
+    dialog_timeout(params, 3_600_000.0)
+}
+
+/// How long a form waits: `timeout_ms`, 30 minutes by default, at most a day.
+fn form_timeout(params: &Value) -> Duration {
+    dialog_timeout(params, 1_800_000.0)
+}
+
+/// The `timeout_ms` of a dialog (a Review, a form): `default` when it is not there, at most a day.
+fn dialog_timeout(params: &Value, default: f64) -> Duration {
     let ms = params
         .get("timeout_ms")
         .and_then(Value::as_f64)
-        .unwrap_or(3_600_000.0);
+        .unwrap_or(default);
     Duration::from_millis(ms.clamp(0.0, 86_400_000.0) as u64)
 }
 
@@ -473,6 +509,36 @@ mod tests {
         assert_eq!(
             timeout_for("review", &json!({"timeout_ms": 1000})),
             std::time::Duration::from_secs(1 + 120)
+        );
+    }
+
+    #[test]
+    fn a_form_request() {
+        let fields = json!([{ "id": "a", "type": "text" }]);
+        let r = form_param(&json!({ "fields": fields }), "claude").unwrap();
+        assert_eq!(r.form.from, "claude", "the client name");
+        assert!(!r.form.title.is_empty(), "a title");
+        assert_eq!(r.timeout, Duration::from_secs(30 * 60), "30 minutes");
+        let r = form_param(
+            &json!({ "title": "Git", "from": "bot\nx", "timeout_ms": 1000, "pane": 3, "fields": fields }),
+            "claude",
+        )
+        .unwrap();
+        assert_eq!(r.form.title, "Git");
+        assert_eq!(r.form.from, "bot x", "one line");
+        assert_eq!(r.timeout, Duration::from_secs(1));
+        let e = form_param(&json!({ "fields": [{ "id": "a", "type": "nope" }] }), "x").unwrap_err();
+        assert_eq!(e.code, RpcError::INVALID_PARAMS);
+        assert!(e.message.contains("fields[0]"), "{}", e.message);
+        assert!(form_param(&json!({ "fields": fields, "from": 1 }), "x").is_err());
+        // The server waits as long as the form.
+        assert_eq!(
+            timeout_for("form", &json!({"timeout_ms": 1000})),
+            Duration::from_secs(1 + 120)
+        );
+        assert_eq!(
+            timeout_for("form", &json!({})),
+            Duration::from_secs(30 * 60 + 120)
         );
     }
 

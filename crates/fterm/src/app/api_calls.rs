@@ -147,6 +147,9 @@ impl App {
         if request.method == "review" {
             return self.api_review(event_loop, request);
         }
+        if request.method == "form" {
+            return self.api_form(event_loop, request);
+        }
         if request.method == "show_image" && crate::api::picture_wait(&request.params) {
             return self.api_show_image_wait(request);
         }
@@ -269,7 +272,7 @@ impl App {
         self.waits.retain(|w| w.client != client);
         self.ai_waits.retain(|w| w.client != client);
         self.api_questions.retain(|a| a.client != client);
-        self.review_client_gone(client);
+        self.dialog_client_gone(client);
         self.picture_client_gone(client);
         if let Some(running) = &self.running {
             running.window.request_redraw();
@@ -510,7 +513,7 @@ impl App {
             Happening::Exit,
             json!({ "event": "exit", "pane": pane.0, "exit": exit }),
         );
-        self.review_pane_closed(pane);
+        self.dialog_pane_closed(pane);
         self.picture_pane_closed(pane);
         self.inbox.remove(pane);
         let (gone, waiting): (Vec<Wait>, Vec<Wait>) = std::mem::take(&mut self.waits)
@@ -734,6 +737,8 @@ impl App {
                 "overlay"
             } else if p.review.is_some() {
                 "review"
+            } else if p.form.is_some() {
+                "form"
             } else if p.scene.is_some() {
                 "scene"
             } else if p.picture_pane.is_some() {

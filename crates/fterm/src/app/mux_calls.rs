@@ -250,6 +250,7 @@ impl App {
                 intro_lines: 0,
                 scene: None,
                 review: None,
+                form: None,
                 harmonize: true,
                 palette_changes: None,
                 mux: Some(MuxPane {

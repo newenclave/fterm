@@ -112,6 +112,8 @@ mod api_calls;
 mod companion_calls;
 mod copy_calls;
 mod dashboard_calls;
+mod dialog_calls;
+mod form_calls;
 mod link_calls;
 mod markup_calls;
 mod mux_calls;
@@ -160,6 +162,8 @@ struct Pane {
     scene: Option<std::sync::Mutex<fterm_scene::Scene>>,
     /// A Review tab: the review that the grid shows; keys go to it.
     review: Option<review_calls::ReviewPane>,
+    /// A form: the form that the grid shows; keys go to it.
+    form: Option<form_calls::FormPane>,
     /// The colors of its programs may fit the theme (`harmonize = false` in its profile: no).
     harmonize: bool,
     /// Its programs may change the palette (from its profile; `None` = the value of the config).
@@ -599,7 +603,7 @@ pub struct App {
     /// `ai_ask` calls that wait for the end of the answer.
     ai_waits: Vec<api_calls::AiWait>,
     /// `review` calls that wait for the user.
-    reviews: Vec<review_calls::PendingReview>,
+    dialogs: Vec<dialog_calls::PendingDialog>,
     /// Messages between agents, by pane.
     inbox: crate::inbox::Inbox,
     /// The AI chat, the flag that stops its running answer, and the API key prompt.
@@ -734,7 +738,7 @@ impl App {
             dash: dashboard_calls::DashState::default(),
             window_title_shown: std::cell::RefCell::new(String::new()),
             ai_waits: Vec::new(),
-            reviews: Vec::new(),
+            dialogs: Vec::new(),
             inbox: crate::inbox::Inbox::default(),
             ai: crate::ai_chat::Session::default(),
             ai_stop: None,
@@ -1829,7 +1833,7 @@ impl App {
 
     /// Texts that were made before: draw them again in the new language.
     fn language_changed(&mut self) {
-        self.redraw_reviews();
+        self.redraw_dialogs();
         self.update_window_title();
         if let Some(running) = &self.running {
             running.window.request_redraw();
@@ -1896,7 +1900,7 @@ impl App {
 
     /// Gives the theme to the renderer.
     pub(crate) fn apply_theme(&mut self) {
-        self.redraw_reviews();
+        self.redraw_dialogs();
         let palette = self.palette();
         let ui = self.ui;
         if let Some(running) = &mut self.running {
@@ -2156,6 +2160,7 @@ impl App {
                 intro_lines: 0,
                 scene: Some(std::sync::Mutex::new(scene)),
                 review: None,
+                form: None,
                 harmonize: true,
                 palette_changes: None,
                 mux: None,
@@ -2208,6 +2213,7 @@ impl App {
                 intro_lines: 0,
                 scene: None,
                 review: None,
+                form: None,
                 harmonize: true,
                 palette_changes: None,
                 mux: None,
@@ -2552,6 +2558,7 @@ impl App {
                 intro_lines: 0,
                 scene: None,
                 review: None,
+                form: None,
                 harmonize,
                 palette_changes,
                 mux,
@@ -2706,8 +2713,16 @@ impl App {
         let Some(running) = &mut self.running else {
             return false;
         };
+        let panes = running.mux.close_tab(tab);
+        // As with `close_pane_now`: their waits and dialogs get an answer, and clients hear that they closed.
+        for &pane in &panes {
+            self.api_pane_closed(pane);
+        }
+        let Some(running) = &mut self.running else {
+            return false;
+        };
         let mut gone = Vec::new();
-        for pane in running.mux.close_tab(tab) {
+        for pane in panes {
             // Dropping the session stops its pty, so the shell ends (a mux pane ends in the server).
             gone.push(running.panes.remove(&pane).and_then(|p| p.mux));
         }
@@ -2731,8 +2746,8 @@ impl App {
         let Some(p) = running.panes.get(&pane) else {
             return Vec::new();
         };
-        if p.scene.is_some() {
-            // A scene runs nothing.
+        if p.scene.is_some() || p.review.is_some() || p.form.is_some() || p.picture_pane.is_some() {
+            // A scene, a Review, a form, or a picture pane runs nothing.
             return Vec::new();
         }
         if !is_shell(p.session.program()) {
@@ -3017,9 +3032,12 @@ impl App {
         let Some(text) = self.clipboard.paste() else {
             return;
         };
-        // A Review has no program: the text goes into its input.
+        // A Review or a form has no program: the text goes into its input.
         if let Some(pane) = self.active_review() {
             return self.review_paste(pane, &text);
+        }
+        if let Some(pane) = self.active_form() {
+            return self.form_paste(pane, &text);
         }
         let Some(session) = self.running.as_ref().and_then(Running::session) else {
             return;
@@ -4763,6 +4781,35 @@ impl App {
         true
     }
 
+    /// Another part of the UI has the keys (a prompt, a question, the palette, the dock, copy mode), so text of the
+    /// input method must not go into a form or a Review under it. The same list as the order of `KeyboardInput`.
+    fn keys_elsewhere(&self) -> bool {
+        self.restore_offer.is_some()
+            || self.connecting.is_some()
+            || self.ssh_prompt.is_some()
+            || self.overlay_prompt.is_some()
+            || self.workspace_prompt.is_some()
+            || self.name_prompt.is_some()
+            || self.key_prompt.is_some()
+            || !self.api_questions.is_empty()
+            || self.close_question.is_some()
+            || self.hooks_question.is_some()
+            || self.link_question.is_some()
+            || self.mux_stop_question.is_some()
+            || self.hints.is_some()
+            || !self.plan_questions.is_empty()
+            || self.palette.is_some()
+            || self.history_popup.is_some()
+            || self.renaming.is_some()
+            || self.message.is_some()
+            || self.dashboard_shown().is_some()
+            || self.running.as_ref().is_some_and(|r| {
+                r.dock.focused
+                    || r.session()
+                        .is_some_and(|s| s.with_term(copy_mode::is_active))
+            })
+    }
+
     /// IME text is ready: send it like typed text.
     fn ime_commit(&self, text: &str) {
         let Some(session) = self.running.as_ref().and_then(Running::session) else {
@@ -4812,7 +4859,7 @@ impl App {
         if let Some(running) = &self.running {
             running.resize_visible_panes();
         }
-        self.draw_reviews();
+        self.draw_dialogs();
         self.refresh_pictures();
         let focused = self.focused;
         // The events count as read when the Events panel goes away (or fterm goes to the back).
@@ -5605,6 +5652,17 @@ impl ApplicationHandler<UserEvent> for App {
             }
             TermEvent::Exit => {
                 tracing::info!(pane = pane.0, "the shell ended");
+                // The overlay over it and its companions end with it: their waits and dialogs get an answer too.
+                let with_it: Vec<PaneId> = self.running.as_ref().map_or_else(Vec::new, |r| {
+                    r.mux
+                        .overlay_of(pane)
+                        .into_iter()
+                        .chain(r.mux.companions_of(pane))
+                        .collect()
+                });
+                for p in with_it {
+                    self.api_pane_closed(p);
+                }
                 self.api_pane_closed(pane);
                 let Some(running) = &mut self.running else {
                     return;
@@ -5671,7 +5729,7 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(at) = self.expire_waits(now) {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
-        if let Some(at) = self.expire_reviews(now) {
+        if let Some(at) = self.expire_dialogs(now) {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
         if let Some(at) = self.expire_pictures(now) {
@@ -5776,7 +5834,7 @@ impl ApplicationHandler<UserEvent> for App {
                 running.window.request_redraw();
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
-                if !self.markup_ime(&text) {
+                if !self.markup_ime(&text) && !self.form_ime(&text) && !self.review_ime(&text) {
                     self.ime_commit(&text);
                 }
             }
@@ -5903,6 +5961,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if self.active_review().is_some() {
                     self.review_key(&event);
+                    return;
+                }
+                if self.active_form().is_some() {
+                    self.form_key(&event);
                     return;
                 }
                 if self.active_picture().is_some() {

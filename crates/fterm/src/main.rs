@@ -35,6 +35,7 @@ mod session_state;
 mod text_command;
 mod themes;
 mod title;
+mod ui_look;
 mod waits;
 mod window_icon;
 

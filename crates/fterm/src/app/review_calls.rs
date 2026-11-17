@@ -3,26 +3,17 @@
 use std::time::Instant;
 
 use fterm_api::RpcError;
-use fterm_api::server::ClientId;
-use serde_json::Value;
 
+use super::dialog_calls::{Dialog, DialogInput, DialogKind, PendingDialog, dialog_input};
 use super::*;
 use crate::api::ApiRequest;
-use crate::review::{Decision, Outcome, Review, Start};
-use fterm_config::load::{PlanReview, ReviewFocus, ReviewPlace};
+use crate::review::{Outcome, Review, Start};
+use fterm_config::load::PlanReview;
 
 /// A review in a tab, and the grid size it was last drawn for.
 pub(super) struct ReviewPane {
     pub review: Review,
     pub drawn: Option<GridSize>,
-}
-
-/// A `review` call that waits for the user.
-pub(super) struct PendingReview {
-    pub pane: PaneId,
-    pub client: ClientId,
-    pub deadline: Instant,
-    pub reply: std::sync::mpsc::Sender<Result<Value, RpcError>>,
 }
 
 /// "Review the plan here?" before a plan of plan mode opens (`plan_review = "ask"`).
@@ -172,144 +163,21 @@ impl App {
         asked_by_user: bool,
     ) {
         let review = Review::new(&asked.title, &asked.from, asked.items);
-        let Some(pane) = self.open_review(event_loop, review, near, asked_by_user) else {
+        let title = tr!("review.tab", title = review.title);
+        let dialog = Dialog::Review(review);
+        let Some(pane) = self.place_dialog(event_loop, dialog, title, near, asked_by_user) else {
             let _ = request
                 .reply
                 .send(Err(RpcError::new(RpcError::INTERNAL, "no window")));
             return;
         };
-        self.reviews.push(PendingReview {
+        self.dialogs.push(PendingDialog {
             pane,
+            kind: DialogKind::Review,
             client: request.client,
             deadline,
             reply: request.reply,
         });
-    }
-
-    /// The review pane, at the pane `near` of the agent that asked, by `plan_review.place`: an overlay over it
-    /// (else a split), a split next to it (else a tab), or a tab right after its tab. It takes the keys by
-    /// `plan_review.focus`: with `auto`, when the user asked for it (R) or looks at `near`.
-    fn open_review(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        review: Review,
-        near: Option<PaneId>,
-        asked_by_user: bool,
-    ) -> Option<PaneId> {
-        let focused = self.focused;
-        let settings = self.config.config.review;
-        let overlay_size = settings.size.unwrap_or(self.config.config.overlay_size);
-        let running = self.running.as_mut()?;
-        let size = running.grid_for(running.tab_area());
-        let id = running.mux.new_pane_id();
-        let title = tr!("review.tab", title = review.title);
-        running.panes.insert(
-            id,
-            Pane {
-                session: Session::scene(size),
-                app_title: Some(title.clone()),
-                shell: ShellState::default(),
-                agent: None,
-                agent_hooks: false,
-                agent_session: None,
-                agent_info: Default::default(),
-                agent_row: None,
-                pictures: Default::default(),
-                picture_pane: None,
-                last_command: None,
-                remote: true,
-                opened_by: None,
-                profile: None,
-                rerun: None,
-                intro_lines: 0,
-                scene: None,
-                review: Some(ReviewPane {
-                    review,
-                    drawn: None,
-                }),
-                harmonize: false,
-                palette_changes: Some(false),
-                mux: None,
-            },
-        );
-        let looking = focused
-            && near.is_some()
-            && (running.mux.active_pane() == near || running.mux.input_pane() == near);
-        let near = near.filter(|p| running.panes.contains_key(p));
-        let mut place = settings.place;
-        let mut placed = false;
-        if let Some(near) = near {
-            if place == ReviewPlace::Overlay {
-                placed = running.mux.open_overlay_on(near, id, overlay_size);
-                if !placed {
-                    place = ReviewPlace::Split;
-                }
-            }
-            if place == ReviewPlace::Split && !placed {
-                placed = running
-                    .mux
-                    .split_pane(near, id, fterm_mux::Direction::Right);
-            }
-            if !placed {
-                running.mux.add_tab_after(
-                    near,
-                    fterm_mux::Layout::Pane(id),
-                    id,
-                    Some(title.clone()),
-                );
-                placed = true;
-            }
-        }
-        if !placed {
-            running
-                .mux
-                .add_tab(fterm_mux::Layout::Pane(id), id, Some(title.clone()));
-        }
-        running.resize_all_panes();
-        let go = match settings.focus {
-            ReviewFocus::Always => true,
-            ReviewFocus::Auto => asked_by_user || looking,
-            ReviewFocus::Never => false,
-        };
-        if go {
-            self.go_to_pane(id);
-        }
-        tracing::info!(pane = id.0, %title, "new review");
-        self.draw_reviews();
-        // A yellow dot and a notification: the user must act.
-        self.agent_state(event_loop, id, "waiting", &tr!("review.waiting"));
-        self.tab_changed();
-        Some(id)
-    }
-
-    /// Draws the reviews that are new, changed size, or got new colors.
-    pub(super) fn draw_reviews(&mut self) {
-        let ui = self.ui;
-        let Some(running) = self.running.as_mut() else {
-            return;
-        };
-        for p in running.panes.values_mut() {
-            let Some(rp) = p.review.as_mut() else {
-                continue;
-            };
-            let size = p.session.grid_size();
-            if rp.drawn == Some(size) {
-                continue;
-            }
-            let text = crate::review::render(&mut rp.review, size.columns, size.rows, &ui);
-            p.session.feed(text.as_bytes());
-            rp.drawn = Some(size);
-        }
-    }
-
-    /// Draws every review again (for example with a new theme).
-    pub(super) fn redraw_reviews(&mut self) {
-        if let Some(running) = self.running.as_mut() {
-            for rp in running.panes.values_mut().filter_map(|p| p.review.as_mut()) {
-                rp.drawn = None;
-            }
-        }
-        self.draw_reviews();
     }
 
     /// The pane with the keys is a review (in a tab, a split, or an overlay).
@@ -325,43 +193,45 @@ impl App {
         let Some(pane) = self.active_review() else {
             return;
         };
-        let (ctrl, shift, alt) = (
+        let input = dialog_input(
+            &event.logical_key,
+            event.physical_key,
+            event.text.as_deref(),
             self.mods.control_key(),
             self.mods.shift_key(),
             self.mods.alt_key(),
         );
-        // Ctrl+V (Ctrl+Shift+V and Shift+Insert come through the `paste` action).
-        if super::overlay_calls::is_paste(&event.logical_key, event.physical_key, ctrl, shift) {
-            if let Some(text) = self.clipboard.paste() {
-                self.review_apply(pane, R::Paste(&text));
+        match input {
+            Some(DialogInput::Key(key)) => self.review_apply(pane, key),
+            Some(DialogInput::Text(text)) => self.review_apply(pane, R::Text(&text)),
+            Some(DialogInput::Paste) => {
+                if let Some(text) = self.clipboard.paste() {
+                    self.review_apply(pane, R::Paste(&text));
+                }
             }
-            return;
+            None => {}
         }
-        let text = event
-            .text
-            .as_deref()
-            .filter(|_| !ctrl && !alt)
-            .map(|t| t.chars().filter(|c| !c.is_control()).collect::<String>())
-            .filter(|t| !t.is_empty());
-        let key = match &event.logical_key {
-            Key::Named(NamedKey::ArrowUp) => R::Up,
-            Key::Named(NamedKey::ArrowDown) => R::Down,
-            Key::Named(NamedKey::PageUp) => R::PageUp,
-            Key::Named(NamedKey::PageDown) => R::PageDown,
-            Key::Named(NamedKey::Home) => R::Home,
-            Key::Named(NamedKey::End) => R::End,
-            Key::Named(NamedKey::ArrowLeft) => R::Left,
-            Key::Named(NamedKey::ArrowRight) => R::Right,
-            Key::Named(NamedKey::Enter) => R::Enter { ctrl, shift },
-            Key::Named(NamedKey::Escape) => R::Escape,
-            Key::Named(NamedKey::Backspace) => R::Backspace,
-            Key::Named(NamedKey::Delete) => R::Delete,
-            _ => match &text {
-                Some(text) => R::Text(text),
-                None => return,
-            },
+    }
+
+    /// Text of the input method (CJK) for the review that has the keys: into its open input. With no open input it
+    /// goes nowhere (a letter there is a command). `false` = no review has the keys.
+    pub(super) fn review_ime(&mut self, text: &str) -> bool {
+        if self.keys_elsewhere() {
+            return false;
+        }
+        let Some(pane) = self.active_review() else {
+            return false;
         };
-        self.review_apply(pane, key);
+        let typing = self
+            .running
+            .as_ref()
+            .and_then(|r| r.panes.get(&pane))
+            .and_then(|p| p.review.as_ref())
+            .is_some_and(|rp| rp.review.typing());
+        if typing {
+            self.review_apply(pane, crate::review::Key::Text(text));
+        }
+        true
     }
 
     /// Text from the clipboard for the review that has the keys (the `paste` action).
@@ -385,119 +255,14 @@ impl App {
             Outcome::Nothing => return,
             Outcome::Changed => rp.drawn = None,
             Outcome::Send => {
-                let decision = rp.review.decision();
-                return self.finish_review(pane, decision);
+                let answer = rp.review.result(rp.review.decision());
+                return self.finish_dialog(pane, answer);
             }
             Outcome::Copy(text) => return self.copy_text(text),
         }
-        self.draw_reviews();
+        self.draw_dialogs();
         if let Some(running) = &self.running {
             running.window.request_redraw();
         }
-    }
-
-    /// Sends the answer of a review to the client that waits, and closes its tab.
-    fn finish_review(&mut self, pane: PaneId, decision: Decision) {
-        let result = self
-            .running
-            .as_ref()
-            .and_then(|r| r.panes.get(&pane))
-            .and_then(|p| p.review.as_ref())
-            .map(|rp| rp.review.result(decision));
-        let (done, waiting): (Vec<PendingReview>, Vec<PendingReview>) =
-            std::mem::take(&mut self.reviews)
-                .into_iter()
-                .partition(|r| r.pane == pane);
-        self.reviews = waiting;
-        if let Some(result) = result {
-            for r in done {
-                let _ = r.reply.send(Ok(result.clone()));
-            }
-        }
-        self.close_review_tab(pane);
-    }
-
-    /// Closes the tab of a review, unless it is the last tab (then the window would close).
-    fn close_review_tab(&mut self, pane: PaneId) {
-        // A review in an overlay or a split always goes; a review tab only when it is not the last tab.
-        let many = self.running.as_ref().is_some_and(|r| {
-            r.mux.all_tabs().count() > 1
-                || r.mux
-                    .all_tabs()
-                    .any(|t| t.overlay.is_some_and(|o| o.pane == pane))
-                || r.mux
-                    .all_tabs()
-                    .any(|t| t.layout.contains(pane) && t.layout.panes().len() > 1)
-        });
-        if many {
-            self.close_pane_now(pane);
-        }
-        if let Some(running) = &self.running {
-            running.window.request_redraw();
-        }
-    }
-
-    /// A review tab closed: the client gets "cancelled".
-    pub(super) fn review_pane_closed(&mut self, pane: PaneId) {
-        let result = self
-            .running
-            .as_ref()
-            .and_then(|r| r.panes.get(&pane))
-            .and_then(|p| p.review.as_ref())
-            .map(|rp| rp.review.result(Decision::Cancelled));
-        let (gone, waiting): (Vec<PendingReview>, Vec<PendingReview>) =
-            std::mem::take(&mut self.reviews)
-                .into_iter()
-                .partition(|r| r.pane == pane);
-        self.reviews = waiting;
-        if let Some(result) = result {
-            for r in gone {
-                let _ = r.reply.send(Ok(result.clone()));
-            }
-        }
-    }
-
-    /// The client stopped waiting (for example the agent was stopped): its review tabs go.
-    pub(super) fn review_client_gone(&mut self, client: ClientId) {
-        let panes: Vec<PaneId> = self
-            .reviews
-            .iter()
-            .filter(|r| r.client == client)
-            .map(|r| r.pane)
-            .collect();
-        self.reviews.retain(|r| r.client != client);
-        for pane in panes {
-            self.close_review_tab(pane);
-        }
-    }
-
-    /// Reviews whose time is over: "cancelled" with `timed_out`, and the tab goes. Gives the next deadline.
-    pub(super) fn expire_reviews(&mut self, now: Instant) -> Option<Instant> {
-        let over: Vec<PaneId> = self
-            .reviews
-            .iter()
-            .filter(|r| r.deadline <= now)
-            .map(|r| r.pane)
-            .collect();
-        for pane in over {
-            let result = self
-                .running
-                .as_ref()
-                .and_then(|r| r.panes.get(&pane))
-                .and_then(|p| p.review.as_ref())
-                .map(|rp| rp.review.result(Decision::Cancelled));
-            let (done, waiting): (Vec<PendingReview>, Vec<PendingReview>) =
-                std::mem::take(&mut self.reviews)
-                    .into_iter()
-                    .partition(|r| r.pane == pane);
-            self.reviews = waiting;
-            for r in done {
-                let mut answer = result.clone().unwrap_or_default();
-                answer["timed_out"] = true.into();
-                let _ = r.reply.send(Ok(answer));
-            }
-            self.close_review_tab(pane);
-        }
-        self.reviews.iter().map(|r| r.deadline).min()
     }
 }
