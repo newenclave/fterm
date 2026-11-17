@@ -678,14 +678,38 @@ impl Field {
         }
     }
 
-    /// Checks a field that the user edited (an old value that breaks a rule never blocks saving).
+    /// A `required` field with no value (no text, no option): the answer must have a value.
+    pub fn missing(&self) -> bool {
+        match &self.kind {
+            Kind::Group | Kind::Checkbox { .. } => false,
+            Kind::Text { input, rules, .. } | Kind::Multiline { input, rules, .. } => {
+                rules.required && input.text.is_empty()
+            }
+            Kind::Number {
+                input, required, ..
+            } => *required && input.text.trim().is_empty(),
+            Kind::Radio {
+                chosen, required, ..
+            }
+            | Kind::Select {
+                chosen, required, ..
+            } => *required && chosen.is_none(),
+        }
+    }
+
+    /// Checks a field. `required` holds always; the other rules only for a field that the user edited (an old
+    /// value that breaks them never blocks saving).
     pub fn problem(&self) -> Option<Problem> {
+        if self.missing() {
+            return Some(Problem::Required);
+        }
         if !self.edited() {
             return None;
         }
+        // (An empty required field is `missing`, above.)
         let text_problem = |text: &str, rules: &TextRules| {
             if text.is_empty() {
-                return rules.required.then_some(Problem::Required);
+                return None;
             }
             if let Some(max) = rules.max
                 && text.chars().count() > max
@@ -709,11 +733,12 @@ impl Field {
                 min,
                 max,
                 integer,
-                required,
+                ..
             } => {
                 let text = input.text.trim();
                 if text.is_empty() {
-                    let ok = !*required && (self.clearable || self.original.is_null());
+                    // No number is "not set": only for a clearable field or one that had no value.
+                    let ok = self.clearable || self.original.is_null();
                     return (!ok).then_some(Problem::Required);
                 }
                 let Some(n) = parse_number(text) else {
@@ -735,12 +760,7 @@ impl Field {
                 }
                 None
             }
-            Kind::Radio {
-                chosen, required, ..
-            }
-            | Kind::Select {
-                chosen, required, ..
-            } => (*required && chosen.is_none()).then_some(Problem::Required),
+            Kind::Radio { .. } | Kind::Select { .. } => None,
         }
     }
 

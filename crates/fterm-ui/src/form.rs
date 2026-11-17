@@ -331,9 +331,10 @@ impl Form {
                     body.extend(help_rows(help, label_w + 3, value_w));
                 }
             }
-            // A problem shows under a changed field when the user left it, or after a try to save.
+            // A problem shows under an edited field when the user left it, and under any field after a try to
+            // save (a required field with no value is no error before that).
             if let Some(p) = f.problem()
-                && (tried || !focused)
+                && (tried || (!focused && f.edited()))
             {
                 body.push(full(
                     vec![
@@ -809,6 +810,60 @@ mod tests {
         assert_eq!(f.key(Key::Save, W), Outcome::Save);
         assert_eq!(f.answer()["changed"], json!(["ok"]));
         assert_eq!(values(&f)["n"], json!(100));
+    }
+
+    #[test]
+    fn a_required_field_with_no_value_blocks_saving() {
+        // `required` means: the answer has a value, also when the user did not touch the field.
+        let options = json!({ "options": ["a", "b"] });
+        for (kind, extra) in [
+            ("text", json!({})),
+            ("multiline", json!({})),
+            ("number", json!({})),
+            ("radio", options.clone()),
+            ("select", options),
+        ] {
+            let mut spec = json!({ "id": "need", "type": kind, "required": true });
+            spec.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let mut f = form(json!({ "fields": [
+                { "id": "x", "type": "checkbox", "value": true },
+                spec,
+            ]}));
+            assert_eq!(f.key(Key::Save, W), Outcome::Changed, "{kind}: no save");
+            assert_eq!(f.focus(), Focus::Field(1), "{kind}: the focus goes to it");
+            assert_eq!(
+                field(&f, "need").problem(),
+                Some(Problem::Required),
+                "{kind}"
+            );
+        }
+        let mut f = form(
+            json!({ "fields": [{ "id": "t", "type": "text", "value": "", "required": true }] }),
+        );
+        assert_eq!(
+            f.key(Key::Save, W),
+            Outcome::Changed,
+            "an empty text is no value too"
+        );
+    }
+
+    #[test]
+    fn a_required_problem_shows_after_a_try_to_save() {
+        let mut f = form(json!({ "fields": [
+            { "id": "x", "type": "checkbox", "value": true },
+            { "id": "need", "type": "text", "required": true },
+        ]}));
+        let seen = |f: &mut Form| {
+            f.screen(W, 20, &words)
+                .rows
+                .iter()
+                .any(|r| r.plain().contains("problem: Required"))
+        };
+        assert!(!seen(&mut f), "no error before the user did anything");
+        f.key(Key::Save, W);
+        assert!(seen(&mut f), "the error shows after a try to save");
     }
 
     #[test]
