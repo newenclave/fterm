@@ -200,7 +200,9 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             let window = cli.window;
             let sent = cli::usage_params(&text, pane.as_deref()).map(|params| {
                 std::thread::spawn(move || {
-                    if let Ok(mut client) = connect(window) {
+                    if let Ok(mut client) = connect(window)
+                        && let Some(params) = run::with_checked_pane(params, run::checked_pane())
+                    {
                         let _ = client.call("agent_usage", params);
                     }
                 })
@@ -225,6 +227,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             let pane = std::env::var("FTERM_PANE_ID").ok();
             if let Some(params) = cli::event_hook_params(&text, pane.as_deref())
                 && let Ok(mut client) = connect(cli.window)
+                && let Some(params) = run::with_checked_pane(params, run::checked_pane())
             {
                 let _ = client.call("agent_event", params);
             }
@@ -237,6 +240,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             let pane = std::env::var("FTERM_PANE_ID").ok();
             if let Some(params) = cli::session_hook_params(&text, pane.as_deref())
                 && let Ok(mut client) = connect(cli.window)
+                && let Some(params) = run::with_checked_pane(params, run::checked_pane())
             {
                 let _ = client.call("agent_session", params);
             }

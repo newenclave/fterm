@@ -22,9 +22,14 @@ pub fn connect_as(window: Option<u32>, name: &str) -> Result<Client, String> {
 pub fn connect_socket(socket: &str, name: &str) -> Result<Client, String> {
     let mut client =
         Client::connect(socket).map_err(|err| format!("cannot connect to {socket}: {err}"))?;
-    client
+    // `pane` is only a hint: fterm answers the pane that it finds by our parent processes.
+    let answer = client
         .call("hello", json!({ "name": name, "pane": own_pane() }))
         .map_err(|err| err.to_string())?;
+    *CHECKED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        answer.get("pane").and_then(Value::as_u64);
     Ok(client)
 }
 
@@ -46,16 +51,39 @@ pub fn client_name(env: Option<String>) -> String {
         .unwrap_or_else(|| "ftermctl".to_owned())
 }
 
-/// The pane where this program runs (inside fterm).
+/// The pane where this program says it runs (`FTERM_PANE_ID`): a hint, and the sign that we run inside fterm.
 pub fn own_pane() -> Option<u64> {
     std::env::var("FTERM_PANE_ID")
         .ok()
         .and_then(|p| p.parse().ok())
 }
 
+/// The pane of a call that has no `pane`: the one that fterm checked for this process, else the one that
+/// `FTERM_PANE_ID` says (only a hint: a call there asks the user).
+pub fn default_pane(checked: Option<u64>, hint: Option<u64>) -> Option<u64> {
+    checked.or(hint)
+}
+
+/// Params of a hook (`agent_event`, `agent_session`, `agent_usage`) with the pane that fterm checked. `None` when
+/// fterm can not tell our pane: fterm takes such calls from nobody (it would say nothing back), so they do not go.
+pub fn with_checked_pane(mut params: Value, checked: Option<u64>) -> Option<Value> {
+    params["pane"] = json!(checked?);
+    Some(params)
+}
+
+/// The pane that fterm checked for this process at the last `hello` (`None`: fterm can not tell). One process talks
+/// to one window, so every connection gets the same answer.
+static CHECKED: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+
+pub fn checked_pane() -> Option<u64> {
+    *CHECKED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// The pane that a call without `pane` uses: our own pane, else the active pane.
 pub fn target_pane(client: &mut Client) -> Result<u64, String> {
-    if let Some(pane) = own_pane() {
+    if let Some(pane) = default_pane(checked_pane(), own_pane()) {
         return Ok(pane);
     }
     let list = client
@@ -152,6 +180,27 @@ pub fn run_and_wait_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_checked_pane_wins_over_the_env() {
+        assert_eq!(default_pane(Some(2), Some(5)), Some(2));
+        assert_eq!(
+            default_pane(None, Some(5)),
+            Some(5),
+            "the hint, when fterm can not tell"
+        );
+        assert_eq!(default_pane(None, None), None);
+    }
+
+    #[test]
+    fn hooks_say_the_checked_pane_or_nothing() {
+        let params = json!({ "pane": 5, "kind": "done" });
+        assert_eq!(
+            with_checked_pane(params.clone(), Some(2)),
+            Some(json!({ "pane": 2, "kind": "done" }))
+        );
+        assert_eq!(with_checked_pane(params, None), None);
+    }
 
     #[test]
     fn the_client_name() {
