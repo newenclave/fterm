@@ -53,6 +53,17 @@ impl App {
                 return;
             }
         };
+        // A plan of plan mode from a program that is not in a pane of this window (it could ask again and again),
+        // or a second one for a pane: the agent shows its own dialog.
+        let proven = self
+            .api_clients
+            .get(&request.client)
+            .and_then(|c| c.pane)
+            .is_some();
+        if asked.plan_mode && (!proven || self.plan_questions.iter().any(|q| q.near == near)) {
+            let _ = request.reply.send(Ok(crate::review::skipped()));
+            return;
+        }
         let now = Instant::now();
         let Some(review_deadline) = dialog_deadline(request.asked, asked.timeout, now) else {
             // It waited for the access question until its time was over: its client stopped waiting.

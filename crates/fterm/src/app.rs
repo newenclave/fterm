@@ -583,7 +583,9 @@ pub struct App {
     api_registration: Option<fterm_api::discovery::Registration>,
     api_clients: HashMap<fterm_api::server::ClientId, api_calls::ApiClient>,
     /// Client names that the user allowed "always" (in this session).
-    api_always: std::collections::HashSet<String>,
+    api_always: crate::access::AlwaysList,
+    /// The "No" answers of the user: for a minute, no new question of the same pane.
+    api_refused: crate::access::Refusals,
     /// Access questions (one per client); the first one is on the screen.
     api_questions: std::collections::VecDeque<api_calls::ApiAsk>,
     /// `wait_for` calls that wait.
@@ -732,7 +734,8 @@ impl App {
             api_server: None,
             api_registration: None,
             api_clients: HashMap::new(),
-            api_always: std::collections::HashSet::new(),
+            api_always: Default::default(),
+            api_refused: Default::default(),
             api_questions: std::collections::VecDeque::new(),
             waits: Vec::new(),
             shots: Vec::new(),
@@ -5741,6 +5744,9 @@ impl ApplicationHandler<UserEvent> for App {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
         if let Some(at) = self.expire_dialogs(now) {
+            wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
+        }
+        if let Some(at) = self.expire_api_questions(now) {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
         if let Some(at) = self.expire_pictures(now) {

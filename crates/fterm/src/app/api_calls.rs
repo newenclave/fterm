@@ -43,6 +43,23 @@ impl Default for ApiClient {
 }
 
 impl ApiClient {
+    /// The key of an "Always" for this client: its checked pane and its program there.
+    pub fn always_key(&self) -> Option<crate::access::AlwaysKey> {
+        let program = self.program.as_ref()?;
+        Some(crate::access::AlwaysKey {
+            pane: self.pane?.0,
+            pid: program.pid,
+            start: program.start,
+        })
+    }
+
+    /// Who a "No" of the user counts for: the checked pane, or all clients with no pane.
+    pub fn bucket(&self) -> crate::access::Bucket {
+        self.pane.map_or(crate::access::Bucket::NoPane, |p| {
+            crate::access::Bucket::Pane(p.0)
+        })
+    }
+
     /// A `hello`: the first one gives the name, the hint, and the pane that the processes show. A later one may
     /// only add a pane that was not known (a mux pane whose shell came late); it never changes the pane or the
     /// name, and it keeps the answer of the user.
@@ -96,6 +113,10 @@ pub(super) struct ApiAsk {
     pub client: ClientId,
     pub requests: Vec<ApiRequest>,
 }
+
+/// The error of a call that the user said no to a moment ago (an agent should ask the user, not try again).
+const REFUSED: &str =
+    "the user said no to this pane a moment ago: ask the user before you try again";
 
 /// The answer to the access question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,15 +258,38 @@ impl App {
                 }
             }
         };
-        let name = client.map_or("client", |c| c.name.as_str());
+        let bucket = client.map_or(crate::access::Bucket::NoPane, ApiClient::bucket);
         check(&Check {
             own,
             remote,
             said: client.and_then(|c| c.said),
-            name,
-            always: &self.api_always,
+            always: self
+                .api_always
+                .allows(client.and_then(ApiClient::always_key)),
+            refused: self.api_refused.refused(bucket, Instant::now()),
             ask: self.config.config.api.ask,
+            may_ask: crate::access::may_ask(&request.method),
         })
+    }
+
+    /// Questions whose calls no longer wait (their clients gave up): they go. Gives when to look again.
+    pub(super) fn expire_api_questions(&mut self, now: Instant) -> Option<Instant> {
+        let before = self.api_questions.len();
+        self.api_questions.retain(|q| {
+            q.requests
+                .iter()
+                .any(|r| crate::api::still_waits(r.asked, &r.method, &r.params, now))
+        });
+        if self.api_questions.len() != before
+            && let Some(running) = &self.running
+        {
+            running.window.request_redraw();
+        }
+        self.api_questions
+            .iter()
+            .flat_map(|q| &q.requests)
+            .map(|r| r.asked + crate::api::timeout_for(&r.method, &r.params))
+            .min()
     }
 
     /// Keeps the request and asks the user (one question for each client).
@@ -287,13 +331,40 @@ impl App {
         let Some(ask) = self.api_questions.pop_front() else {
             return;
         };
-        if let Some(client) = self.api_clients.get_mut(&ask.client) {
-            client.said = Some(answer != AccessAnswer::Deny);
-            if answer == AccessAnswer::Always {
-                self.api_always.insert(client.name.clone());
-            }
-        }
         let now = Instant::now();
+        // A client with no `hello` gets a record too: its answer stays.
+        let record = self.api_clients.entry(ask.client).or_default();
+        record.said = Some(answer != AccessAnswer::Deny);
+        let (key, bucket) = (record.always_key(), record.bucket());
+        match answer {
+            AccessAnswer::Always => {
+                if let Some(key) = key {
+                    self.api_always.allow(key);
+                }
+            }
+            AccessAnswer::Deny => {
+                // For a minute no new question of that pane (or of the clients with no pane), and the questions
+                // of it that wait now are refused too.
+                self.api_refused.note(bucket, now);
+                let clients = &self.api_clients;
+                let (refused, waiting): (Vec<ApiAsk>, Vec<ApiAsk>) =
+                    std::mem::take(&mut self.api_questions)
+                        .into_iter()
+                        .partition(|q| {
+                            clients
+                                .get(&q.client)
+                                .map_or(crate::access::Bucket::NoPane, ApiClient::bucket)
+                                == bucket
+                        });
+                self.api_questions = waiting.into();
+                for q in refused {
+                    for r in q.requests {
+                        let _ = r.reply.send(Err(RpcError::new(RpcError::DENIED, REFUSED)));
+                    }
+                }
+            }
+            AccessAnswer::Allow => {}
+        }
         for request in ask.requests {
             // A call whose client stopped waiting while the question was open does not run now (the client may
             // have tried again, and text would be typed twice).
@@ -544,6 +615,8 @@ impl App {
 
     /// A pane closed: its inbox goes, and its waits get an error.
     pub(super) fn api_pane_closed(&mut self, pane: PaneId) {
+        // "Always" for programs of this pane ends with it.
+        self.api_always.forget_pane(pane.0);
         // An overlay with `wait`: its program ended, so the answer is its exit code.
         let exit = self
             .running

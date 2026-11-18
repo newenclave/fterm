@@ -15,18 +15,21 @@ pub enum Verdict {
 }
 
 /// What fterm knows to decide.
-pub struct Check<'a> {
-    /// The client's own pane, or a pane that it opened.
+pub struct Check {
+    /// The client's own pane (the one its processes show), or a pane that it opened.
     pub own: bool,
     /// The pane allows remote control.
     pub remote: bool,
-    /// What the user said for this client before (`None` = not asked yet).
+    /// What the user said for this connection before (`None` = not asked yet).
     pub said: Option<bool>,
-    /// The client name, and the names that the user allowed "always".
-    pub name: &'a str,
-    pub always: &'a HashSet<String>,
+    /// The user said "always" for the program of the client in its pane.
+    pub always: bool,
+    /// The user said no to a client of the same bucket (pane) less than a minute ago.
+    pub refused: bool,
     /// `api.ask` in the config.
     pub ask: bool,
+    /// The call may show a question (the hooks of an agent never do: they come many times a second).
+    pub may_ask: bool,
 }
 
 pub fn check(c: &Check) -> Verdict {
@@ -36,10 +39,79 @@ pub fn check(c: &Check) -> Verdict {
         Verdict::Deny("this pane does not allow remote control")
     } else if c.said == Some(false) {
         Verdict::Deny("the user said no to this client")
-    } else if c.said == Some(true) || c.always.contains(c.name) || !c.ask {
+    } else if c.said == Some(true) || c.always || !c.ask {
         Verdict::Allow
+    } else if c.refused {
+        Verdict::Deny(
+            "the user said no to this pane a moment ago: ask the user before you try again",
+        )
+    } else if !c.may_ask {
+        Verdict::Deny("not in a pane of this window: an agent hook from here is not taken")
     } else {
         Verdict::Ask
+    }
+}
+
+/// Calls that never show the question: the hooks of an agent. From a client that is not in a pane of this window
+/// they are refused with no question (a hook in tmux must not ask the user on every tool call).
+pub fn may_ask(method: &str) -> bool {
+    !matches!(method, "agent_event" | "agent_session" | "agent_usage")
+}
+
+/// The key of an "Always": the checked pane of the client and its program there (process id and start time). Not
+/// the name: a client picks its own name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AlwaysKey {
+    pub pane: u64,
+    pub pid: u32,
+    pub start: u64,
+}
+
+/// The "Always" answers of the user, until the pane or its program ends.
+#[derive(Debug, Default)]
+pub struct AlwaysList(HashSet<AlwaysKey>);
+
+impl AlwaysList {
+    pub fn allow(&mut self, key: AlwaysKey) {
+        self.0.insert(key);
+    }
+
+    pub fn allows(&self, key: Option<AlwaysKey>) -> bool {
+        key.is_some_and(|k| self.0.contains(&k))
+    }
+
+    /// The pane closed.
+    pub fn forget_pane(&mut self, pane: u64) {
+        self.0.retain(|k| k.pane != pane);
+    }
+}
+
+/// Who a "No" counts for: the checked pane of the client, or all clients with no pane (one bucket).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Bucket {
+    Pane(u64),
+    NoPane,
+}
+
+/// How long a "No" stops new questions of its bucket.
+pub const REFUSAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The "No" answers of the user: for a minute, new questions of the same bucket are refused with no box.
+#[derive(Debug, Default)]
+pub struct Refusals(std::collections::HashMap<Bucket, std::time::Instant>);
+
+impl Refusals {
+    pub fn note(&mut self, bucket: Bucket, now: std::time::Instant) {
+        // Old answers go: the list stays small.
+        self.0
+            .retain(|_, at| now.saturating_duration_since(*at) <= REFUSAL);
+        self.0.insert(bucket, now);
+    }
+
+    pub fn refused(&self, bucket: Bucket, now: std::time::Instant) -> bool {
+        self.0
+            .get(&bucket)
+            .is_some_and(|at| now.saturating_duration_since(*at) <= REFUSAL)
     }
 }
 
@@ -105,24 +177,24 @@ mod tests {
         assert!(!owns("get_text", false, false));
     }
 
-    fn base(always: &HashSet<String>) -> Check<'_> {
+    fn base() -> Check {
         Check {
             own: false,
             remote: true,
             said: None,
-            name: "claude",
-            always,
+            always: false,
+            refused: false,
             ask: true,
+            may_ask: true,
         }
     }
 
     #[test]
     fn own_panes_are_free() {
-        let none = HashSet::new();
         assert_eq!(
             check(&Check {
                 own: true,
-                ..base(&none)
+                ..base()
             }),
             Verdict::Allow
         );
@@ -131,7 +203,7 @@ mod tests {
             check(&Check {
                 own: true,
                 remote: false,
-                ..base(&none)
+                ..base()
             }),
             Verdict::Allow
         );
@@ -139,19 +211,18 @@ mod tests {
 
     #[test]
     fn other_panes_ask_once() {
-        let none = HashSet::new();
-        assert_eq!(check(&base(&none)), Verdict::Ask);
+        assert_eq!(check(&base()), Verdict::Ask);
         assert_eq!(
             check(&Check {
                 said: Some(true),
-                ..base(&none)
+                ..base()
             }),
             Verdict::Allow
         );
         assert!(matches!(
             check(&Check {
                 said: Some(false),
-                ..base(&none)
+                ..base()
             }),
             Verdict::Deny(_)
         ));
@@ -159,13 +230,17 @@ mod tests {
 
     #[test]
     fn always_and_the_config() {
-        let always: HashSet<String> = ["claude".to_owned()].into();
-        assert_eq!(check(&base(&always)), Verdict::Allow);
-        let none = HashSet::new();
+        assert_eq!(
+            check(&Check {
+                always: true,
+                ..base()
+            }),
+            Verdict::Allow
+        );
         assert_eq!(
             check(&Check {
                 ask: false,
-                ..base(&none)
+                ..base()
             }),
             Verdict::Allow
         );
@@ -173,14 +248,110 @@ mod tests {
 
     #[test]
     fn no_remote_control_wins() {
-        let always: HashSet<String> = ["claude".to_owned()].into();
         let c = Check {
             remote: false,
             said: Some(true),
+            always: true,
             ask: false,
-            ..base(&always)
+            ..base()
         };
         assert!(matches!(check(&c), Verdict::Deny(_)));
+    }
+
+    #[test]
+    fn a_recent_no_stops_the_question() {
+        assert!(matches!(
+            check(&Check {
+                refused: true,
+                ..base()
+            }),
+            Verdict::Deny(_)
+        ));
+        // A yes of this connection, an Always, or no questions at all still allow.
+        assert_eq!(
+            check(&Check {
+                refused: true,
+                said: Some(true),
+                ..base()
+            }),
+            Verdict::Allow
+        );
+        assert_eq!(
+            check(&Check {
+                refused: true,
+                always: true,
+                ..base()
+            }),
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn hooks_never_ask() {
+        assert!(!may_ask("agent_event") && !may_ask("agent_session") && !may_ask("agent_usage"));
+        assert!(may_ask("send_text") && may_ask("get_text"));
+        assert!(matches!(
+            check(&Check {
+                may_ask: false,
+                ..base()
+            }),
+            Verdict::Deny(_)
+        ));
+        assert_eq!(
+            check(&Check {
+                may_ask: false,
+                own: true,
+                ..base()
+            }),
+            Verdict::Allow,
+            "a hook in its own pane is fine"
+        );
+    }
+
+    #[test]
+    fn always_is_for_one_program_in_one_pane() {
+        let claude = AlwaysKey {
+            pane: 3,
+            pid: 70,
+            start: 500,
+        };
+        let mut always = AlwaysList::default();
+        always.allow(claude);
+        assert!(always.allows(Some(claude)));
+        assert!(
+            !always.allows(Some(AlwaysKey { pid: 71, ..claude })),
+            "another program in that pane"
+        );
+        assert!(
+            !always.allows(Some(AlwaysKey {
+                start: 501,
+                ..claude
+            })),
+            "a new process with that pid"
+        );
+        assert!(
+            !always.allows(Some(AlwaysKey { pane: 4, ..claude })),
+            "another pane"
+        );
+        assert!(!always.allows(None), "a client with no pane");
+        always.forget_pane(3);
+        assert!(!always.allows(Some(claude)), "the pane closed");
+    }
+
+    #[test]
+    fn a_no_counts_for_a_minute_in_its_bucket() {
+        let t = std::time::Instant::now();
+        let mut no = Refusals::default();
+        no.note(Bucket::Pane(3), t);
+        assert!(no.refused(Bucket::Pane(3), t + std::time::Duration::from_secs(59)));
+        assert!(!no.refused(
+            Bucket::Pane(3),
+            t + REFUSAL + std::time::Duration::from_millis(1)
+        ));
+        assert!(!no.refused(Bucket::Pane(4), t), "another pane");
+        assert!(!no.refused(Bucket::NoPane, t));
+        no.note(Bucket::NoPane, t);
+        assert!(no.refused(Bucket::NoPane, t), "all clients with no pane");
     }
 
     #[test]
