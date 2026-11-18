@@ -91,6 +91,8 @@ impl AlwaysList {
 pub enum Bucket {
     Pane(u64),
     NoPane,
+    /// The event hooks of the config.
+    Hooks,
 }
 
 /// How long a "No" stops new questions of its bucket.
@@ -307,10 +309,30 @@ impl AnswerMode {
 
 /// Who asks, for the question box.
 pub struct Asker<'a> {
-    /// The name that the client gave itself.
+    /// The name that the client gave itself (for a hook: the name of the hook).
     pub name: &'a str,
-    /// The tab of its pane and its program, when fterm checked them (then "Always" is offered).
-    pub place: Option<(usize, &'a str)>,
+    pub place: Place<'a>,
+}
+
+/// Where the asker runs, as fterm checked it.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum Place<'a> {
+    /// In a pane: its tab, and the program there. Only then "Always" is offered.
+    Pane { tab: usize, program: &'a str },
+    /// Not in a pane of this window, or not known.
+    Outside,
+    /// An event hook of the config (`fterm.lua`).
+    Config,
+}
+
+/// Calls of a Lua event hook that need the access question: they type into a pane, start programs, or run actions.
+/// The others (a toast, a tab color, the clipboard) do not.
+pub fn hook_call_gated(call: &fterm_config::load::ApiCall) -> bool {
+    use fterm_config::load::ApiCall;
+    !matches!(
+        call,
+        ApiCall::Notify { .. } | ApiCall::SetTabColor { .. } | ApiCall::Copy(_)
+    )
 }
 
 /// The lines of a question box, each with its look.
@@ -326,10 +348,13 @@ pub fn question_box(
     use fterm_render::overlay::QuestionLook as L;
     // Names come from outside (the client, the process): one short line.
     let short = |text: &str| fterm_ui::text::fit(&fterm_ui::text::one_line(text), 32);
-    let always_ok = asker.place.is_some();
+    let always_ok = matches!(asker.place, Place::Pane { .. });
     let fact = match asker.place {
-        Some((tab, program)) => tr!("box.access_where", tab = tab, program = short(program)),
-        None => tr!("box.access_outside"),
+        Place::Pane { tab, program } => {
+            tr!("box.access_where", tab = tab, program = short(program))
+        }
+        Place::Outside => tr!("box.access_outside"),
+        Place::Config => tr!("box.access_config"),
     };
     let keys = if always_chosen {
         tr!("box.access_confirm")
@@ -340,8 +365,12 @@ pub fn question_box(
     } else {
         tr!("box.access_keys_no_always")
     };
+    let asks = match asker.place {
+        Place::Config => tr!("box.access_hook", hook = short(asker.name)),
+        _ => tr!("box.access_asks", name = short(asker.name)),
+    };
     let lines = vec![
-        (tr!("box.access_asks", name = short(asker.name)), L::Text),
+        (asks, L::Text),
         (fact, L::Fact),
         (tr!("box.access_why"), L::Text),
         (keys, L::Dim),
@@ -677,7 +706,10 @@ mod tests {
         use fterm_render::overlay::QuestionLook as L;
         let checked = Asker {
             name: "claude",
-            place: Some((2, "claude.exe")),
+            place: Place::Pane {
+                tab: 2,
+                program: "claude.exe",
+            },
         };
         let (lines, buttons) = question_box(&checked, false, false);
         assert!(
@@ -707,7 +739,7 @@ mod tests {
 
         let outside = Asker {
             name: "claude",
-            place: None,
+            place: Place::Outside,
         };
         let (lines, buttons) = question_box(&outside, true, false);
         assert!(lines[1].0.contains("not in a pane"), "{lines:?}");
@@ -718,13 +750,67 @@ mod tests {
     }
 
     #[test]
+    fn a_hook_of_the_config_says_so() {
+        let hook = Asker {
+            name: "on_agent_event",
+            place: Place::Config,
+        };
+        let (lines, buttons) = question_box(&hook, false, false);
+        assert!(lines[0].0.contains("on_agent_event"), "{lines:?}");
+        assert!(
+            !lines[0].0.contains("calls itself"),
+            "fterm knows what it is: {lines:?}"
+        );
+        assert!(lines[1].0.contains("fterm.lua"), "{lines:?}");
+        assert_eq!(lines[1].1, fterm_render::overlay::QuestionLook::Fact);
+        let which: Vec<Button> = buttons.iter().map(|(b, _)| *b).collect();
+        assert_eq!(which, [Button::Allow, Button::No], "no Always for a hook");
+    }
+
+    #[test]
+    fn which_calls_of_a_hook_ask() {
+        use fterm_config::keys::{BuiltinAction, SpawnWhere};
+        use fterm_config::load::ApiCall;
+        for call in [
+            ApiCall::SendText("y\r".into()),
+            ApiCall::Spawn {
+                profile: None,
+                place: SpawnWhere::Tab,
+            },
+            ApiCall::Run {
+                steps: vec![vec!["cmd".into()]],
+                overlay: false,
+            },
+            ApiCall::Action(BuiltinAction::Paste),
+            ApiCall::CopyMode(fterm_config::copy_keys::CopyCommand::Exit),
+            ApiCall::Open("file:///C:/x.exe".into()),
+        ] {
+            assert!(hook_call_gated(&call), "{call:?}");
+        }
+        for call in [
+            ApiCall::Notify {
+                title: "t".into(),
+                body: "b".into(),
+                level: "info".into(),
+            },
+            ApiCall::SetTabColor {
+                pane: None,
+                color: None,
+            },
+            ApiCall::Copy("text".into()),
+        ] {
+            assert!(!hook_call_gated(&call), "{call:?}");
+        }
+    }
+
+    #[test]
     fn a_program_name_is_one_short_line() {
         let asker = Asker {
             name: "x",
-            place: Some((
-                1,
-                "evil\nfterm checked: it is fine.exe and a very long name after that",
-            )),
+            place: Place::Pane {
+                tab: 1,
+                program: "evil\nfterm checked: it is fine.exe and a very long name after that",
+            },
         };
         let (lines, _) = question_box(&asker, false, false);
         assert!(!lines[1].0.contains('\n'), "{lines:?}");

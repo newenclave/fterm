@@ -27,6 +27,20 @@ pub(super) struct ApiClient {
     pub said: Option<bool>,
     /// A `hello` came: the name and the pane stay (a pane may come later, but never change).
     pub hello: bool,
+    /// An event hook of the config, not a program.
+    pub hook: bool,
+}
+
+/// The event hooks of the config whose calls can act on panes.
+const HOOKS: [&str; 2] = ["on_agent", "on_agent_event"];
+
+/// How long the question of a hook stays (no call waits for it).
+const HOOK_QUESTION: Duration = Duration::from_secs(120);
+
+/// The client id of an event hook of the config: far above the ids of the server, which count from 0.
+pub(super) fn hook_client(hook: &str) -> ClientId {
+    let i = HOOKS.iter().position(|h| *h == hook).unwrap_or(HOOKS.len());
+    u64::MAX - i as u64
 }
 
 impl Default for ApiClient {
@@ -38,11 +52,22 @@ impl Default for ApiClient {
             program: None,
             said: None,
             hello: false,
+            hook: false,
         }
     }
 }
 
 impl ApiClient {
+    /// The record of an event hook of the config.
+    pub fn for_hook(hook: &str) -> Self {
+        Self {
+            name: hook.to_owned(),
+            hello: true,
+            hook: true,
+            ..Self::default()
+        }
+    }
+
     /// The key of an "Always" for this client: its checked pane and its program there.
     pub fn always_key(&self) -> Option<crate::access::AlwaysKey> {
         let program = self.program.as_ref()?;
@@ -55,6 +80,9 @@ impl ApiClient {
 
     /// Who a "No" of the user counts for: the checked pane, or all clients with no pane.
     pub fn bucket(&self) -> crate::access::Bucket {
+        if self.hook {
+            return crate::access::Bucket::Hooks;
+        }
         self.pane.map_or(crate::access::Bucket::NoPane, |p| {
             crate::access::Bucket::Pane(p.0)
         })
@@ -114,6 +142,8 @@ pub(super) struct ApiAsk {
     pub id: u64,
     pub client: ClientId,
     pub requests: Vec<ApiRequest>,
+    /// The question of an event hook: no call waits for it (the answer counts from the next event); it goes then.
+    pub until: Option<Instant>,
 }
 
 /// The error of a call that the user said no to a moment ago (an agent should ask the user, not try again).
@@ -337,20 +367,107 @@ impl App {
     pub(super) fn expire_api_questions(&mut self, now: Instant) -> Option<Instant> {
         let before = self.api_questions.len();
         self.api_questions.retain(|q| {
-            q.requests
-                .iter()
-                .any(|r| crate::api::still_waits(r.asked, &r.method, &r.params, now))
+            q.until.is_some_and(|until| now < until)
+                || q.requests
+                    .iter()
+                    .any(|r| crate::api::still_waits(r.asked, &r.method, &r.params, now))
         });
         if self.api_questions.len() != before
             && let Some(running) = &self.running
         {
             running.window.request_redraw();
         }
-        self.api_questions
+        let calls = self
+            .api_questions
             .iter()
             .flat_map(|q| &q.requests)
-            .map(|r| r.asked + crate::api::timeout_for(&r.method, &r.params))
-            .min()
+            .map(|r| r.asked + crate::api::timeout_for(&r.method, &r.params));
+        let hooks = self.api_questions.iter().filter_map(|q| q.until);
+        calls.chain(hooks).min()
+    }
+
+    /// Calls of a Lua event hook (`on_agent`, `on_agent_event`). It runs on events that programs make (an agent, or
+    /// any program that prints an OSC), not on a key of the user: calls that act on panes need a yes, as an API
+    /// client with no pane. Before the yes they do not run (later, the pane in front could be another one); the yes
+    /// counts for the next events, until the config changes. A toast, a tab color, or the clipboard always run.
+    pub(super) fn run_hook_calls(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        hook: &str,
+        calls: Vec<ApiCall>,
+    ) {
+        let gated = calls.iter().any(crate::access::hook_call_gated);
+        let verdict = if gated {
+            self.hook_access(hook, &calls)
+        } else {
+            Verdict::Allow
+        };
+        match verdict {
+            Verdict::Allow => {}
+            Verdict::Ask => self.ask_hook(hook),
+            Verdict::Deny(why) => tracing::info!(hook, why, "calls of a hook do not run"),
+        }
+        for call in calls {
+            if verdict == Verdict::Allow || !crate::access::hook_call_gated(&call) {
+                self.run_api_call(event_loop, call);
+            }
+        }
+    }
+
+    fn hook_access(&self, hook: &str, calls: &[ApiCall]) -> Verdict {
+        let record = self.api_clients.get(&hook_client(hook));
+        // Typing goes into the pane in front: a pane with no remote control takes none.
+        let types = calls
+            .iter()
+            .any(|c| matches!(c, ApiCall::SendText(_) | ApiCall::CopyMode(_)));
+        let remote = !types
+            || self.running.as_ref().is_none_or(|r| {
+                r.mux
+                    .active_pane()
+                    .and_then(|pane| r.panes.get(&pane))
+                    .is_none_or(|p| p.remote)
+            });
+        check(&Check {
+            own: false,
+            remote,
+            said: record.and_then(|c| c.said),
+            always: false,
+            refused: self
+                .api_refused
+                .refused(crate::access::Bucket::Hooks, Instant::now()),
+            ask: self.config.config.api.ask,
+            may_ask: true,
+        })
+    }
+
+    /// The question for a hook (one at a time).
+    fn ask_hook(&mut self, hook: &str) {
+        let client = hook_client(hook);
+        self.api_clients
+            .entry(client)
+            .or_insert_with(|| ApiClient::for_hook(hook));
+        if self.api_questions.iter().any(|q| q.client == client) {
+            return;
+        }
+        self.next_question += 1;
+        self.api_questions.push_back(ApiAsk {
+            id: self.next_question,
+            client,
+            requests: Vec::new(),
+            until: Some(Instant::now() + HOOK_QUESTION),
+        });
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+            running
+                .window
+                .request_user_attention(Some(winit::window::UserAttentionType::Informational));
+        }
+    }
+
+    /// The config changed: what the user said for its hooks counts no more (it is new code).
+    pub(super) fn forget_hooks(&mut self) {
+        self.api_clients.retain(|_, c| !c.hook);
+        self.api_questions.retain(|q| q.until.is_none());
     }
 
     /// Keeps the request and asks the user (one question for each client).
@@ -368,6 +485,7 @@ impl App {
             id: self.next_question,
             client: request.client,
             requests: vec![request],
+            until: None,
         });
         if let Some(running) = &self.running {
             running.window.request_redraw();
@@ -384,11 +502,22 @@ impl App {
         let client = self.api_clients.get(&ask.client);
         let name = client.map_or("client", |c| c.name.as_str());
         // What fterm checked: the tab of the client's pane and its program.
-        let place = client.and_then(|c| {
-            let program = c.program.as_ref()?;
-            let (tab, _) = self.running.as_ref()?.pane_tab_number(c.pane?)?;
-            Some((tab, program.name.as_str()))
-        });
+        let hook = client.is_some_and(|c| c.hook);
+        let place = client
+            .filter(|_| !hook)
+            .and_then(|c| {
+                let program = c.program.as_ref()?;
+                let (tab, _) = self.running.as_ref()?.pane_tab_number(c.pane?)?;
+                Some(crate::access::Place::Pane {
+                    tab,
+                    program: program.name.as_str(),
+                })
+            })
+            .unwrap_or(if hook {
+                crate::access::Place::Config
+            } else {
+                crate::access::Place::Outside
+            });
         let answering = self.answer_mode.active(now);
         let (lines, buttons) = crate::access::question_box(
             &crate::access::Asker { name, place },
@@ -401,7 +530,7 @@ impl App {
             key: hasher.finish(),
             lines,
             buttons,
-            always_ok: place.is_some(),
+            always_ok: matches!(place, crate::access::Place::Pane { .. }),
             answering,
         })
     }
@@ -1868,6 +1997,24 @@ mod tests {
         let keys = fterm_config::keys::Keymap::with_defaults();
         let chord = fterm_config::keys::KeyChord::parse("ctrl+shift+enter").unwrap();
         assert_eq!(keys.get(&chord), None);
+    }
+
+    #[test]
+    fn a_hook_is_a_client_of_its_own() {
+        let (a, b) = (hook_client("on_agent"), hook_client("on_agent_event"));
+        assert_ne!(a, b);
+        assert!(
+            a > u64::MAX / 2 && b > u64::MAX / 2,
+            "far from the ids of the server"
+        );
+        let c = ApiClient::for_hook("on_agent");
+        assert_eq!(c.name, "on_agent");
+        assert_eq!(
+            c.bucket(),
+            crate::access::Bucket::Hooks,
+            "a No for a hook is not a No for a program"
+        );
+        assert_eq!(c.always_key(), None, "no Always for a hook");
     }
 
     #[test]

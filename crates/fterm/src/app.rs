@@ -1017,9 +1017,7 @@ impl App {
                 }
             }
         };
-        for call in out.calls {
-            self.run_api_call(event_loop, call);
-        }
+        self.run_hook_calls(event_loop, "on_agent", out.calls);
         if out.notify
             && !seen
             && let Some(kind) = kind
@@ -1933,6 +1931,7 @@ impl App {
                 tracing::info!("config reloaded");
                 let gpu_changed = config.config.gpu != self.config.config.gpu;
                 self.config = config;
+                self.forget_hooks();
                 self.profiles = profiles_for(&self.config);
                 self.apply_notification_config();
                 self.theme_override = None;

@@ -55,11 +55,7 @@ impl App {
                 AgentEvent::Usage(_) => input.kind = "usage".into(),
             }
             match self.config.on_agent_event(&input) {
-                Ok(calls) => {
-                    for call in calls {
-                        self.run_api_call(event_loop, call);
-                    }
-                }
+                Ok(calls) => self.run_hook_calls(event_loop, "on_agent_event", calls),
                 Err(err) => tracing::warn!("on_agent_event: {err}"),
             }
         }
