@@ -108,6 +108,10 @@ impl Refusals {
         self.0
             .retain(|_, at| now.saturating_duration_since(*at) <= REFUSAL);
         self.0.insert(bucket, now);
+        // A program that got a No can start a helper that fterm can not find in a pane: that one waits too.
+        if matches!(bucket, Bucket::Pane(_)) {
+            self.0.insert(Bucket::NoPane, now);
+        }
     }
 
     pub fn refused(&self, bucket: Bucket, now: std::time::Instant) -> bool {
@@ -177,8 +181,10 @@ pub enum AnswerKey {
 pub struct AnswerMode {
     /// The question in front and when it came (clicks count a moment later).
     front: Option<(u64, std::time::Instant)>,
-    /// Answer mode is on, since (the last key).
+    /// Answer mode is on, since (the chord, or the choice of "Always").
     on: Option<std::time::Instant>,
+    /// When the chord started it (keys right after it answer nothing).
+    started: Option<std::time::Instant>,
     /// "Always" was chosen: Enter takes it.
     always: bool,
     /// A button that the mouse pressed.
@@ -189,6 +195,8 @@ pub struct AnswerMode {
 pub const ANSWER_TIME: std::time::Duration = std::time::Duration::from_secs(5);
 /// A click on a button counts only this long after the box came or changed.
 pub const CLICK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+/// Keys this soon after the chord answer nothing (the user typed on, maybe by habit): answer mode ends.
+pub const ANSWER_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 
 impl AnswerMode {
     /// The question in front is `question` now (`None`: no question). Another question ends answer mode.
@@ -206,6 +214,7 @@ impl AnswerMode {
             return false;
         }
         self.on = Some(now);
+        self.started = Some(now);
         self.always = false;
         true
     }
@@ -220,6 +229,15 @@ impl AnswerMode {
     /// "Always" was chosen and waits for Enter.
     pub fn always_chosen(&self) -> bool {
         self.always
+    }
+
+    /// The window came back (it got the focus): the click that brings it back must not answer, so the wait for
+    /// clicks starts again.
+    pub fn restart_wait(&mut self, now: std::time::Instant) {
+        if let Some((id, _)) = self.front {
+            self.front = Some((id, now));
+        }
+        self.pressed = None;
     }
 
     pub fn end(&mut self) {
@@ -237,6 +255,15 @@ impl AnswerMode {
         if !self.active(now) {
             return None;
         }
+        let early = self
+            .started
+            .is_some_and(|at| now.saturating_duration_since(at) < ANSWER_DELAY);
+        let key = match key {
+            AnswerKey::Allow | AnswerKey::Always | AnswerKey::No | AnswerKey::Confirm if early => {
+                AnswerKey::Other
+            }
+            key => key,
+        };
         match key {
             AnswerKey::Ignore => None,
             AnswerKey::Allow => {
@@ -296,11 +323,6 @@ impl AnswerMode {
         })
     }
 
-    /// A button was pressed and waits for the mouse to go up.
-    pub fn pressed(&self) -> bool {
-        self.pressed.is_some()
-    }
-
     /// When answer mode ends by itself (to draw the box again then).
     pub fn ends_at(&self) -> Option<std::time::Instant> {
         self.on.map(|at| at + ANSWER_TIME)
@@ -317,8 +339,13 @@ pub struct Asker<'a> {
 /// Where the asker runs, as fterm checked it.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum Place<'a> {
-    /// In a pane: its tab, and the program there. Only then "Always" is offered.
-    Pane { tab: usize, program: &'a str },
+    /// In a pane: its tab (`None`: a pane that is in no tab, as the scratch shell), the workspace of that tab when
+    /// there are more, and the program there. Only then "Always" is offered.
+    Pane {
+        tab: Option<usize>,
+        workspace: Option<&'a str>,
+        program: &'a str,
+    },
     /// Not in a pane of this window, or not known.
     Outside,
     /// An event hook of the config (`fterm.lua`).
@@ -347,12 +374,27 @@ pub fn question_box(
 ) -> (QuestionLines, Vec<(Button, String)>) {
     use fterm_render::overlay::QuestionLook as L;
     // Names come from outside (the client, the process): one short line.
-    let short = |text: &str| fterm_ui::text::fit(&fterm_ui::text::one_line(text), 32);
+    let short = |text: &str| fterm_ui::text::safe_name(text, 32);
     let always_ok = matches!(asker.place, Place::Pane { .. });
     let fact = match asker.place {
-        Place::Pane { tab, program } => {
-            tr!("box.access_where", tab = tab, program = short(program))
-        }
+        Place::Pane {
+            tab: Some(tab),
+            workspace: None,
+            program,
+        } => tr!("box.access_where", tab = tab, program = short(program)),
+        Place::Pane {
+            tab: Some(tab),
+            workspace: Some(workspace),
+            program,
+        } => tr!(
+            "box.access_where_ws",
+            tab = tab,
+            workspace = short(workspace),
+            program = short(program)
+        ),
+        Place::Pane {
+            tab: None, program, ..
+        } => tr!("box.access_where_float", program = short(program)),
         Place::Outside => tr!("box.access_outside"),
         Place::Config => tr!("box.access_config"),
     };
@@ -593,9 +635,15 @@ mod tests {
             t + REFUSAL + std::time::Duration::from_millis(1)
         ));
         assert!(!no.refused(Bucket::Pane(4), t), "another pane");
-        assert!(!no.refused(Bucket::NoPane, t));
+        assert!(
+            no.refused(Bucket::NoPane, t),
+            "a helper that fterm can not find in a pane does not ask again"
+        );
+        assert!(!no.refused(Bucket::Hooks, t));
+        let mut no = Refusals::default();
         no.note(Bucket::NoPane, t);
         assert!(no.refused(Bucket::NoPane, t), "all clients with no pane");
+        assert!(!no.refused(Bucket::Pane(3), t));
     }
 
     fn secs(n: u64) -> std::time::Duration {
@@ -611,14 +659,15 @@ mod tests {
         assert!(!m.active(t), "a question alone takes no keys");
         assert_eq!(m.key(AnswerKey::Allow, true, t), None, "not in answer mode");
         assert!(m.start(t) && m.active(t));
+        let k = t + ANSWER_DELAY;
         assert_eq!(
-            m.key(AnswerKey::Ignore, true, t),
+            m.key(AnswerKey::Ignore, true, k),
             None,
             "Shift alone, or a repeat"
         );
-        assert!(m.active(t));
-        assert_eq!(m.key(AnswerKey::Allow, true, t), Some(Answer::Allow));
-        assert!(!m.active(t), "one answer, then it ends");
+        assert!(m.active(k));
+        assert_eq!(m.key(AnswerKey::Allow, true, k), Some(Answer::Allow));
+        assert!(!m.active(k), "one answer, then it ends");
     }
 
     #[test]
@@ -627,22 +676,60 @@ mod tests {
         let mut m = AnswerMode::default();
         m.front(Some(1), t);
         m.start(t);
-        assert_eq!(m.key(AnswerKey::Always, true, t), None);
-        assert!(m.always_chosen() && m.active(t));
-        assert_eq!(m.key(AnswerKey::Confirm, true, t), Some(Answer::Always));
+        let k = t + ANSWER_DELAY;
+        assert_eq!(m.key(AnswerKey::Always, true, k), None);
+        assert!(m.always_chosen() && m.active(k));
+        assert_eq!(m.key(AnswerKey::Confirm, true, k), Some(Answer::Always));
         m.start(t);
         assert_eq!(
-            m.key(AnswerKey::Always, false, t),
+            m.key(AnswerKey::Always, false, k),
             None,
             "no checked pane: no Always"
         );
         assert!(!m.always_chosen());
         assert_eq!(
-            m.key(AnswerKey::Confirm, false, t),
+            m.key(AnswerKey::Confirm, false, k),
             None,
             "Enter alone answers nothing"
         );
-        assert_eq!(m.key(AnswerKey::No, false, t), Some(Answer::No));
+        assert_eq!(m.key(AnswerKey::No, false, k), Some(Answer::No));
+    }
+
+    #[test]
+    fn a_key_right_after_the_chord_answers_nothing() {
+        // Ctrl+Shift+Enter is a new line in some programs: a user may type on after it.
+        let t = std::time::Instant::now();
+        let mut m = AnswerMode::default();
+        m.front(Some(1), t);
+        m.start(t);
+        let soon = t + std::time::Duration::from_millis(100);
+        assert_eq!(m.key(AnswerKey::Allow, true, soon), None);
+        assert!(!m.active(soon), "typed on: answer mode ends");
+        m.start(t + secs(1));
+        assert_eq!(
+            m.key(AnswerKey::Allow, true, t + secs(1) + ANSWER_DELAY),
+            Some(Answer::Allow)
+        );
+    }
+
+    #[test]
+    fn the_click_wait_starts_again_when_the_window_comes_back() {
+        let t = std::time::Instant::now();
+        let mut m = AnswerMode::default();
+        m.front(Some(1), t);
+        let back = t + secs(30);
+        m.restart_wait(back);
+        m.press(
+            Some(Button::Allow),
+            back + std::time::Duration::from_millis(200),
+        );
+        assert_eq!(
+            m.release(Some(Button::Allow)),
+            None,
+            "the click that brings the window back"
+        );
+        m.press(Some(Button::Allow), back + secs(2));
+        assert_eq!(m.release(Some(Button::Allow)), Some(Answer::Allow));
     }
 
     #[test]
@@ -707,7 +794,8 @@ mod tests {
         let checked = Asker {
             name: "claude",
             place: Place::Pane {
-                tab: 2,
+                tab: Some(2),
+                workspace: None,
                 program: "claude.exe",
             },
         };
@@ -804,11 +892,37 @@ mod tests {
     }
 
     #[test]
+    fn the_fact_says_the_workspace_and_a_pane_in_no_tab() {
+        let fact = |place| {
+            question_box(&Asker { name: "x", place }, false, false).0[1]
+                .0
+                .clone()
+        };
+        let other = fact(Place::Pane {
+            tab: Some(2),
+            workspace: Some("work"),
+            program: "claude.exe",
+        });
+        assert!(other.contains("tab 2") && other.contains("work"), "{other}");
+        let scratch = fact(Place::Pane {
+            tab: None,
+            workspace: None,
+            program: "claude.exe",
+        });
+        assert!(
+            scratch.contains("a pane of this window") && scratch.contains("claude.exe"),
+            "{scratch}"
+        );
+        assert!(!scratch.contains("tab 0"), "{scratch}");
+    }
+
+    #[test]
     fn a_program_name_is_one_short_line() {
         let asker = Asker {
             name: "x",
             place: Place::Pane {
-                tab: 1,
+                tab: Some(1),
+                workspace: None,
                 program: "evil\nfterm checked: it is fine.exe and a very long name after that",
             },
         };

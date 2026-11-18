@@ -41,8 +41,19 @@ struct Pane {
     meta: Arc<Mutex<Meta>>,
     /// The window that shows the pane now.
     client: Arc<Mutex<Option<Client>>>,
-    /// Its shell: process id and start time (a window checks API clients by it).
-    shell: Option<(u32, u64)>,
+    /// Its shell: process id and start time (a window checks API clients by it). Read the first time that it is
+    /// needed: not between the start of the program and the window of the pane, where output has no place to go.
+    shell: std::sync::OnceLock<Option<(u32, u64)>>,
+}
+
+impl Pane {
+    fn shell(&self) -> Option<(u32, u64)> {
+        *self.shell.get_or_init(|| {
+            let pid = self.session.pid()?;
+            let start = fterm_term::process::Processes::new().fresh(pid)?.start;
+            (start != 0).then_some((pid, start))
+        })
+    }
 }
 
 #[derive(Default)]
@@ -174,10 +185,12 @@ impl Server {
             Request::Spawn { spawn, size, .. } => match self.spawn(spawn, size) {
                 Ok((pane, program)) => {
                     // The window that made it shows it.
-                    let shell = self.pane(pane).and_then(|p| {
+                    let shown = self.pane(pane);
+                    if let Some(p) = &shown {
                         *p.client.lock().unwrap() = Some(client.clone());
-                        p.shell
-                    });
+                    }
+                    // After the window is set: the program may print at once.
+                    let shell = shown.and_then(|p| p.shell());
                     Reply {
                         pane: Some(pane),
                         program: Some(program),
@@ -194,6 +207,8 @@ impl Server {
                 };
                 // With the Term locked: the snapshot, the answer, and the new window, so every byte of output is
                 // in the snapshot or comes after it.
+                // Not with the Term locked: a look at the processes takes a moment.
+                let shell = p.shell();
                 p.session.with_term_mut(|term, _| {
                     let snapshot = fterm_term::snapshot::snapshot(term);
                     let size = p.session.grid_size();
@@ -207,8 +222,8 @@ impl Server {
                         program: Some(p.program.clone()),
                         meta: Some(p.meta.lock().unwrap().clone()),
                         size: Some(size),
-                        shell_pid: p.shell.map(|s| s.0),
-                        shell_start: p.shell.map(|s| s.1),
+                        shell_pid: shell.map(|s| s.0),
+                        shell_start: shell.map(|s| s.1),
                         ..Reply::ok(id)
                     }));
                     *slot = Some(client.clone());
@@ -344,10 +359,7 @@ impl Server {
         self.inner.panes.lock().unwrap().insert(
             id,
             Arc::new(Pane {
-                shell: session.pid().and_then(|pid| {
-                    let start = fterm_term::process::Processes::new().fresh(pid)?.start;
-                    (start != 0).then_some((pid, start))
-                }),
+                shell: std::sync::OnceLock::new(),
                 session,
                 program: program.clone(),
                 meta,

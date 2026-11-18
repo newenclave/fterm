@@ -89,8 +89,6 @@ pub struct Bridge {
     proxy: Mutex<EventLoopProxy<UserEvent>>,
     /// The process of each client (id, start time), as it connected.
     peers: Mutex<std::collections::HashMap<ClientId, (u32, u64)>>,
-    /// The process table for the walks (a snapshot at most a second old).
-    processes: Mutex<fterm_term::process::Processes>,
 }
 
 /// The longest chain of parents that a walk looks at.
@@ -101,7 +99,6 @@ impl Bridge {
         Self {
             proxy: Mutex::new(proxy),
             peers: Mutex::default(),
-            processes: Mutex::default(),
         }
     }
 
@@ -109,7 +106,9 @@ impl Bridge {
     fn chain(&self, client: ClientId) -> Option<Vec<fterm_term::process::Link>> {
         let (pid, start) = *self.peers.lock().ok()?.get(&client)?;
         let started = std::time::Instant::now();
-        let chain = self.processes.lock().ok()?.chain(pid, start, MAX_CHAIN);
+        // A new process table for each walk: a table that lives on would keep a handle (Windows) or a file
+        // (Linux) of every process that it saw, and walks of clients would wait for each other.
+        let chain = fterm_term::process::Processes::new().chain(pid, start, MAX_CHAIN);
         tracing::debug!(
             client,
             pid,
@@ -123,9 +122,7 @@ impl Bridge {
 
 /// The name that a client gives in `hello`, for the UI: one line, at most 32 cells, "client" when it gives none.
 pub fn client_name(name: Option<&str>) -> String {
-    let line = fterm_ui::text::one_line(name.unwrap_or_default());
-    let name = fterm_ui::text::fit(&line, 32);
-    match name.trim_end() {
+    match fterm_ui::text::safe_name(name.unwrap_or_default(), 32).trim_end() {
         "" => "client".to_owned(),
         name => name.to_owned(),
     }

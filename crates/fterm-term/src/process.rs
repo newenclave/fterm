@@ -31,7 +31,7 @@ pub fn running_children(pid: u32) -> Vec<String> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProcInfo {
     pub parent: Option<u32>,
-    /// When it started, in seconds since 1970 (0 = not known).
+    /// When it started (0 = not known): only compared with other start times of the same machine (see `start_of`).
     pub start: u64,
     /// The file name of its program (`claude.exe`, `bash`).
     pub name: String,
@@ -51,8 +51,11 @@ pub struct Link {
 /// another process now, and the chain is empty). The walk stops (fail closed):
 /// - at a process that is not known, or whose start time is not known;
 /// - at a parent that started after its child (a reused pid; a fresh look is tried first);
-/// - before a process named `fterm` (another window or a mux server: its panes are not ours), and before an
-///   `ftermctl` above the direct parent of `pid` (`ftermctl mux serve` runs panes; `ftermctl mcp` may start the peer);
+/// - before a process named `fterm` (another window: its panes are not ours);
+/// - before `wsl.exe` or `wslhost.exe`: a program in WSL picks which `wsl.exe` starts a Windows program
+///   (`WSL_INTEROP`), also the one of another pane;
+/// - after an `ftermctl` above the direct parent of `pid` (`ftermctl mux serve` runs panes; `ftermctl steps` is the
+///   program of a pane; `ftermctl mcp` may start the peer);
 /// - after `max` processes.
 pub fn chain_in(
     pid: u32,
@@ -88,9 +91,13 @@ pub fn chain_in(
         let Some(p) = found else {
             break;
         };
-        if is_program(&p.name, "fterm") || (is_program(&p.name, "ftermctl") && chain.len() >= 2) {
+        if ["fterm", "wsl", "wslhost"]
+            .iter()
+            .any(|program| is_program(&p.name, program))
+        {
             break;
         }
+        let last = is_program(&p.name, "ftermctl") && chain.len() >= 2;
         next = p.parent;
         child_start = p.start;
         chain.push(Link {
@@ -98,6 +105,9 @@ pub fn chain_in(
             start: p.start,
             name: p.name,
         });
+        if last {
+            break;
+        }
     }
     chain
 }
@@ -140,7 +150,7 @@ impl Processes {
         let process = self.system.process(sysinfo::Pid::from_u32(pid))?;
         Some(ProcInfo {
             parent: process.parent().map(|p| p.as_u32()),
-            start: process.start_time(),
+            start: start_of(pid, process),
             name: process.name().to_string_lossy().into_owned(),
         })
     }
@@ -163,6 +173,32 @@ impl Processes {
         chain_in(pid, peer_start, max, |p, fresh| {
             if fresh { self.fresh(p) } else { self.cached(p) }
         })
+    }
+}
+
+/// The start time of a process in a line of `/proc/<pid>/stat` (field 22: clock ticks since boot). It does not move
+/// when the clock of the system is set, as a time in seconds since 1970 does on Linux.
+pub fn stat_start_ticks(stat: &str) -> Option<u64> {
+    // The name is in parens and may have spaces and parens: the fields start after the last ')', with field 3.
+    let rest = &stat[stat.rfind(')')? + 1..];
+    rest.split_whitespace().nth(22 - 3)?.parse().ok()
+}
+
+/// The start time of a process for the walks: clock ticks since boot on Linux (read from `/proc`), seconds since
+/// 1970 elsewhere (the creation time that Windows and macOS keep). 0 = not known.
+fn start_of(pid: u32, process: &sysinfo::Process) -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = process;
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|stat| stat_start_ticks(&stat))
+            .unwrap_or(0)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        process.start_time()
     }
 }
 
@@ -420,15 +456,16 @@ mod tests {
     }
 
     #[test]
-    fn an_ftermctl_above_the_parent_stops_the_chain() {
-        // `ftermctl mux serve` runs panes too.
+    fn an_ftermctl_above_the_parent_is_the_last_link() {
+        // `ftermctl mux serve` runs panes too: not past it. It is in the chain: `ftermctl steps` is the program of a
+        // pane (fterm.run, dashboard steps), and a program in such a pane is in that pane.
         let t = Table::new(&[
             (10, Some(7), 500, "python"),
             (7, Some(5), 400, "bash"),
             (5, Some(3), 300, "ftermctl"),
             (3, None, 200, "bash"),
         ]);
-        assert_eq!(t.chain(10, 500, 32), [10, 7]);
+        assert_eq!(t.chain(10, 500, 32), [10, 7, 5]);
         // `ftermctl mcp` starts an ftermctl for a long call: that one is fine.
         let t = Table::new(&[
             (10, Some(7), 500, "ftermctl.exe"),
@@ -437,6 +474,45 @@ mod tests {
             (3, None, 200, "pwsh.exe"),
         ]);
         assert_eq!(t.chain(10, 500, 32), [10, 7, 5, 3]);
+    }
+
+    #[test]
+    fn the_chain_stops_before_wsl() {
+        // A program in WSL picks the wsl.exe that starts a Windows program (WSL_INTEROP): it can be the wsl.exe
+        // of another pane. So a chain through WSL tells no pane.
+        let t = Table::new(&[
+            (10, Some(8), 500, "ftermctl.exe"),
+            (8, Some(7), 500, "wsl.exe"),
+            (7, Some(3), 400, "wsl.exe"),
+            (3, None, 200, "pwsh.exe"),
+        ]);
+        assert_eq!(t.chain(10, 500, 32), [10]);
+        let t = Table::new(&[(10, Some(8), 500, "x.exe"), (8, None, 400, "wslhost.exe")]);
+        assert_eq!(t.chain(10, 500, 32), [10]);
+    }
+
+    #[test]
+    fn the_start_ticks_of_a_stat_line() {
+        let line = "4321 (a b) c) S 1 4321 4321 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 98765 1234567 100\n";
+        assert_eq!(
+            stat_start_ticks(line),
+            Some(98765),
+            "field 22, also with ')' in the name"
+        );
+        assert_eq!(stat_start_ticks("garbage"), None);
+        assert_eq!(stat_start_ticks("1 (x) S 1 2"), None, "too short");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn on_linux_the_start_time_is_the_ticks_since_boot() {
+        let me = std::process::id();
+        let stat = std::fs::read_to_string(format!("/proc/{me}/stat")).unwrap();
+        assert_eq!(
+            Processes::new().fresh(me).map(|p| p.start),
+            stat_start_ticks(&stat),
+            "seconds since 1970 move when the clock is set"
+        );
     }
 
     #[test]

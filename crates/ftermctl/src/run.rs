@@ -67,7 +67,9 @@ pub fn default_pane(checked: Option<u64>, hint: Option<u64>) -> Option<u64> {
 /// Params of a hook (`agent_event`, `agent_session`, `agent_usage`) with the pane that fterm checked. `None` when
 /// fterm can not tell our pane: fterm takes such calls from nobody (it would say nothing back), so they do not go.
 pub fn with_checked_pane(mut params: Value, checked: Option<u64>) -> Option<Value> {
-    params["pane"] = json!(checked?);
+    params
+        .as_object_mut()?
+        .insert("pane".to_owned(), json!(checked?));
     Some(params)
 }
 
@@ -200,6 +202,11 @@ mod tests {
             Some(json!({ "pane": 2, "kind": "done" }))
         );
         assert_eq!(with_checked_pane(params, None), None);
+        assert_eq!(
+            with_checked_pane(json!("text"), Some(2)),
+            None,
+            "no object: no call (and no panic)"
+        );
     }
 
     #[test]

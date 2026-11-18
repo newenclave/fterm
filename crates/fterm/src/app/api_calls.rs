@@ -163,6 +163,7 @@ pub(super) fn answer_key(
     repeat: bool,
     ctrl: bool,
     alt: bool,
+    shift: bool,
 ) -> crate::access::AnswerKey {
     use crate::access::AnswerKey as A;
     let modifier_only = matches!(
@@ -178,6 +179,8 @@ pub(super) fn answer_key(
                 | NamedKey::Fn
                 | NamedKey::CapsLock
                 | NamedKey::NumLock
+                // The input method takes the key: its text comes later, and does not answer.
+                | NamedKey::Process
         )
     );
     if repeat || modifier_only {
@@ -186,7 +189,9 @@ pub(super) fn answer_key(
     if ctrl || alt {
         return A::Other;
     }
+    // Shift+1 is '!' (or '1' on AZERTY): a digit counts only with no Shift.
     match physical {
+        _ if shift => {}
         PhysicalKey::Code(KeyCode::Digit1 | KeyCode::Numpad1) => return A::Allow,
         PhysicalKey::Code(KeyCode::Digit2 | KeyCode::Numpad2) => return A::Always,
         PhysicalKey::Code(KeyCode::Digit3 | KeyCode::Numpad3) => return A::No,
@@ -217,6 +222,10 @@ pub(super) struct AccessBox {
     pub answering: bool,
     /// The warning about a guard of the config (not an access question).
     pub warning: bool,
+    /// The box is at least this wide: the widest text of all its states.
+    pub min_cells: usize,
+    /// Where the box and its buttons are now (drawing and clicks use the same).
+    pub layout: fterm_render::overlay::QuestionLayout,
 }
 
 /// The longest history that `get_text` gives.
@@ -418,14 +427,18 @@ impl App {
 
     fn hook_access(&self, hook: &str, calls: &[ApiCall]) -> Verdict {
         let record = self.api_clients.get(&hook_client(hook));
-        // Typing goes into the pane in front: a pane with no remote control takes none.
-        let types = calls
-            .iter()
-            .any(|c| matches!(c, ApiCall::SendText(_) | ApiCall::CopyMode(_)));
+        // Typing and actions go to the pane with the keys (the scratch shell or an overlay when one has them): a
+        // pane with no remote control takes none.
+        let types = calls.iter().any(|c| {
+            matches!(
+                c,
+                ApiCall::SendText(_) | ApiCall::CopyMode(_) | ApiCall::Action(_)
+            )
+        });
         let remote = !types
             || self.running.as_ref().is_none_or(|r| {
                 r.mux
-                    .active_pane()
+                    .input_pane()
                     .and_then(|pane| r.panes.get(&pane))
                     .is_none_or(|p| p.remote)
             });
@@ -497,60 +510,100 @@ impl App {
         }
     }
 
-    /// The access question in front, as it is drawn now. The warning about a guard comes first.
+    /// The box in front, as it is drawn now: the access question, else the warning about a guard (the calls of
+    /// a question wait, the warning does not).
     pub(super) fn access_box(&self, now: Instant) -> Option<AccessBox> {
+        use crate::access::{Asker, Place, QuestionLines, question_box};
         use std::hash::{Hash, Hasher};
-        if let Some(config) = self.guard_warning {
-            let answering = self.answer_mode.active(now);
+        let running = self.running.as_ref()?;
+        let answering = self.answer_mode.active(now);
+        let mut hasher = std::hash::DefaultHasher::new();
+        // Each state of the box (the line of the keys changes): the widest one sets the width of all.
+        let states: Vec<QuestionLines>;
+        let (lines, buttons, always_ok, warning) = if let Some(ask) = self.api_questions.front() {
+            let client = self.api_clients.get(&ask.client);
+            let name = client.map_or("client", |c| c.name.as_str());
+            let hook = client.is_some_and(|c| c.hook);
+            // What fterm checked: the place of the client's pane and its program.
+            let checked = client.filter(|_| !hook).and_then(|c| {
+                let program = c.program.as_ref()?;
+                let pane = c.pane?;
+                running.panes.contains_key(&pane).then_some(())?;
+                let (tab, workspace) = running
+                    .pane_tab_number(pane)
+                    .map_or((None, None), |(tab, ws)| (Some(tab), ws));
+                Some((tab, workspace, program.name.as_str()))
+            });
+            let place = match &checked {
+                Some((tab, workspace, program)) => Place::Pane {
+                    tab: *tab,
+                    workspace: workspace.as_deref(),
+                    program,
+                },
+                None if hook => Place::Config,
+                None => Place::Outside,
+            };
+            let asker = Asker { name, place };
+            let (lines, buttons) = question_box(
+                &asker,
+                answering,
+                answering && self.answer_mode.always_chosen(),
+            );
+            states = [(false, false), (true, false), (true, true)]
+                .iter()
+                .map(|&(on, always)| question_box(&asker, on, always).0)
+                .collect();
+            (ask.id, name, place).hash(&mut hasher);
+            let always_ok = matches!(place, Place::Pane { .. });
+            (lines, buttons, always_ok, false)
+        } else {
+            let config = self.guard_warning?;
             let (lines, buttons) =
                 crate::guards::warning_box(self.guard.confirmed, config, answering);
-            let mut hasher = std::hash::DefaultHasher::new();
+            states = [false, true]
+                .iter()
+                .map(|&on| crate::guards::warning_box(self.guard.confirmed, config, on).0)
+                .collect();
             ("guard", config).hash(&mut hasher);
-            return Some(AccessBox {
-                key: hasher.finish(),
-                lines,
-                buttons,
-                always_ok: false,
-                answering,
-                warning: true,
-            });
-        }
-        let ask = self.api_questions.front()?;
-        let client = self.api_clients.get(&ask.client);
-        let name = client.map_or("client", |c| c.name.as_str());
-        // What fterm checked: the tab of the client's pane and its program.
-        let hook = client.is_some_and(|c| c.hook);
-        let place = client
-            .filter(|_| !hook)
-            .and_then(|c| {
-                let program = c.program.as_ref()?;
-                let (tab, _) = self.running.as_ref()?.pane_tab_number(c.pane?)?;
-                Some(crate::access::Place::Pane {
-                    tab,
-                    program: program.name.as_str(),
-                })
+            (lines, buttons, false, true)
+        };
+        let view = running.tab_area();
+        let cell = running.renderer.cell();
+        let labels: Vec<String> = buttons.iter().map(|(_, t)| t.clone()).collect();
+        let min_cells = states
+            .iter()
+            .map(|state| {
+                let texts: Vec<String> = state.iter().map(|(t, _)| t.clone()).collect();
+                let frame =
+                    fterm_render::overlay::question_layout(&texts, &labels, view, cell, 0).frame;
+                ((frame.width / cell.width).round() as usize).saturating_sub(4)
             })
-            .unwrap_or(if hook {
-                crate::access::Place::Config
-            } else {
-                crate::access::Place::Outside
-            });
-        let answering = self.answer_mode.active(now);
-        let (lines, buttons) = crate::access::question_box(
-            &crate::access::Asker { name, place },
-            answering,
-            answering && self.answer_mode.always_chosen(),
-        );
-        let mut hasher = std::hash::DefaultHasher::new();
-        (ask.id, name, place).hash(&mut hasher);
+            .max()
+            .unwrap_or(0);
+        let texts: Vec<String> = lines.iter().map(|(t, _)| t.clone()).collect();
+        let layout = fterm_render::overlay::question_layout(&texts, &labels, view, cell, min_cells);
+        // Where it is, too: a box that moves (the dock, the size of the window or of the font) waits for clicks
+        // again, so a button can not move under the mouse.
+        for rect in std::iter::once(&layout.frame).chain(&layout.buttons) {
+            [rect.x, rect.y, rect.width, rect.height]
+                .map(f32::to_bits)
+                .hash(&mut hasher);
+        }
         Some(AccessBox {
             key: hasher.finish(),
             lines,
             buttons,
-            always_ok: matches!(place, crate::access::Place::Pane { .. }),
+            always_ok,
             answering,
-            warning: false,
+            warning,
+            min_cells,
+            layout,
         })
+    }
+
+    /// The warning about a guard is the box in front.
+    fn guard_in_front(&self) -> bool {
+        self.api_questions.is_empty() && self.guard_warning.is_some()
     }
 
     /// The config changed (or fterm starts): a looser guard keeps the confirmed value and waits for a yes.
@@ -601,7 +654,7 @@ impl App {
 
     /// An answer to the box in front: the warning about a guard, or the access question.
     fn answer_front(&mut self, event_loop: &ActiveEventLoop, answer: crate::access::Answer) {
-        if self.guard_warning.is_some() {
+        if self.guard_in_front() {
             self.answer_guard(answer == crate::access::Answer::Allow);
         } else {
             self.answer_access(event_loop, answer);
@@ -632,9 +685,10 @@ impl App {
                 event.repeat,
                 self.mods.control_key(),
                 self.mods.alt_key(),
+                self.mods.shift_key(),
             );
             // Only a click turns a guard off.
-            if self.guard_warning.is_some()
+            if self.guard_in_front()
                 && matches!(
                     key,
                     crate::access::AnswerKey::Allow
@@ -679,19 +733,10 @@ impl App {
         let now = Instant::now();
         self.sync_answer_mode(now);
         let Some(question) = self.access_box(now) else {
+            self.question_press = false;
             return false;
         };
-        let Some(running) = &self.running else {
-            return false;
-        };
-        let texts: Vec<String> = question.lines.iter().map(|(t, _)| t.clone()).collect();
-        let labels: Vec<String> = question.buttons.iter().map(|(_, t)| t.clone()).collect();
-        let layout = fterm_render::overlay::question_layout(
-            &texts,
-            &labels,
-            running.tab_area(),
-            running.renderer.cell(),
-        );
+        let layout = &question.layout;
         let (x, y) = (self.mouse.position.0 as f32, self.mouse.position.1 as f32);
         let hit = layout
             .buttons
@@ -709,14 +754,16 @@ impl App {
                         self.ask_redraw();
                     }
                 }
+                // The box takes the release of its own press only: a drag from a pane ends in that pane.
+                self.question_press = inside;
                 inside
             }
             ElementState::Released => {
-                let ours = self.answer_mode.pressed();
+                let ours = std::mem::take(&mut self.question_press);
                 if let Some(answer) = self.answer_mode.release(hit) {
                     self.answer_front(event_loop, answer);
                 }
-                ours || inside
+                ours
             }
         }
     }
@@ -741,7 +788,12 @@ impl App {
         let now = Instant::now();
         // A client with no `hello` gets a record too: its answer stays.
         let record = self.api_clients.entry(ask.client).or_default();
-        record.said = Some(answer != Answer::No);
+        // A No to a hook counts for a minute (its bucket), as for a program: the hook may ask again then.
+        record.said = if record.hook && answer == Answer::No {
+            None
+        } else {
+            Some(answer != Answer::No)
+        };
         let (key, bucket) = (record.always_key(), record.bucket());
         match answer {
             Answer::Always => {
@@ -2007,8 +2059,19 @@ mod tests {
                 repeat,
                 mods.contains("ctrl"),
                 mods.contains("alt"),
+                mods.contains("shift"),
             )
         };
+        assert_eq!(
+            k(Key::Character("!".into()), KeyCode::Digit1, false, "shift"),
+            A::Other,
+            "Shift+1 is '!', not an answer"
+        );
+        assert_eq!(
+            k(Key::Named(NamedKey::Process), KeyCode::KeyY, false, ""),
+            A::Ignore,
+            "a key that the input method takes: its text does not answer"
+        );
         let ch = |c: &str| Key::Character(c.into());
         assert_eq!(k(ch("y"), KeyCode::KeyY, false, ""), A::Allow);
         assert_eq!(

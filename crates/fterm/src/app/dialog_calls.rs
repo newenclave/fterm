@@ -155,7 +155,9 @@ impl App {
         }
         running.resize_all_panes();
         let go = match settings.focus {
-            ReviewFocus::Always => true,
+            // A dialog in a new tab in the back (of a client that fterm can not find in a pane) takes no keys by
+            // itself: it could ask for a password.
+            ReviewFocus::Always => asked_by_user || near.is_some(),
             ReviewFocus::Auto => asked_by_user || looking,
             ReviewFocus::Never => false,
         };

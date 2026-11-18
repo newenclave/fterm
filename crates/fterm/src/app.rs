@@ -592,6 +592,8 @@ pub struct App {
     next_question: u64,
     /// The access question takes keys only in answer mode (the chord, or a click on a button).
     answer_mode: crate::access::AnswerMode,
+    /// The left button went down on the question box: its release is the box's too.
+    question_press: bool,
     /// The guards of the API that the user confirmed (`guards.json`).
     guard: crate::guards::GuardState,
     /// The config turns a guard off: these values wait for the user's yes (the old ones count until then).
@@ -747,6 +749,7 @@ impl App {
             api_questions: std::collections::VecDeque::new(),
             next_question: 0,
             answer_mode: crate::access::AnswerMode::default(),
+            question_press: false,
             guard: crate::guards::GuardState::default(),
             guard_warning: None,
             waits: Vec::new(),
@@ -5398,6 +5401,7 @@ impl App {
                             buttons: &labels,
                             answering: access.answering,
                             warning: access.warning,
+                            min_cells: access.min_cells,
                         },
                         area,
                     )?;
@@ -5928,9 +5932,16 @@ impl ApplicationHandler<UserEvent> for App {
                 // The new window size comes in the next `Resized` event.
                 self.resize_all_panes();
             }
+            WindowEvent::Occluded(false) => {
+                // The window can be seen again: a click on the question counts a moment later.
+                self.answer_mode.restart_wait(Instant::now());
+            }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
-                if !focused {
+                if focused {
+                    // The click that brings the window back must not answer the question.
+                    self.answer_mode.restart_wait(Instant::now());
+                } else {
                     // Answer mode is for keys that the user means for the question, here and now.
                     self.answer_mode.end();
                 }
@@ -6138,21 +6149,19 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
-/// Where fterm keeps the guards that the user confirmed: in `data_dir`, else in the folder of fterm's state.
+/// Where fterm keeps the guards that the user confirmed: in the folder of fterm's state, never in `data_dir` (the
+/// config sets that, and the config is what the guards watch). `FTERM_GUARD_FILE` is for tests.
 fn guard_file() -> Option<std::path::PathBuf> {
+    if let Some(file) = std::env::var_os("FTERM_GUARD_FILE") {
+        return Some(std::path::PathBuf::from(file));
+    }
     #[cfg(windows)]
     let usual = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
     #[cfg(not(windows))]
     let usual = std::env::var_os("XDG_STATE_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| fterm_config::profiles::home_dir().map(|h| h.join(".local").join("state")));
-    crate::paths::folder(
-        None,
-        crate::paths::data_dir().as_deref(),
-        "",
-        usual.map(|dir| dir.join("fterm")),
-    )
-    .map(|dir| dir.join("guards.json"))
+    usual.map(|dir| dir.join("fterm").join("guards.json"))
 }
 
 /// Writes the shell integration scripts and returns the PowerShell one.

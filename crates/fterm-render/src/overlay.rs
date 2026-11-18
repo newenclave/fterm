@@ -264,6 +264,9 @@ pub struct QuestionBox<'a> {
     pub answering: bool,
     /// A warning (the config one): the warning color.
     pub warning: bool,
+    /// The box is at least this wide (in cells, inside): the app gives the widest text of all its states, so the
+    /// buttons do not move when the text of the keys changes.
+    pub min_cells: usize,
 }
 
 /// Where a question box and its buttons are.
@@ -280,6 +283,7 @@ pub fn question_layout(
     buttons: &[String],
     view: Rect,
     cell: CellMetrics,
+    min_cells: usize,
 ) -> QuestionLayout {
     let max_cells = ((view.width / cell.width) as usize)
         .saturating_sub(6)
@@ -293,7 +297,7 @@ pub fn question_layout(
     // A button is its text with a cell of room on each side; two cells between buttons.
     let button_cells: Vec<usize> = buttons.iter().map(|b| cells_of(b) + 2).collect();
     let row = button_cells.iter().sum::<usize>() + 2 * button_cells.len().saturating_sub(1);
-    let inner = longest.max(row).min(max_cells);
+    let inner = longest.max(row).max(min_cells).min(max_cells);
     let width = (inner + 4) as f32 * cell.width;
     // A row of room, the lines, an empty row, the buttons, a row of room.
     let height = (lines.len() + 4) as f32 * cell.height;
@@ -324,7 +328,7 @@ pub fn build_question_box(
     glyph: &mut dyn FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
 ) -> Result<Vec<Instance>, AtlasFull> {
     let texts: Vec<String> = q.lines.iter().map(|(t, _)| t.clone()).collect();
-    let layout = question_layout(&texts, q.buttons, view, cell);
+    let layout = question_layout(&texts, q.buttons, view, cell, q.min_cells);
     let f = layout.frame;
     let max_cells = ((f.width / cell.width) as usize).saturating_sub(4);
     let border_color = if q.warning { ui.warning } else { ui.accent };
@@ -377,6 +381,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_wide_enough_box_keeps_its_buttons_when_a_line_changes() {
+        let buttons = vec!["Allow".to_owned(), "No".to_owned()];
+        let short = vec!["Allow it?".to_owned(), "keys".to_owned()];
+        let long = vec!["Allow it?".to_owned(), "k".repeat(50)];
+        let a = question_layout(&short, &buttons, VIEW, CELL, 50);
+        let b = question_layout(&long, &buttons, VIEW, CELL, 50);
+        assert_eq!(a, b, "the same place for both texts");
+        assert!(a.frame.width >= 54.0 * CELL.width, "{a:?}");
+    }
+
+    #[test]
     fn a_question_box_sits_at_the_top_with_its_buttons_inside() {
         let lines = vec!["Allow it?".to_owned(), "x".repeat(200)];
         let buttons = vec![
@@ -384,7 +399,7 @@ mod tests {
             "Always for this pane".to_owned(),
             "No".to_owned(),
         ];
-        let l = question_layout(&lines, &buttons, VIEW, CELL);
+        let l = question_layout(&lines, &buttons, VIEW, CELL, 0);
         let f = l.frame;
         assert!(
             f.y >= VIEW.y && f.y < VIEW.y + 3.0 * CELL.height,

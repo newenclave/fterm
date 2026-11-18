@@ -106,6 +106,8 @@
     "box.access_outside": "fterm checked: it is not in a pane of this window, so fterm can not tell who it is.",
     "box.access_start": "To answer: Ctrl+Shift+Enter, or click a button.",
     "box.access_where": "fterm checked: it runs in tab {tab}, under {program}.",
+    "box.access_where_float": "fterm checked: it runs in a pane of this window that is in no tab, under {program}.",
+    "box.access_where_ws": "fterm checked: it runs in tab {tab} of the workspace {workspace}, under {program}.",
     "box.access_why": "It can see their text and run commands there.",
     "box.agent_waiting": "{name} is waiting",
     "box.agent_working": "{name} is working",

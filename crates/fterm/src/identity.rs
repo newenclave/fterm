@@ -12,8 +12,8 @@ pub struct PaneIdentity {
     pub start: u64,
 }
 
-/// The program of a pane that a client belongs to: the process just below the pane's shell on the way up (for
-/// example `claude.exe`), or the client itself when the shell started it.
+/// The program of a pane that a client belongs to: the nearest process below the pane's shell that is not a shell
+/// (for example `claude.exe`), or the client itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     pub pid: u32,
@@ -34,8 +34,13 @@ pub fn verify(chain: &[Link], panes: &[(u64, PaneIdentity)]) -> Option<Checked> 
         let (pane, _) = panes
             .iter()
             .find(|(_, id)| id.pid == Some(link.pid) && id.start != 0 && id.start == link.start)?;
-        // The program: the process just below the shell (the client itself when it is the shell).
-        let below = &chain[i.saturating_sub(1)];
+        // The program: the nearest process below the shell that is not a shell too (a bash that the user started
+        // in the pane runs many programs); the client itself when there is none.
+        let below = chain[..i]
+            .iter()
+            .rev()
+            .find(|l| !fterm_term::process::is_shell(&l.name))
+            .unwrap_or(&chain[0]);
         Some(Checked {
             pane: *pane,
             program: Program {
@@ -73,6 +78,29 @@ mod tests {
             link(3, 300, "pwsh.exe"),
             link(1, 100, "explorer.exe"),
         ]
+    }
+
+    #[test]
+    fn the_program_is_not_a_shell_that_the_user_started() {
+        // pwsh (the pane) -> bash (started by the user) -> claude -> ftermctl: "Always" is for claude, not for
+        // everything that runs in that bash.
+        let chain = vec![
+            link(10, 500, "ftermctl"),
+            link(8, 450, "claude"),
+            link(7, 400, "bash"),
+            link(3, 300, "pwsh.exe"),
+        ];
+        let checked = verify(&chain, &[(5, shell(3, 300))]).expect("pane 5");
+        assert_eq!(checked.program.name, "claude");
+        assert_eq!(checked.program.pid, 8);
+        // Only shells below the pane shell: the client itself.
+        let chain = vec![
+            link(10, 500, "ftermctl"),
+            link(7, 400, "bash"),
+            link(3, 300, "pwsh.exe"),
+        ];
+        let checked = verify(&chain, &[(5, shell(3, 300))]).expect("pane 5");
+        assert_eq!(checked.program.pid, 10);
     }
 
     #[test]

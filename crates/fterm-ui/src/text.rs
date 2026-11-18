@@ -91,9 +91,48 @@ pub fn one_line(text: &str) -> String {
     line.trim().to_owned()
 }
 
+/// A name from outside (a client, a process) for a box that the user trusts: one line, no chars that hide or turn
+/// text (zero-width, bidi, line and paragraph separators), not too many chars, at most `cells` cells.
+pub fn safe_name(text: &str, cells: usize) -> String {
+    let hidden = |c: char| {
+        matches!(c,
+            '\u{00ad}' | '\u{061c}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}'
+            | '\u{2060}'..='\u{206f}' | '\u{feff}' | '\u{fff9}'..='\u{fffb}' | '\u{e0000}'..='\u{e007f}')
+    };
+    // A limit of chars before the cells: zero-width chars (combining marks) take no cell.
+    let line: String = one_line(text)
+        .chars()
+        .filter(|c| !hidden(*c))
+        .take(4 * cells)
+        .collect();
+    fit(line.trim(), cells)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_safe_name_hides_nothing_and_is_short() {
+        assert_eq!(safe_name("claude", 32), "claude");
+        assert_eq!(
+            safe_name("a\u{202e}exe.cod", 32),
+            "aexe.cod",
+            "no bidi override"
+        );
+        assert_eq!(
+            safe_name("cl\u{200b}aude\u{2028}x", 32),
+            "claudex",
+            "no zero-width, no separator"
+        );
+        assert_eq!(safe_name("\u{feff}a\u{2066}b\u{2069}", 32), "ab");
+        let long = format!("a{}", "\u{0301}".repeat(1_000_000));
+        assert!(
+            safe_name(&long, 32).chars().count() <= 4 * 32,
+            "combining marks: a limit of chars too"
+        );
+        assert_eq!(cells(&safe_name(&"x".repeat(100), 32)), 32);
+    }
 
     #[test]
     fn widths_and_fitting() {
