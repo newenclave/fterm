@@ -6150,8 +6150,9 @@ impl ApplicationHandler<UserEvent> for App {
 }
 
 /// Where fterm keeps the guards that the user confirmed: in the folder of fterm's state, never in `data_dir` (the
-/// config sets that, and the config is what the guards watch). `FTERM_GUARD_FILE` is for tests.
+/// config sets that, and the config is what the guards watch). `FTERM_GUARD_FILE` is for tests (debug builds).
 fn guard_file() -> Option<std::path::PathBuf> {
+    #[cfg(debug_assertions)]
     if let Some(file) = std::env::var_os("FTERM_GUARD_FILE") {
         return Some(std::path::PathBuf::from(file));
     }

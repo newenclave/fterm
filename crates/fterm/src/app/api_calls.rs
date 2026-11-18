@@ -147,8 +147,17 @@ pub(super) struct ApiAsk {
 }
 
 /// The error of a call that the user said no to a moment ago (an agent should ask the user, not try again).
-const REFUSED: &str =
-    "the user said no to this pane a moment ago: ask the user before you try again";
+const REFUSED: &str = "the user said no a moment ago: ask the user before you try again";
+
+/// A hasher for the keys of the question box, with a key of its own (a client picks its name: it must not find
+/// two names with the same hash).
+fn box_hasher() -> std::hash::DefaultHasher {
+    use std::hash::BuildHasher;
+    static STATE: std::sync::OnceLock<std::hash::RandomState> = std::sync::OnceLock::new();
+    STATE
+        .get_or_init(std::hash::RandomState::new)
+        .build_hasher()
+}
 
 /// The key that starts answering the access question: Ctrl+Shift+Enter.
 pub(super) fn is_answer_chord(key: &Key, ctrl: bool, shift: bool, alt: bool) -> bool {
@@ -186,7 +195,8 @@ pub(super) fn answer_key(
     if repeat || modifier_only {
         return A::Ignore;
     }
-    if ctrl || alt {
+    // With Shift a key is text ("Yes", "!"), not an answer.
+    if ctrl || alt || (shift && matches!(key, Key::Character(_))) {
         return A::Other;
     }
     // Shift+1 is '!' (or '1' on AZERTY): a digit counts only with no Shift.
@@ -213,8 +223,10 @@ pub(super) fn answer_key(
 /// The access question as it is drawn now.
 pub(super) struct AccessBox {
     /// Changes when the question in front changes, or what fterm says of its client: answer mode ends, and a
-    /// click waits again (a button must not move under the mouse).
+    /// click waits again.
     pub key: u64,
+    /// Changes when the box or a button moves: a click waits again (a button must not move under the mouse).
+    pub place_key: u64,
     pub lines: crate::access::QuestionLines,
     pub buttons: Vec<(crate::access::Button, String)>,
     /// "Always" is offered (the client's pane is checked).
@@ -517,7 +529,7 @@ impl App {
         use std::hash::{Hash, Hasher};
         let running = self.running.as_ref()?;
         let answering = self.answer_mode.active(now);
-        let mut hasher = std::hash::DefaultHasher::new();
+        let mut hasher = box_hasher();
         // Each state of the box (the line of the keys changes): the widest one sets the width of all.
         let states: Vec<QuestionLines>;
         let (lines, buttons, always_ok, warning) = if let Some(ask) = self.api_questions.front() {
@@ -547,12 +559,18 @@ impl App {
             let (lines, buttons) = question_box(
                 &asker,
                 answering,
-                answering && self.answer_mode.always_chosen(),
+                self.answer_mode.chosen().filter(|_| answering),
             );
-            states = [(false, false), (true, false), (true, true)]
-                .iter()
-                .map(|&(on, always)| question_box(&asker, on, always).0)
-                .collect();
+            use crate::access::Answer;
+            states = [
+                (false, None),
+                (true, None),
+                (true, Some(Answer::Allow)),
+                (true, Some(Answer::Always)),
+            ]
+            .iter()
+            .map(|&(on, chosen)| question_box(&asker, on, chosen).0)
+            .collect();
             (ask.id, name, place).hash(&mut hasher);
             let always_ok = matches!(place, Place::Pane { .. });
             (lines, buttons, always_ok, false)
@@ -582,15 +600,17 @@ impl App {
             .unwrap_or(0);
         let texts: Vec<String> = lines.iter().map(|(t, _)| t.clone()).collect();
         let layout = fterm_render::overlay::question_layout(&texts, &labels, view, cell, min_cells);
-        // Where it is, too: a box that moves (the dock, the size of the window or of the font) waits for clicks
-        // again, so a button can not move under the mouse.
+        // Where it is: a box that moves (the dock, the size of the window or of the font) waits for clicks again,
+        // so a button can not move under the mouse.
+        let mut place = box_hasher();
         for rect in std::iter::once(&layout.frame).chain(&layout.buttons) {
             [rect.x, rect.y, rect.width, rect.height]
                 .map(f32::to_bits)
-                .hash(&mut hasher);
+                .hash(&mut place);
         }
         Some(AccessBox {
             key: hasher.finish(),
+            place_key: place.finish(),
             lines,
             buttons,
             always_ok,
@@ -664,8 +684,11 @@ impl App {
     /// Tells answer mode which question is in front now (another one ends it). Before each key and click, and
     /// in `about_to_wait`.
     pub(super) fn sync_answer_mode(&mut self, now: Instant) {
-        let key = self.access_box(now).map(|b| b.key);
-        self.answer_mode.front(key, now);
+        let keys = self.access_box(now).map(|b| (b.key, b.place_key));
+        self.answer_mode.front(keys.map(|(key, _)| key), now);
+        if let Some((_, place)) = keys {
+            self.answer_mode.moved(place, now);
+        }
     }
 
     /// A key: in answer mode it answers (and is not typed anywhere); the chord starts answer mode. `false`: the
@@ -715,8 +738,9 @@ impl App {
                 self.mods.shift_key(),
                 self.mods.alt_key(),
             )
+            // A box that just came (or a window that just came back): the chord is the key of the program.
+            && self.answer_mode.start(now)
         {
-            self.answer_mode.start(now);
             self.ask_redraw();
             return true;
         }
@@ -733,8 +757,9 @@ impl App {
         let now = Instant::now();
         self.sync_answer_mode(now);
         let Some(question) = self.access_box(now) else {
-            self.question_press = false;
-            return false;
+            // The box went between the press and the release: its release is still its own.
+            let ours = std::mem::take(&mut self.question_press);
+            return state == ElementState::Released && ours;
         };
         let layout = &question.layout;
         let (x, y) = (self.mouse.position.0 as f32, self.mouse.position.1 as f32);
@@ -806,14 +831,18 @@ impl App {
                 // of it that wait now are refused too.
                 self.api_refused.note(bucket, now);
                 let clients = &self.api_clients;
+                let hit = |b: crate::access::Bucket| {
+                    b == bucket
+                        || (matches!(bucket, crate::access::Bucket::Pane(_))
+                            && b == crate::access::Bucket::NoPane)
+                };
                 let (refused, waiting): (Vec<ApiAsk>, Vec<ApiAsk>) =
                     std::mem::take(&mut self.api_questions)
                         .into_iter()
                         .partition(|q| {
-                            clients
+                            hit(clients
                                 .get(&q.client)
-                                .map_or(crate::access::Bucket::NoPane, ApiClient::bucket)
-                                == bucket
+                                .map_or(crate::access::Bucket::NoPane, ApiClient::bucket))
                         });
                 self.api_questions = waiting.into();
                 for q in refused {
@@ -2066,6 +2095,11 @@ mod tests {
             k(Key::Character("!".into()), KeyCode::Digit1, false, "shift"),
             A::Other,
             "Shift+1 is '!', not an answer"
+        );
+        assert_eq!(
+            k(Key::Character("Y".into()), KeyCode::KeyY, false, "shift"),
+            A::Other,
+            "Shift+Y: a sentence that starts with Yes"
         );
         assert_eq!(
             k(Key::Named(NamedKey::Process), KeyCode::KeyY, false, ""),

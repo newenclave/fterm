@@ -96,8 +96,10 @@ pub fn one_line(text: &str) -> String {
 pub fn safe_name(text: &str, cells: usize) -> String {
     let hidden = |c: char| {
         matches!(c,
-            '\u{00ad}' | '\u{061c}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}'
-            | '\u{2060}'..='\u{206f}' | '\u{feff}' | '\u{fff9}'..='\u{fffb}' | '\u{e0000}'..='\u{e007f}')
+            '\u{00ad}' | '\u{034f}' | '\u{061c}' | '\u{115f}' | '\u{1160}' | '\u{17b4}' | '\u{17b5}'
+            | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{206f}'
+            | '\u{2800}' | '\u{3164}' | '\u{fe00}'..='\u{fe0f}' | '\u{feff}' | '\u{ffa0}'
+            | '\u{fff9}'..='\u{fffb}' | '\u{e0000}'..='\u{e007f}')
     };
     // A limit of chars before the cells: zero-width chars (combining marks) take no cell.
     let line: String = one_line(text)
@@ -126,6 +128,11 @@ mod tests {
             "no zero-width, no separator"
         );
         assert_eq!(safe_name("\u{feff}a\u{2066}b\u{2069}", 32), "ab");
+        assert_eq!(
+            safe_name("\u{3164}\u{2800}c\u{fe0f}", 32),
+            "c",
+            "chars that look empty"
+        );
         let long = format!("a{}", "\u{0301}".repeat(1_000_000));
         assert!(
             safe_name(&long, 32).chars().count() <= 4 * 32,

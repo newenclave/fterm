@@ -181,12 +181,14 @@ pub enum AnswerKey {
 pub struct AnswerMode {
     /// The question in front and when it came (clicks count a moment later).
     front: Option<(u64, std::time::Instant)>,
-    /// Answer mode is on, since (the chord, or the choice of "Always").
+    /// Answer mode is on, since (the chord, or the last choice).
     on: Option<std::time::Instant>,
     /// When the chord started it (keys right after it answer nothing).
     started: Option<std::time::Instant>,
-    /// "Always" was chosen: Enter takes it.
-    always: bool,
+    /// The answer that a key chose: Enter takes it.
+    chosen: Option<Answer>,
+    /// Where the box is (a hash): when it moves, clicks wait again.
+    place: Option<u64>,
     /// A button that the mouse pressed.
     pressed: Option<Button>,
 }
@@ -208,14 +210,18 @@ impl AnswerMode {
         }
     }
 
-    /// The chord: answer mode for the question in front. `false` when there is no question.
+    /// The chord: answer mode for the question in front. `false` when there is no question, or when it came (or
+    /// the window came back) less than `CLICK_WAIT` ago: then the chord is the key of the program, as with no box.
     pub fn start(&mut self, now: std::time::Instant) -> bool {
-        if self.front.is_none() {
+        let ready = self
+            .front
+            .is_some_and(|(_, at)| now.saturating_duration_since(at) >= CLICK_WAIT);
+        if !ready {
             return false;
         }
         self.on = Some(now);
         self.started = Some(now);
-        self.always = false;
+        self.chosen = None;
         true
     }
 
@@ -226,9 +232,20 @@ impl AnswerMode {
                 .is_some_and(|at| now.saturating_duration_since(at) <= ANSWER_TIME)
     }
 
-    /// "Always" was chosen and waits for Enter.
-    pub fn always_chosen(&self) -> bool {
-        self.always
+    /// The answer that waits for Enter.
+    pub fn chosen(&self) -> Option<Answer> {
+        self.chosen
+    }
+
+    /// The box is at `place` now (a hash of where it and its buttons are). When it moved, clicks wait again; answer
+    /// mode stays (keys do not move).
+    pub fn moved(&mut self, place: u64, now: std::time::Instant) {
+        if self.place != Some(place) {
+            if self.place.is_some() {
+                self.restart_wait(now);
+            }
+            self.place = Some(place);
+        }
     }
 
     /// The window came back (it got the focus): the click that brings it back must not answer, so the wait for
@@ -242,7 +259,7 @@ impl AnswerMode {
 
     pub fn end(&mut self) {
         self.on = None;
-        self.always = false;
+        self.chosen = None;
     }
 
     /// A key in answer mode. `always_ok`: the question offers "Always" (a client with a checked pane).
@@ -264,28 +281,30 @@ impl AnswerMode {
             }
             key => key,
         };
+        // A yes needs two keys (the choice, then Enter): a word typed on by habit ("yes") is no answer.
         match key {
             AnswerKey::Ignore => None,
             AnswerKey::Allow => {
+                self.chosen = Some(Answer::Allow);
+                self.on = Some(now);
+                None
+            }
+            AnswerKey::Always => {
+                if always_ok {
+                    self.chosen = Some(Answer::Always);
+                    self.on = Some(now);
+                }
+                None
+            }
+            AnswerKey::Confirm => {
+                let chosen = self.chosen?;
                 self.end();
-                Some(Answer::Allow)
+                Some(chosen)
             }
             AnswerKey::No => {
                 self.end();
                 Some(Answer::No)
             }
-            AnswerKey::Always => {
-                if always_ok {
-                    self.always = true;
-                    self.on = Some(now);
-                }
-                None
-            }
-            AnswerKey::Confirm if self.always => {
-                self.end();
-                Some(Answer::Always)
-            }
-            AnswerKey::Confirm => None,
             AnswerKey::Other => {
                 self.end();
                 None
@@ -370,7 +389,7 @@ pub type QuestionLines = Vec<(String, fterm_render::overlay::QuestionLook)>;
 pub fn question_box(
     asker: &Asker,
     answering: bool,
-    always_chosen: bool,
+    chosen: Option<Answer>,
 ) -> (QuestionLines, Vec<(Button, String)>) {
     use fterm_render::overlay::QuestionLook as L;
     // Names come from outside (the client, the process): one short line.
@@ -398,8 +417,10 @@ pub fn question_box(
         Place::Outside => tr!("box.access_outside"),
         Place::Config => tr!("box.access_config"),
     };
-    let keys = if always_chosen {
+    let keys = if chosen == Some(Answer::Always) {
         tr!("box.access_confirm")
+    } else if chosen == Some(Answer::Allow) {
+        tr!("box.access_confirm_allow")
     } else if !answering {
         tr!("box.access_start")
     } else if always_ok {
@@ -650,6 +671,10 @@ mod tests {
         std::time::Duration::from_secs(n)
     }
 
+    fn ms(n: u64) -> std::time::Duration {
+        std::time::Duration::from_millis(n)
+    }
+
     #[test]
     fn keys_answer_only_in_answer_mode() {
         let t = std::time::Instant::now();
@@ -658,16 +683,38 @@ mod tests {
         m.front(Some(1), t);
         assert!(!m.active(t), "a question alone takes no keys");
         assert_eq!(m.key(AnswerKey::Allow, true, t), None, "not in answer mode");
-        assert!(m.start(t) && m.active(t));
-        let k = t + ANSWER_DELAY;
+        let s = t + CLICK_WAIT;
+        assert!(m.start(s) && m.active(s));
+        let k = s + ANSWER_DELAY;
         assert_eq!(
             m.key(AnswerKey::Ignore, true, k),
             None,
             "Shift alone, or a repeat"
         );
         assert!(m.active(k));
-        assert_eq!(m.key(AnswerKey::Allow, true, k), Some(Answer::Allow));
+        assert_eq!(m.key(AnswerKey::Allow, true, k), None, "Y chooses Allow");
+        assert_eq!(m.chosen(), Some(Answer::Allow));
+        assert_eq!(
+            m.key(AnswerKey::Confirm, true, k),
+            Some(Answer::Allow),
+            "and Enter takes it"
+        );
         assert!(!m.active(k), "one answer, then it ends");
+    }
+
+    #[test]
+    fn the_chord_counts_only_when_the_box_was_there_a_moment() {
+        // An agent that times its question just before the user presses Ctrl+Shift+Enter (a new line for them).
+        let t = std::time::Instant::now();
+        let mut m = AnswerMode::default();
+        m.front(Some(1), t);
+        assert!(!m.start(t + ms(500)), "the box just came");
+        assert!(m.start(t + CLICK_WAIT));
+        m.end();
+        let back = t + secs(10);
+        m.restart_wait(back);
+        assert!(!m.start(back + ms(100)), "the window just came back");
+        assert!(m.start(back + CLICK_WAIT));
     }
 
     #[test]
@@ -675,24 +722,44 @@ mod tests {
         let t = std::time::Instant::now();
         let mut m = AnswerMode::default();
         m.front(Some(1), t);
-        m.start(t);
-        let k = t + ANSWER_DELAY;
+        let s = t + CLICK_WAIT;
+        m.start(s);
+        let k = s + ANSWER_DELAY;
         assert_eq!(m.key(AnswerKey::Always, true, k), None);
-        assert!(m.always_chosen() && m.active(k));
+        assert!(m.chosen() == Some(Answer::Always) && m.active(k));
         assert_eq!(m.key(AnswerKey::Confirm, true, k), Some(Answer::Always));
-        m.start(t);
+        m.start(s);
         assert_eq!(
             m.key(AnswerKey::Always, false, k),
             None,
             "no checked pane: no Always"
         );
-        assert!(!m.always_chosen());
+        assert_eq!(m.chosen(), None);
         assert_eq!(
             m.key(AnswerKey::Confirm, false, k),
             None,
             "Enter alone answers nothing"
         );
-        assert_eq!(m.key(AnswerKey::No, false, k), Some(Answer::No));
+        assert_eq!(
+            m.key(AnswerKey::No, false, k),
+            Some(Answer::No),
+            "No needs no Enter"
+        );
+    }
+
+    #[test]
+    fn another_key_after_a_choice_takes_it_back() {
+        // "yes" typed on after the chord: y chooses, e ends it.
+        let t = std::time::Instant::now();
+        let mut m = AnswerMode::default();
+        m.front(Some(1), t);
+        let s = t + CLICK_WAIT;
+        m.start(s);
+        let k = s + ANSWER_DELAY;
+        assert_eq!(m.key(AnswerKey::Allow, true, k), None);
+        assert_eq!(m.key(AnswerKey::Other, true, k), None);
+        assert!(!m.active(k));
+        assert_eq!(m.chosen(), None);
     }
 
     #[test]
@@ -701,13 +768,16 @@ mod tests {
         let t = std::time::Instant::now();
         let mut m = AnswerMode::default();
         m.front(Some(1), t);
-        m.start(t);
-        let soon = t + std::time::Duration::from_millis(100);
-        assert_eq!(m.key(AnswerKey::Allow, true, soon), None);
-        assert!(!m.active(soon), "typed on: answer mode ends");
-        m.start(t + secs(1));
+        let s = t + CLICK_WAIT;
+        m.start(s);
+        assert_eq!(m.key(AnswerKey::Allow, true, s + ms(100)), None);
+        assert!(!m.active(s + ms(100)), "typed on: answer mode ends");
+        assert_eq!(m.chosen(), None);
+        let s = s + secs(1);
+        m.start(s);
+        assert_eq!(m.key(AnswerKey::Allow, true, s + ANSWER_DELAY), None);
         assert_eq!(
-            m.key(AnswerKey::Allow, true, t + secs(1) + ANSWER_DELAY),
+            m.key(AnswerKey::Confirm, true, s + ANSWER_DELAY),
             Some(Answer::Allow)
         );
     }
@@ -719,10 +789,7 @@ mod tests {
         m.front(Some(1), t);
         let back = t + secs(30);
         m.restart_wait(back);
-        m.press(
-            Some(Button::Allow),
-            back + std::time::Duration::from_millis(200),
-        );
+        m.press(Some(Button::Allow), back + ms(200));
         assert_eq!(
             m.release(Some(Button::Allow)),
             None,
@@ -733,26 +800,48 @@ mod tests {
     }
 
     #[test]
+    fn a_box_that_moves_waits_for_clicks_again_but_keeps_its_keys() {
+        // A client can move the box (the dock opens): a button must not move under the mouse, and the box must not
+        // be kept from an answer by keys either.
+        let t = std::time::Instant::now();
+        let mut m = AnswerMode::default();
+        m.front(Some(1), t);
+        m.moved(7, t);
+        let s = t + secs(2);
+        assert!(m.start(s));
+        m.moved(8, s);
+        assert!(m.active(s), "keys still answer");
+        m.press(Some(Button::Allow), s + ms(300));
+        assert_eq!(
+            m.release(Some(Button::Allow)),
+            None,
+            "too soon after it moved"
+        );
+        m.press(Some(Button::Allow), s + secs(2));
+        assert_eq!(m.release(Some(Button::Allow)), Some(Answer::Allow));
+    }
+
+    #[test]
     fn answer_mode_ends_by_itself() {
         let t = std::time::Instant::now();
         let mut m = AnswerMode::default();
         m.front(Some(1), t);
-        m.start(t);
-        assert_eq!(m.key(AnswerKey::Other, true, t), None);
-        assert!(!m.active(t), "another key ends it");
-        m.start(t);
-        assert!(!m.active(t + ANSWER_TIME + secs(1)), "after a few seconds");
-        assert_eq!(m.ends_at(), Some(t + ANSWER_TIME));
-        m.start(t);
-        m.front(Some(2), t);
-        assert!(!m.active(t), "another question in front");
-        m.start(t);
-        m.front(None, t);
-        assert!(!m.active(t), "no question");
+        let s = t + CLICK_WAIT;
+        m.start(s);
+        assert_eq!(m.key(AnswerKey::Other, true, s), None);
+        assert!(!m.active(s), "another key ends it");
+        m.start(s);
+        assert!(!m.active(s + ANSWER_TIME + secs(1)), "after a few seconds");
+        assert_eq!(m.ends_at(), Some(s + ANSWER_TIME));
+        m.start(s);
+        m.front(Some(2), s);
+        assert!(!m.active(s), "another question in front");
+        m.front(None, s);
+        assert!(!m.active(s), "no question");
         m.front(Some(3), t);
-        m.start(t);
+        m.start(s);
         m.end();
-        assert!(!m.active(t), "focus lost, or a click outside");
+        assert!(!m.active(s), "focus lost, or a click outside");
     }
 
     #[test]
@@ -760,10 +849,7 @@ mod tests {
         let t = std::time::Instant::now();
         let mut m = AnswerMode::default();
         m.front(Some(1), t);
-        m.press(
-            Some(Button::Allow),
-            t + std::time::Duration::from_millis(500),
-        );
+        m.press(Some(Button::Allow), t + ms(500));
         assert_eq!(
             m.release(Some(Button::Allow)),
             None,
@@ -780,7 +866,7 @@ mod tests {
             None,
             "a new question: the wait starts again"
         );
-        m.start(t + secs(3));
+        assert!(m.start(t + secs(4)));
         m.press(None, t + secs(5));
         assert!(
             !m.active(t + secs(5)),
@@ -799,7 +885,7 @@ mod tests {
                 program: "claude.exe",
             },
         };
-        let (lines, buttons) = question_box(&checked, false, false);
+        let (lines, buttons) = question_box(&checked, false, None);
         assert!(
             lines[0].0.contains("\"claude\""),
             "the name, quoted: {lines:?}"
@@ -820,16 +906,21 @@ mod tests {
         assert_eq!(which, [Button::Allow, Button::Always, Button::No]);
         assert_eq!(buttons[1].1, "Always for this pane");
 
-        let (lines, _) = question_box(&checked, true, false);
+        let (lines, _) = question_box(&checked, true, None);
         assert!(lines.last().unwrap().0.contains("A or 2"), "{lines:?}");
-        let (lines, _) = question_box(&checked, true, true);
+        let (lines, _) = question_box(&checked, true, Some(Answer::Always));
         assert!(lines.last().unwrap().0.contains("Enter"), "{lines:?}");
+        let (lines, _) = question_box(&checked, true, Some(Answer::Allow));
+        assert!(
+            lines.last().unwrap().0.starts_with("Enter = allow"),
+            "{lines:?}"
+        );
 
         let outside = Asker {
             name: "claude",
             place: Place::Outside,
         };
-        let (lines, buttons) = question_box(&outside, true, false);
+        let (lines, buttons) = question_box(&outside, true, None);
         assert!(lines[1].0.contains("not in a pane"), "{lines:?}");
         assert_eq!(lines[1].1, L::Fact);
         assert!(!lines.last().unwrap().0.contains("A or 2"), "no Always");
@@ -843,7 +934,7 @@ mod tests {
             name: "on_agent_event",
             place: Place::Config,
         };
-        let (lines, buttons) = question_box(&hook, false, false);
+        let (lines, buttons) = question_box(&hook, false, None);
         assert!(lines[0].0.contains("on_agent_event"), "{lines:?}");
         assert!(
             !lines[0].0.contains("calls itself"),
@@ -894,7 +985,7 @@ mod tests {
     #[test]
     fn the_fact_says_the_workspace_and_a_pane_in_no_tab() {
         let fact = |place| {
-            question_box(&Asker { name: "x", place }, false, false).0[1]
+            question_box(&Asker { name: "x", place }, false, None).0[1]
                 .0
                 .clone()
         };
@@ -926,7 +1017,7 @@ mod tests {
                 program: "evil\nfterm checked: it is fine.exe and a very long name after that",
             },
         };
-        let (lines, _) = question_box(&asker, false, false);
+        let (lines, _) = question_box(&asker, false, None);
         assert!(!lines[1].0.contains('\n'), "{lines:?}");
         assert!(lines[1].0.chars().count() < 100, "{lines:?}");
     }

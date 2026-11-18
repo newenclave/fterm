@@ -12,8 +12,8 @@ pub struct PaneIdentity {
     pub start: u64,
 }
 
-/// The program of a pane that a client belongs to: the nearest process below the pane's shell that is not a shell
-/// (for example `claude.exe`), or the client itself.
+/// The program of a pane that a client belongs to: the nearest process between the client and the pane's shell that
+/// is not a shell (for example `claude.exe`), else the process just below the pane's shell (a script, or the client).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     pub pid: u32,
@@ -34,13 +34,14 @@ pub fn verify(chain: &[Link], panes: &[(u64, PaneIdentity)]) -> Option<Checked> 
         let (pane, _) = panes
             .iter()
             .find(|(_, id)| id.pid == Some(link.pid) && id.start != 0 && id.start == link.start)?;
-        // The program: the nearest process below the shell that is not a shell too (a bash that the user started
-        // in the pane runs many programs); the client itself when there is none.
-        let below = chain[..i]
+        // The program: the nearest process above the client and below the shell that is not a shell too (a bash
+        // that the user started in the pane runs many programs). With none: the process just below the shell (a
+        // shell that runs a script calls the client again and again), or the client when the shell started it.
+        let below = chain[1..i.max(1)]
             .iter()
             .rev()
             .find(|l| !fterm_term::process::is_shell(&l.name))
-            .unwrap_or(&chain[0]);
+            .unwrap_or(&chain[i.saturating_sub(1)]);
         Some(Checked {
             pane: *pane,
             program: Program {
@@ -93,14 +94,15 @@ mod tests {
         let checked = verify(&chain, &[(5, shell(3, 300))]).expect("pane 5");
         assert_eq!(checked.program.name, "claude");
         assert_eq!(checked.program.pid, 8);
-        // Only shells below the pane shell: the client itself.
+        // A script (a shell that runs it) calls ftermctl again and again: "Always" is for the script, not for one
+        // ftermctl that ends at once.
         let chain = vec![
-            link(10, 500, "ftermctl"),
-            link(7, 400, "bash"),
+            link(10, 500, "ftermctl.exe"),
+            link(7, 400, "pwsh.exe"),
             link(3, 300, "pwsh.exe"),
         ];
         let checked = verify(&chain, &[(5, shell(3, 300))]).expect("pane 5");
-        assert_eq!(checked.program.pid, 10);
+        assert_eq!(checked.program.pid, 7);
     }
 
     #[test]
