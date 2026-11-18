@@ -14,13 +14,56 @@ use crate::inbox::MAX_MESSAGE;
 use crate::waits::{Happening, WaitKind, matches, parse_kind};
 
 /// Who an API client is (from `hello`).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(super) struct ApiClient {
     pub name: String,
-    /// The pane where the client runs (`FTERM_PANE_ID` of `ftermctl`).
+    /// The pane where the client runs, as its processes show it (`None`: not in a pane of this window, or not known).
     pub pane: Option<PaneId>,
+    /// The pane that the client says it runs in (`FTERM_PANE_ID`): only the default target of a call that asks.
+    pub hint: Option<PaneId>,
+    /// The program of its pane that the client belongs to (for "Always").
+    pub program: Option<crate::identity::Program>,
     /// What the user said: may it use other panes (`None` = not asked yet).
     pub said: Option<bool>,
+    /// A `hello` came: the name and the pane stay (a pane may come later, but never change).
+    pub hello: bool,
+}
+
+impl Default for ApiClient {
+    fn default() -> Self {
+        Self {
+            name: "client".to_owned(),
+            pane: None,
+            hint: None,
+            program: None,
+            said: None,
+            hello: false,
+        }
+    }
+}
+
+impl ApiClient {
+    /// A `hello`: the first one gives the name, the hint, and the pane that the processes show. A later one may
+    /// only add a pane that was not known (a mux pane whose shell came late); it never changes the pane or the
+    /// name, and it keeps the answer of the user.
+    pub fn hello(
+        &mut self,
+        name: String,
+        hint: Option<PaneId>,
+        checked: Option<(PaneId, crate::identity::Program)>,
+    ) {
+        if !self.hello {
+            self.hello = true;
+            self.name = name;
+            self.hint = hint;
+        } else if self.pane.is_some() {
+            return;
+        }
+        if let Some((pane, program)) = checked {
+            self.pane = Some(pane);
+            self.program = Some(program);
+        }
+    }
 }
 
 /// A `wait_for` that waits.
@@ -152,6 +195,11 @@ impl App {
         }
         if request.method == "show_image" && crate::api::picture_wait(&request.params) {
             return self.api_show_image_wait(request);
+        }
+        if request.method == "hello" {
+            let result = self.api_hello(request.client, &request.params, request.chain.as_deref());
+            let _ = request.reply.send(result);
+            return;
         }
         let result =
             self.api_dispatch(event_loop, request.client, &request.method, &request.params);
@@ -530,7 +578,7 @@ impl App {
         params: &Value,
     ) -> Result<Value, RpcError> {
         match method {
-            "hello" => self.api_hello(client, params),
+            "hello" => self.api_hello(client, params, None),
             "list" => Ok(self.api_list()),
             "spawn" => self.api_spawn(client, params),
             "scene_open" => self.api_scene_open(client, params),
@@ -666,21 +714,39 @@ impl App {
         }
     }
 
-    fn api_hello(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
-        let name = str_param(params, "name")?.unwrap_or_else(|| "client".to_owned());
-        let pane = pane_param(params, "pane")?.map(PaneId).filter(|p| {
-            self.running
-                .as_ref()
-                .is_some_and(|r| r.panes.contains_key(p))
-        });
-        self.api_clients.insert(
-            client,
-            ApiClient {
-                name,
-                pane,
-                said: None,
-            },
-        );
+    /// `hello`: who the client is. Its pane is the one that its processes show (`chain`); the `pane` that it says
+    /// is only a hint.
+    fn api_hello(
+        &mut self,
+        client: ClientId,
+        params: &Value,
+        chain: Option<&[fterm_term::process::Link]>,
+    ) -> Result<Value, RpcError> {
+        let name = crate::api::client_name(str_param(params, "name")?.as_deref());
+        let running = self.running.as_ref().expect("checked in api_call");
+        let hint = pane_param(params, "pane")?
+            .map(PaneId)
+            .filter(|p| running.panes.contains_key(p));
+        // The panes with a live shell of this machine.
+        let shells: Vec<(u64, crate::identity::PaneIdentity)> = running
+            .panes
+            .iter()
+            .filter(|(_, p)| p.identity.pid.is_some() && p.session.exit_code().is_none())
+            .map(|(id, p)| (id.0, p.identity))
+            .collect();
+        let checked = chain
+            .and_then(|c| crate::identity::verify(c, &shells))
+            .map(|c| (PaneId(c.pane), c.program));
+        let record = self.api_clients.entry(client).or_default();
+        record.hello(name, hint, checked);
+        let pane = record.pane;
+        if pane.is_none() && hint.is_some() {
+            tracing::info!(
+                client,
+                ?hint,
+                "a client says a pane that its processes do not show"
+            );
+        }
         Ok(json!({
             "api_version": fterm_api::API_VERSION,
             "fterm": env!("CARGO_PKG_VERSION"),
@@ -688,6 +754,7 @@ impl App {
             "methods": METHODS,
             "events": crate::api::EVENTS,
             "pane": pane.map(|p| p.0),
+            "proof": pane.map(|_| "process"),
         }))
     }
 
@@ -696,10 +763,12 @@ impl App {
         let running = self.running.as_ref().expect("checked in api_call");
         let pane = match pane_param(params, "pane")? {
             Some(id) => PaneId(id),
+            // The checked pane of the client, else the pane it says (a call that needs a yes still asks), else the
+            // active pane.
             None => self
                 .api_clients
                 .get(&client)
-                .and_then(|c| c.pane)
+                .and_then(|c| c.pane.or(c.hint))
                 .or_else(|| running.mux.active_pane())
                 .ok_or_else(|| not_found("pane"))?,
         };
@@ -855,7 +924,10 @@ impl App {
         // user is in another tab), else next to the active one. The new pane never takes the keys of the user.
         let next_to = match pane_param(params, "pane")?.map(PaneId) {
             Some(pane) => Some(pane),
-            None => self.api_clients.get(&client).and_then(|c| c.pane),
+            None => self
+                .api_clients
+                .get(&client)
+                .and_then(|c| c.pane.or(c.hint)),
         };
         let running = self.running.as_ref().expect("checked in api_call");
         let next_to = match next_to {
@@ -1425,5 +1497,58 @@ impl App {
             running.window.request_redraw();
         }
         Ok(json!({ "id": id }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn program(pid: u32) -> crate::identity::Program {
+        crate::identity::Program {
+            pid,
+            start: 100,
+            name: "claude.exe".into(),
+        }
+    }
+
+    #[test]
+    fn the_first_hello_says_who_a_client_is() {
+        let mut c = ApiClient::default();
+        c.hello(
+            "claude".into(),
+            Some(PaneId(9)),
+            Some((PaneId(3), program(7))),
+        );
+        assert_eq!(
+            (c.name.as_str(), c.pane, c.hint),
+            ("claude", Some(PaneId(3)), Some(PaneId(9)))
+        );
+        assert_eq!(c.program, Some(program(7)));
+        c.said = Some(true);
+        // A second hello: another name or another pane changes nothing, and the answer stays.
+        c.hello(
+            "other".into(),
+            Some(PaneId(4)),
+            Some((PaneId(4), program(8))),
+        );
+        assert_eq!(
+            (c.name.as_str(), c.pane, c.hint),
+            ("claude", Some(PaneId(3)), Some(PaneId(9)))
+        );
+        assert_eq!((c.program, c.said), (Some(program(7)), Some(true)));
+    }
+
+    #[test]
+    fn a_pane_that_was_not_known_may_come_later() {
+        let mut c = ApiClient::default();
+        c.hello("claude".into(), Some(PaneId(9)), None);
+        assert_eq!(c.pane, None);
+        c.hello(
+            "claude".into(),
+            Some(PaneId(9)),
+            Some((PaneId(9), program(7))),
+        );
+        assert_eq!((c.pane, c.program), (Some(PaneId(9)), Some(program(7))));
     }
 }

@@ -80,18 +80,54 @@ pub struct ApiRequest {
     pub reply: mpsc::Sender<Result<Value, RpcError>>,
     /// When the call came (the time of a dialog counts from it, also when it waited for the access question).
     pub asked: std::time::Instant,
+    /// `hello`: the process of the client and its parents (`None` = its process is not known).
+    pub chain: Option<Vec<fterm_term::process::Link>>,
 }
 
 /// The server calls this on the client threads. It passes each request to the event loop and waits.
 pub struct Bridge {
     proxy: Mutex<EventLoopProxy<UserEvent>>,
+    /// The process of each client (id, start time), as it connected.
+    peers: Mutex<std::collections::HashMap<ClientId, (u32, u64)>>,
+    /// The process table for the walks (a snapshot at most a second old).
+    processes: Mutex<fterm_term::process::Processes>,
 }
+
+/// The longest chain of parents that a walk looks at.
+const MAX_CHAIN: usize = 32;
 
 impl Bridge {
     pub fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
         Self {
             proxy: Mutex::new(proxy),
+            peers: Mutex::default(),
+            processes: Mutex::default(),
         }
+    }
+
+    /// The process of `client` and its parents (on the client thread, not on the window thread).
+    fn chain(&self, client: ClientId) -> Option<Vec<fterm_term::process::Link>> {
+        let (pid, start) = *self.peers.lock().ok()?.get(&client)?;
+        let started = std::time::Instant::now();
+        let chain = self.processes.lock().ok()?.chain(pid, start, MAX_CHAIN);
+        tracing::debug!(
+            client,
+            pid,
+            links = chain.len(),
+            ms = started.elapsed().as_millis() as u64,
+            "the processes of a client"
+        );
+        Some(chain)
+    }
+}
+
+/// The name that a client gives in `hello`, for the UI: one line, at most 32 cells, "client" when it gives none.
+pub fn client_name(name: Option<&str>) -> String {
+    let line = fterm_ui::text::one_line(name.unwrap_or_default());
+    let name = fterm_ui::text::fit(&line, 32);
+    match name.trim_end() {
+        "" => "client".to_owned(),
+        name => name.to_owned(),
     }
 }
 
@@ -99,12 +135,15 @@ impl Handler for Bridge {
     fn call(&self, client: ClientId, method: &str, params: Value) -> Result<Value, RpcError> {
         let wait = timeout_for(method, &params);
         let (reply, answer) = mpsc::channel();
+        // `hello`: the process tree says which pane the client runs in.
+        let chain = (method == "hello").then(|| self.chain(client)).flatten();
         let request = ApiRequest {
             client,
             method: method.to_owned(),
             params,
             reply,
             asked: std::time::Instant::now(),
+            chain,
         };
         let sent = self
             .proxy
@@ -123,8 +162,29 @@ impl Handler for Bridge {
     }
 
     fn disconnected(&self, client: ClientId) {
+        if let Ok(mut peers) = self.peers.lock() {
+            peers.remove(&client);
+        }
         if let Ok(proxy) = self.proxy.lock() {
             let _ = proxy.send_event(UserEvent::ApiGone(client));
+        }
+    }
+
+    fn connected(&self, client: ClientId, peer_pid: Option<u32>) {
+        // fterm itself is no client of a pane.
+        let Some(pid) = peer_pid.filter(|p| *p != std::process::id()) else {
+            return;
+        };
+        // A look of its own (not under the lock of the walks): the start time of the process that connected.
+        let Some(start) = fterm_term::process::Processes::new()
+            .fresh(pid)
+            .map(|p| p.start)
+            .filter(|s| *s != 0)
+        else {
+            return;
+        };
+        if let Ok(mut peers) = self.peers.lock() {
+            peers.insert(client, (pid, start));
         }
     }
 }
@@ -560,6 +620,24 @@ mod tests {
             timeout_for("review", &json!({"timeout_ms": 1000})),
             std::time::Duration::from_secs(1 + 120)
         );
+    }
+
+    #[test]
+    fn a_client_name_is_one_line_of_32_cells() {
+        assert_eq!(client_name(Some("claude")), "claude");
+        assert_eq!(client_name(Some("a\nb")), "a b");
+        assert_eq!(
+            client_name(Some(&"x".repeat(40))).chars().count(),
+            32,
+            "cut"
+        );
+        assert_eq!(
+            fterm_ui::text::cells(&client_name(Some(&"\u{4e2d}".repeat(40)))),
+            32,
+            "wide chars count 2"
+        );
+        assert_eq!(client_name(Some("   ")), "client");
+        assert_eq!(client_name(None), "client");
     }
 
     #[test]

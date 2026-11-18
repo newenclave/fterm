@@ -105,6 +105,7 @@ impl App {
                 agent_row: None,
                 pictures: Default::default(),
                 picture_pane: None,
+                identity: Default::default(),
                 last_command: None,
                 remote: true,
                 opened_by: None,

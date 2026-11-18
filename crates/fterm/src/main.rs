@@ -16,6 +16,7 @@ mod env;
 mod gpu;
 mod hints;
 mod history_popup;
+mod identity;
 mod inbox;
 mod input;
 mod link_open;

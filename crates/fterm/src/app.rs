@@ -174,6 +174,9 @@ struct Pane {
     pictures: crate::pictures::PictureStore,
     /// A picture pane: its picture (with its marks) fills the pane; there is no program.
     picture_pane: Option<Box<markup_calls::PicturePane>>,
+    /// Its shell as a process (id and start time): an API client whose nearest parent is this process runs in this
+    /// pane. None for a pane with no shell of this machine.
+    identity: crate::identity::PaneIdentity,
 }
 
 /// Everything that exists only while the window is open.
@@ -2162,6 +2165,7 @@ impl App {
                 profile: None,
                 rerun: None,
                 intro_lines: 0,
+                identity: Default::default(),
                 scene: Some(std::sync::Mutex::new(scene)),
                 review: None,
                 form: None,
@@ -2209,6 +2213,7 @@ impl App {
                 agent_row: None,
                 pictures: Default::default(),
                 picture_pane: Some(Box::new(markup_calls::PicturePane::new(picture, origin))),
+                identity: Default::default(),
                 last_command: None,
                 remote: true,
                 opened_by: None,
@@ -2531,6 +2536,7 @@ impl App {
         } else {
             Session::spawn(options, size, cell, on_event)?
         };
+        let identity = self.pane_identity(&session, mux.as_ref());
         let running = self.running.as_mut().expect("the window is open");
         tracing::info!(
             pane = id.0,
@@ -2554,6 +2560,7 @@ impl App {
                 agent_row: None,
                 pictures: Default::default(),
                 picture_pane: None,
+                identity,
                 last_command: None,
                 remote: true,
                 opened_by: None,

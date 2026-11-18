@@ -97,6 +97,32 @@ impl App {
 
     /// The connection to the mux server `remote` (`LOCAL` or a remote name). For the local server `start` = start
     /// it when it is not there; a remote is connected when it is not yet (with a toast on an error).
+    /// The shell of a new pane as a process. A local pane: its child, whose process id can not be taken by another
+    /// process while the pane lives (fterm holds the handle of the child). A mux pane: what its server says (only
+    /// the local server: a process id of another machine means nothing here).
+    pub(super) fn pane_identity(
+        &mut self,
+        session: &Session,
+        mux: Option<&MuxPane>,
+    ) -> crate::identity::PaneIdentity {
+        match mux {
+            Some(m) => {
+                let shell = self.muxes.get(&m.remote).and_then(|c| c.shell(m.id));
+                mux_identity(&m.remote, shell)
+            }
+            None => session
+                .pid()
+                .and_then(|pid| {
+                    let start = fterm_term::process::Processes::new().fresh(pid)?.start;
+                    Some(crate::identity::PaneIdentity {
+                        pid: Some(pid),
+                        start,
+                    })
+                })
+                .unwrap_or_default(),
+        }
+    }
+
     pub(super) fn mux_client(&mut self, remote: &str, start: bool) -> Option<Arc<MuxClient>> {
         if let Some(client) = self.muxes.get(remote) {
             return Some(client.clone());
@@ -211,6 +237,7 @@ impl App {
                 return None;
             }
         };
+        let identity = mux_identity(remote, client.shell(rid));
         let running = self.running.as_mut()?;
         let id = running.mux.new_pane_id();
         let options = SessionOptions {
@@ -242,6 +269,7 @@ impl App {
                 agent_row: None,
                 pictures: Default::default(),
                 picture_pane: None,
+                identity,
                 last_command: None,
                 remote: true,
                 opened_by: None,
@@ -683,4 +711,32 @@ impl App {
 fn start_server() -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
     fterm_server::spawn_detached(&exe, &["--mux-server"])
+}
+
+/// The shell of a mux pane, from what its server says: only for the local server.
+fn mux_identity(remote: &str, shell: Option<(u32, u64)>) -> crate::identity::PaneIdentity {
+    match shell {
+        Some((pid, start)) if remote == LOCAL => crate::identity::PaneIdentity {
+            pid: Some(pid),
+            start,
+        },
+        _ => crate::identity::PaneIdentity::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_local_mux_server_says_a_shell_of_this_machine() {
+        let local = mux_identity(LOCAL, Some((42, 1000)));
+        assert_eq!((local.pid, local.start), (Some(42), 1000));
+        assert_eq!(
+            mux_identity("server1", Some((42, 1000))).pid,
+            None,
+            "another machine"
+        );
+        assert_eq!(mux_identity(LOCAL, None).pid, None, "an older server");
+    }
 }
