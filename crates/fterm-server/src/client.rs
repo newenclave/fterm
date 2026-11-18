@@ -32,6 +32,8 @@ struct Panes {
     handlers: HashMap<u64, Handlers>,
     /// Output of a pane that has no handlers yet (right after spawn or attach).
     early: HashMap<u64, Vec<u8>>,
+    /// Panes whose program ended before they had handlers: the end comes with the handlers.
+    ended: std::collections::HashSet<u64>,
     /// The snapshot of an attach, until its answer comes.
     snapshots: HashMap<u64, Vec<u8>>,
     /// The shell of each pane (process id, start time), as spawn and attach said it.
@@ -228,7 +230,15 @@ impl MuxClient {
                     }
                 }
                 Ok(ServerMsg::Exit { pane }) => {
-                    let h = self.panes.lock().unwrap().handlers.remove(&pane);
+                    let h = {
+                        let mut panes = self.panes.lock().unwrap();
+                        let h = panes.handlers.remove(&pane);
+                        if h.is_none() {
+                            // A program that ended at once: before the answer of spawn and the handlers.
+                            panes.ended.insert(pane);
+                        }
+                        h
+                    };
                     if let Some(h) = h {
                         (h.exit)();
                     }
@@ -318,12 +328,20 @@ impl MuxClient {
         if let Some(early) = panes.early.remove(&pane) {
             (handlers.output)(&early);
         }
+        if panes.ended.remove(&pane) {
+            drop(panes);
+            (handlers.exit)();
+            return;
+        }
         panes.handlers.insert(pane, handlers);
     }
 
     /// The window lets the pane go; its program goes on.
     pub fn detach(&self, pane: u64) {
-        self.panes.lock().unwrap().handlers.remove(&pane);
+        let mut panes = self.panes.lock().unwrap();
+        panes.handlers.remove(&pane);
+        panes.ended.remove(&pane);
+        drop(panes);
         let _ = self.send(&Request::Detach { id: 0, pane });
     }
 

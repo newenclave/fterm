@@ -157,6 +157,28 @@ fn the_end_of_a_program_comes_to_the_window() {
 }
 
 #[test]
+fn an_end_that_comes_before_the_window_listens_is_kept() {
+    // A program that ends at once can end before the window has its handlers (right after spawn): its output and
+    // its end wait for them.
+    let (server, client) = start("early-end");
+    let spawn = Spawn {
+        program: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.to_owned()),
+        args: if cfg!(windows) {
+            vec!["/c".into(), "echo early".into()]
+        } else {
+            vec!["-c".into(), "echo early".into()]
+        },
+        scrollback: 10,
+        ..Spawn::default()
+    };
+    let (pane, _) = client.spawn(spawn, GridSize::new(40, 5)).expect("spawn");
+    wait("the program to end", || server.pane_count() == 0);
+    let (out, ended) = collect(&client, pane);
+    wait("the end", || *ended.lock().unwrap());
+    assert!(String::from_utf8_lossy(&out.lock().unwrap()).contains("early"));
+}
+
+#[test]
 fn the_layout_is_kept_for_the_next_window() {
     let (_server, client) = start("layout");
     assert_eq!(client.layout().unwrap(), None);
