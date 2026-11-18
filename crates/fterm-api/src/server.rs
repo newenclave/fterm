@@ -23,6 +23,12 @@ pub trait Handler: Send + Sync + 'static {
     fn disconnected(&self, client: ClientId) {
         let _ = client;
     }
+
+    /// A client connected: the process id of the program at the other end, when the system says it. It comes
+    /// before any call of that client.
+    fn connected(&self, client: ClientId, peer_pid: Option<u32>) {
+        let _ = (client, peer_pid);
+    }
 }
 
 /// A running server. Clone it to send events from any thread.
@@ -63,6 +69,8 @@ impl Server {
                         continue;
                     };
                     let id = inner.next_id.fetch_add(1, Ordering::SeqCst);
+                    // Before any call of this client (its thread starts below).
+                    handler.connected(id, crate::transport::peer_pid(&stream));
                     let (recv, send) = crate::transport::halves(stream);
                     let writer: Arc<Mutex<Box<dyn Write + Send>>> =
                         Arc::new(Mutex::new(Box::new(send)));

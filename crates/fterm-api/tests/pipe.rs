@@ -175,6 +175,45 @@ fn a_closed_client_is_noticed() {
     );
 }
 
+/// A handler that writes down what it hears, in order.
+#[derive(Default)]
+struct Recorder {
+    heard: Mutex<Vec<String>>,
+}
+
+impl Handler for Recorder {
+    fn connected(&self, client: ClientId, peer_pid: Option<u32>) {
+        self.heard
+            .lock()
+            .unwrap()
+            .push(format!("connected {client} {peer_pid:?}"));
+    }
+
+    fn call(&self, client: ClientId, _method: &str, _params: Value) -> Result<Value, RpcError> {
+        self.heard.lock().unwrap().push(format!("call {client}"));
+        Ok(json!(client))
+    }
+}
+
+#[test]
+fn the_handler_hears_the_process_of_a_client_first() {
+    let handler = Arc::new(Recorder::default());
+    let server = Server::start(&unique_name(), handler.clone()).expect("the server starts");
+    let id = Client::connect(server.name())
+        .unwrap()
+        .call("who", Value::Null)
+        .unwrap();
+    let heard = handler.heard.lock().unwrap().clone();
+    assert_eq!(
+        heard,
+        [
+            format!("connected {id} Some({})", std::process::id()),
+            format!("call {id}"),
+        ],
+        "the client is this process, and the server says so before its first call"
+    );
+}
+
 /// A handler whose `wait` call waits until its client is gone (or 5 seconds), like a Review or a form.
 #[derive(Default)]
 struct Waiter {

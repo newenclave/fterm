@@ -25,6 +25,23 @@ impl io::Write for Half {
     }
 }
 
+/// The process id of the program at the other end of an accepted connection, when the system gives it (it is
+/// read at once: a process id names a process only while that process lives). `None` on errors and for pid 0.
+/// Windows: the client of the named pipe (the listener takes no clients from other machines: interprocess rejects
+/// remote pipe clients by default, and this must stay so). Linux: `SO_PEERCRED`. macOS: `LOCAL_PEERPID`.
+pub fn peer_pid(stream: &Stream) -> Option<u32> {
+    #[cfg(target_os = "macos")]
+    let pid = {
+        let Stream::UdSocket(socket) = stream;
+        nix::sys::socket::getsockopt(socket.inner(), nix::sys::socket::sockopt::LocalPeerPid).ok()
+    };
+    #[cfg(not(target_os = "macos"))]
+    let pid = stream.peer_creds().ok().and_then(|creds| creds.pid());
+    // A u32 on Windows, an i32 on unix.
+    pid.and_then(|p| u32::try_from(i64::from(p)).ok())
+        .filter(|p| *p != 0)
+}
+
 /// The two sides of a stream: (to read, to write).
 pub fn halves(stream: Stream) -> (Half, Half) {
     let shared = std::sync::Arc::new(stream);

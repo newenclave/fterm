@@ -14,5 +14,11 @@ serde_json.workspace = true
 [target.'cfg(windows)'.dependencies]
 widestring.workspace = true
 
+# macOS gives the process id of a unix socket peer only through LOCAL_PEERPID (interprocess does not read it).
+# Checked 2026-11-18: nix-rust organization, MIT, widely used; build.rs only sets cfg aliases; deps bitflags,
+# cfg-if, libc, memoffset; the call is the safe `getsockopt(&fd, sockopt::LocalPeerPid)`.
+[target.'cfg(target_os = "macos")'.dependencies]
+nix = { version = "0.32", default-features = false, features = ["socket"] }
+
 [lints]
 workspace = true
