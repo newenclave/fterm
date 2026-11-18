@@ -34,6 +34,8 @@ struct Panes {
     early: HashMap<u64, Vec<u8>>,
     /// The snapshot of an attach, until its answer comes.
     snapshots: HashMap<u64, Vec<u8>>,
+    /// The shell of each pane (process id, start time), as spawn and attach said it.
+    shells: HashMap<u64, (u32, u64)>,
 }
 
 /// The process of a connect command (`ssh ... ftermctl mux proxy`), and the last lines of its stderr.
@@ -275,12 +277,33 @@ impl MuxClient {
     pub fn spawn(&self, spawn: Spawn, size: GridSize) -> Result<(u64, String), String> {
         let (reply, _) = self.call(|id| Request::Spawn { id, spawn, size })?;
         let pane = reply.pane.ok_or("no pane in the answer")?;
+        self.note_shell(pane, &reply);
         Ok((pane, reply.program.unwrap_or_default()))
+    }
+
+    /// The shell of `pane` (process id, start time), as the last spawn or attach of it said; `None` from an older
+    /// server.
+    pub fn shell(&self, pane: u64) -> Option<(u32, u64)> {
+        self.panes.lock().unwrap().shells.get(&pane).copied()
+    }
+
+    /// Keeps the shell that an answer says for `pane`.
+    fn note_shell(&self, pane: u64, reply: &Reply) {
+        let mut panes = self.panes.lock().unwrap();
+        match (reply.shell_pid, reply.shell_start) {
+            (Some(pid), Some(start)) if pid != 0 && start != 0 => {
+                panes.shells.insert(pane, (pid, start));
+            }
+            _ => {
+                panes.shells.remove(&pane);
+            }
+        }
     }
 
     /// Takes a pane: its snapshot, what it knows, its program, and the size of its Term on the server.
     pub fn attach(&self, pane: u64) -> Result<(Vec<u8>, Meta, String, GridSize), String> {
         let (reply, snapshot) = self.call(|id| Request::Attach { id, pane })?;
+        self.note_shell(pane, &reply);
         Ok((
             snapshot.unwrap_or_default(),
             reply.meta.unwrap_or_default(),

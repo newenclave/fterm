@@ -153,6 +153,12 @@ pub struct Reply {
     pub size: Option<GridSize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
+    /// The shell of the pane (spawn, attach): its process id and start time, so the window can check which pane
+    /// an API client runs in. Older servers do not send them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_start: Option<u64>,
 }
 
 impl Reply {
@@ -167,6 +173,8 @@ impl Reply {
             layout: None,
             size: None,
             version: None,
+            shell_pid: None,
+            shell_start: None,
         }
     }
 
@@ -219,6 +227,24 @@ mod tests {
         let text = serde_json::to_string(&m).unwrap();
         assert!(!text.contains("error"), "no empty fields: {text}");
         assert_eq!(serde_json::from_str::<ServerMsg>(&text).unwrap(), m);
+    }
+
+    #[test]
+    fn an_answer_says_the_shell_of_a_pane() {
+        let m = ServerMsg::reply(Reply {
+            pane: Some(9),
+            shell_pid: Some(4242),
+            shell_start: Some(1_700_000_000),
+            ..Reply::ok(3)
+        });
+        let text = serde_json::to_string(&m).unwrap();
+        assert_eq!(serde_json::from_str::<ServerMsg>(&text).unwrap(), m);
+        // An older server says nothing about it.
+        let old: ServerMsg = serde_json::from_str(r#"{"kind":"reply","id":3,"pane":9}"#).unwrap();
+        let ServerMsg::Reply(reply) = old else {
+            panic!("a reply")
+        };
+        assert_eq!((reply.shell_pid, reply.shell_start), (None, None));
     }
 
     #[test]

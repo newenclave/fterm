@@ -87,6 +87,12 @@ fn a_pane_lives_on_without_a_window_and_comes_back() {
     let size = GridSize::new(60, 10);
     let (pane, program) = client.spawn(shell(), size).expect("spawn");
     assert!(!program.is_empty());
+    // The shell of the pane (its process id and start time): the window checks API clients by it.
+    let shell_of_pane = client.shell(pane).expect("the server says the shell");
+    assert!(
+        shell_of_pane.0 != 0 && shell_of_pane.1 != 0,
+        "{shell_of_pane:?}"
+    );
     let (out, _) = collect(&client, pane);
     client.write(pane, b"echo mux-one\r");
     wait("the first output", || {
@@ -104,6 +110,11 @@ fn a_pane_lives_on_without_a_window_and_comes_back() {
     // A window takes it again: the snapshot has all of it.
     let (snapshot, _meta, _, server_size) = client.attach(pane).expect("attach");
     assert_eq!(server_size, size);
+    assert_eq!(
+        client.shell(pane),
+        Some(shell_of_pane),
+        "the same shell after attach"
+    );
     let mut term = Term::new(
         Config {
             scrolling_history: 100,
