@@ -246,8 +246,8 @@ C comments, E changes the text, A adds an item, D removes, Shift + O marks the r
 ## A question of the API
 When a program wants to use a pane that is not its own, a box at the top of the panes asks you (see
 [API.md](API.md#the-question)). The box does not take your keys: you can go on typing. To answer, press
-**Ctrl+Shift+Enter**, wait a moment, then **Y** or **1** (allow), **A** or **2** and **Enter** (always for this
-pane), or **N**, **3**, or **Esc** (no). Or click a button. A warning about a guard of the config works the same way, but only a
+**Ctrl+Shift+Enter**, wait a moment, then **Y** or **1** and **Enter** (allow), **A** or **2** and **Enter**
+(always for this pane), or **N**, **3**, or **Esc** (no). Or click a button. A warning about a guard of the config works the same way, but only a
 click turns the guard off.
 
 ## The dock and its panels

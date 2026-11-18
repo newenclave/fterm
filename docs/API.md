@@ -51,13 +51,16 @@ fterm asks in a box at the top of the panes:
 
 - The first line has the name from `hello`. A program can give any name. The second line, in another color, is
   what fterm found itself: the tab (and its workspace) and the program, or "it is not in a pane of this window".
-  The program is the first program below the shell of the pane that is not a shell itself.
+  The program is the one in the pane that runs the client: the first program below the shell of the pane that is
+  not a shell itself, or the shell that runs a script (when the script runs the client).
 - **The box does not take your typing.** Your keys go to your pane as before. To answer, press
-  **Ctrl+Shift+Enter**, wait a moment, then press a key: **Y** or **1** = allow, **A** or **2** and then
-  **Enter** = always, **N**, **3**, or **Esc** = no. A key in the first 0.3 seconds, another key, or 5 seconds
-  with no key ends this with no answer (so typing on after Ctrl+Shift+Enter, a new line in some programs, answers
-  nothing). Shift with a digit is no answer. (In the AI panel, Ctrl+Shift+Enter is a key of the panel: click a
-  button there.)
+  **Ctrl+Shift+Enter**, wait a moment, then press **Y** or **1** and **Enter** = allow, **A** or **2** and
+  **Enter** = always, or **N**, **3**, or **Esc** = no.
+  - Ctrl+Shift+Enter counts only one second after the box comes or the window comes back to the front. Before
+    that, it goes to your program, as with no box (it is a new line in some programs).
+  - A key in the first 0.3 seconds, another key, or 5 seconds with no key ends this with no answer. A key with
+    Shift is no answer. So text that you type on ("yes", "1.") answers nothing.
+  - In the AI panel, Ctrl+Shift+Enter is a key of the panel: click a button there.
 - Or click a button. A click counts only one second after the box comes, changes, or moves (the dock opens, the
   window or the font changes size), and after the window comes back to the front.
 - **Allow** is for this connection.
@@ -102,6 +105,10 @@ Known gaps:
 - On Linux and macOS with no `XDG_RUNTIME_DIR`, the instance files are in the temp folder.
 - A program in tmux or screen, or one started with `nohup` or `setsid`, often has no pane: it asks, and its agent
   hooks do nothing. The same is true for every program in WSL (see "Your pane").
+- fterm's own WSL profiles start `wsl.exe`. A pane of yours that starts WSL in another way (`ubuntu.exe`,
+  `bash.exe` of Windows) may let a program in another WSL pane pass as that pane: use `wsl.exe -d <distro>`.
+- A pane whose own program is `ftermctl mux serve` counts as the pane of the programs in that server's panes that
+  this window does not show.
 
 ## ftermctl
 `ftermctl` is a small console program next to `fterm.exe` (fterm.exe is a window program, so a shell does not

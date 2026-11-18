@@ -37,7 +37,7 @@ claude mcp add --scope user fterm -- ftermctl.exe mcp
 
 In WSL, fterm can not tell which pane an agent runs in (see [API.md](API.md#who-may-do-what)). So an agent there
 asks you also for its own pane, and the `ftermctl` hooks (the Agents panel, the cost) do nothing. The agent
-states of the hooks (the dots on the tabs) still work.
+states (the dots on the tabs) work only with the `echo` hooks of [hooks.json](../assets/claude/hooks.json).
 
 **OpenCode**: in `opencode.json` (in the project, or `~/.config/opencode/opencode.json` for all projects):
 
@@ -102,8 +102,8 @@ fterm checks which pane the agent runs in: it looks at the parent processes of `
 `FTERM_PANE_ID`. The first time an agent wants to read or type into a pane that is **not its own** (or opens a new
 pane), fterm asks you in a box at the top of the panes. The box says the name that the agent gave, and what fterm
 checked itself: the tab and the program (for example `claude.exe`), or that it is not in a pane of this window.
-- The box does not take your typing. Press **Ctrl+Shift+Enter**, wait a moment, and then press **Y** (allow),
-  **A** and **Enter** (always), or **N** (no). Or click a button.
+- The box does not take your typing. Press **Ctrl+Shift+Enter**, wait a moment, and then press **Y** and
+  **Enter** (allow), **A** and **Enter** (always), or **N** (no). Or click a button.
 - **Allow** is for this connection. **Always for this pane** is for this program in this pane, until it ends.
   **No** stops the next questions of that pane (and of all agents with no pane) for one minute.
 - An agent that fterm can not find in a pane (for example in tmux) asks for every pane, its pictures open in a

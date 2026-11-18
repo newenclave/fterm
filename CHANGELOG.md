@@ -68,8 +68,9 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   the `wsl.exe` of another pane) asks for every pane, and fterm drops its agent hooks.
 - **The access question no longer takes your keys.** Before, Enter in a shell could say yes to a question that
   came a moment before. Now the question is a box at the top of the panes, and your typing goes on to your pane.
-  Ctrl+Shift+Enter, a short wait, and then Y, A, or N answers it. Or click a button: a click counts one second
-  after the box comes or moves, and after the window comes back. The box shows what fterm checked: the tab and the
+  Ctrl+Shift+Enter, a short wait, and then Y and Enter, A and Enter, or N answers it (Ctrl+Shift+Enter counts one
+  second after the box comes). Or click a button: a click counts one second after the box comes or moves, and after
+  the window comes back. The box shows what fterm checked: the tab and the
   program, or "not in a pane of this window".
 - **"Always" is for one program in one pane**, until it ends (before: for a client name until fterm closes; any
   program can give any name). A **No** stops the next questions of that pane, and of programs with no pane, for
