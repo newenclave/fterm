@@ -135,18 +135,223 @@ pub fn owns(method: &str, its_pane: bool, opened_it: bool) -> bool {
     its_pane || (opened_it && !matches!(method, "review" | "form" | "show_image"))
 }
 
-/// The lines of the question box.
-pub fn question(name: &str, tab: Option<usize>) -> Vec<String> {
-    let who = match tab {
-        Some(tab) => tr!("box.in_tab", what = name, tab = tab),
-        None => name.to_owned(),
+/// An answer to the access question.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    Allow,
+    Always,
+    No,
+}
+
+/// A button of the question box.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Button {
+    Allow,
+    Always,
+    No,
+}
+
+/// A key while the question is answered (the app makes it from the key of winit).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnswerKey {
+    /// Y or 1.
+    Allow,
+    /// A or 2 (then Enter).
+    Always,
+    /// N, 3, or Esc.
+    No,
+    /// Enter.
+    Confirm,
+    /// Shift or another key alone, or a key that repeats: nothing happens.
+    Ignore,
+    /// Any other key: answer mode ends.
+    Other,
+}
+
+/// The access question is answered on purpose: it never takes the keys of the user. A chord (or a click on a
+/// button) starts answer mode for the question in front; it ends after one answer, when that question changes or
+/// goes, on a click outside the box, when the window loses the focus, or after a few seconds.
+#[derive(Debug, Default)]
+pub struct AnswerMode {
+    /// The question in front and when it came (clicks count a moment later).
+    front: Option<(u64, std::time::Instant)>,
+    /// Answer mode is on, since (the last key).
+    on: Option<std::time::Instant>,
+    /// "Always" was chosen: Enter takes it.
+    always: bool,
+    /// A button that the mouse pressed.
+    pressed: Option<Button>,
+}
+
+/// How long answer mode stays with no key.
+pub const ANSWER_TIME: std::time::Duration = std::time::Duration::from_secs(5);
+/// A click on a button counts only this long after the box came or changed.
+pub const CLICK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+impl AnswerMode {
+    /// The question in front is `question` now (`None`: no question). Another question ends answer mode.
+    pub fn front(&mut self, question: Option<u64>, now: std::time::Instant) {
+        if self.front.map(|(id, _)| id) != question {
+            self.front = question.map(|id| (id, now));
+            self.end();
+            self.pressed = None;
+        }
+    }
+
+    /// The chord: answer mode for the question in front. `false` when there is no question.
+    pub fn start(&mut self, now: std::time::Instant) -> bool {
+        if self.front.is_none() {
+            return false;
+        }
+        self.on = Some(now);
+        self.always = false;
+        true
+    }
+
+    pub fn active(&self, now: std::time::Instant) -> bool {
+        self.front.is_some()
+            && self
+                .on
+                .is_some_and(|at| now.saturating_duration_since(at) <= ANSWER_TIME)
+    }
+
+    /// "Always" was chosen and waits for Enter.
+    pub fn always_chosen(&self) -> bool {
+        self.always
+    }
+
+    pub fn end(&mut self) {
+        self.on = None;
+        self.always = false;
+    }
+
+    /// A key in answer mode. `always_ok`: the question offers "Always" (a client with a checked pane).
+    pub fn key(
+        &mut self,
+        key: AnswerKey,
+        always_ok: bool,
+        now: std::time::Instant,
+    ) -> Option<Answer> {
+        if !self.active(now) {
+            return None;
+        }
+        match key {
+            AnswerKey::Ignore => None,
+            AnswerKey::Allow => {
+                self.end();
+                Some(Answer::Allow)
+            }
+            AnswerKey::No => {
+                self.end();
+                Some(Answer::No)
+            }
+            AnswerKey::Always => {
+                if always_ok {
+                    self.always = true;
+                    self.on = Some(now);
+                }
+                None
+            }
+            AnswerKey::Confirm if self.always => {
+                self.end();
+                Some(Answer::Always)
+            }
+            AnswerKey::Confirm => None,
+            AnswerKey::Other => {
+                self.end();
+                None
+            }
+        }
+    }
+
+    /// The mouse went down on `button` (`None`: outside the box).
+    pub fn press(&mut self, button: Option<Button>, now: std::time::Instant) {
+        match button {
+            None => {
+                self.end();
+                self.pressed = None;
+            }
+            Some(button) => {
+                let ready = self
+                    .front
+                    .is_some_and(|(_, at)| now.saturating_duration_since(at) >= CLICK_WAIT);
+                self.pressed = ready.then_some(button);
+            }
+        }
+    }
+
+    /// The mouse went up on `button`: an answer when it is the button where it went down.
+    pub fn release(&mut self, button: Option<Button>) -> Option<Answer> {
+        let pressed = self.pressed.take()?;
+        if Some(pressed) != button {
+            return None;
+        }
+        self.end();
+        Some(match pressed {
+            Button::Allow => Answer::Allow,
+            Button::Always => Answer::Always,
+            Button::No => Answer::No,
+        })
+    }
+
+    /// A button was pressed and waits for the mouse to go up.
+    pub fn pressed(&self) -> bool {
+        self.pressed.is_some()
+    }
+
+    /// When answer mode ends by itself (to draw the box again then).
+    pub fn ends_at(&self) -> Option<std::time::Instant> {
+        self.on.map(|at| at + ANSWER_TIME)
+    }
+}
+
+/// Who asks, for the question box.
+pub struct Asker<'a> {
+    /// The name that the client gave itself.
+    pub name: &'a str,
+    /// The tab of its pane and its program, when fterm checked them (then "Always" is offered).
+    pub place: Option<(usize, &'a str)>,
+}
+
+/// The lines of a question box, each with its look.
+pub type QuestionLines = Vec<(String, fterm_render::overlay::QuestionLook)>;
+
+/// The lines and buttons of the access question. `answering`: answer mode is on; `always_chosen`: "Always" waits
+/// for Enter.
+pub fn question_box(
+    asker: &Asker,
+    answering: bool,
+    always_chosen: bool,
+) -> (QuestionLines, Vec<(Button, String)>) {
+    use fterm_render::overlay::QuestionLook as L;
+    // Names come from outside (the client, the process): one short line.
+    let short = |text: &str| fterm_ui::text::fit(&fterm_ui::text::one_line(text), 32);
+    let always_ok = asker.place.is_some();
+    let fact = match asker.place {
+        Some((tab, program)) => tr!("box.access_where", tab = tab, program = short(program)),
+        None => tr!("box.access_outside"),
     };
-    vec![
-        tr!("box.access", who = who),
-        tr!("box.access_why"),
-        String::new(),
-        tr!("box.access_keys", name = name),
-    ]
+    let keys = if always_chosen {
+        tr!("box.access_confirm")
+    } else if !answering {
+        tr!("box.access_start")
+    } else if always_ok {
+        tr!("box.access_keys")
+    } else {
+        tr!("box.access_keys_no_always")
+    };
+    let lines = vec![
+        (tr!("box.access_asks", name = short(asker.name)), L::Text),
+        (fact, L::Fact),
+        (tr!("box.access_why"), L::Text),
+        (keys, L::Dim),
+    ];
+    let mut buttons = vec![(Button::Allow, tr!("box.access_allow"))];
+    if always_ok {
+        buttons.push((Button::Always, tr!("box.access_always")));
+    }
+    buttons.push((Button::No, tr!("box.access_no")));
+    (lines, buttons)
 }
 
 #[cfg(test)]
@@ -364,17 +569,165 @@ mod tests {
         assert!(no.refused(Bucket::NoPane, t), "all clients with no pane");
     }
 
+    fn secs(n: u64) -> std::time::Duration {
+        std::time::Duration::from_secs(n)
+    }
+
     #[test]
-    fn the_question() {
-        let lines = question("claude", Some(2));
+    fn keys_answer_only_in_answer_mode() {
+        let t = std::time::Instant::now();
+        let mut m = AnswerMode::default();
+        assert!(!m.start(t), "no question: no answer mode");
+        m.front(Some(1), t);
+        assert!(!m.active(t), "a question alone takes no keys");
+        assert_eq!(m.key(AnswerKey::Allow, true, t), None, "not in answer mode");
+        assert!(m.start(t) && m.active(t));
         assert_eq!(
-            lines[0],
-            "Allow claude (tab 2) to read and type into other panes?"
+            m.key(AnswerKey::Ignore, true, t),
+            None,
+            "Shift alone, or a repeat"
+        );
+        assert!(m.active(t));
+        assert_eq!(m.key(AnswerKey::Allow, true, t), Some(Answer::Allow));
+        assert!(!m.active(t), "one answer, then it ends");
+    }
+
+    #[test]
+    fn always_needs_enter_and_a_checked_pane() {
+        let t = std::time::Instant::now();
+        let mut m = AnswerMode::default();
+        m.front(Some(1), t);
+        m.start(t);
+        assert_eq!(m.key(AnswerKey::Always, true, t), None);
+        assert!(m.always_chosen() && m.active(t));
+        assert_eq!(m.key(AnswerKey::Confirm, true, t), Some(Answer::Always));
+        m.start(t);
+        assert_eq!(
+            m.key(AnswerKey::Always, false, t),
+            None,
+            "no checked pane: no Always"
+        );
+        assert!(!m.always_chosen());
+        assert_eq!(
+            m.key(AnswerKey::Confirm, false, t),
+            None,
+            "Enter alone answers nothing"
+        );
+        assert_eq!(m.key(AnswerKey::No, false, t), Some(Answer::No));
+    }
+
+    #[test]
+    fn answer_mode_ends_by_itself() {
+        let t = std::time::Instant::now();
+        let mut m = AnswerMode::default();
+        m.front(Some(1), t);
+        m.start(t);
+        assert_eq!(m.key(AnswerKey::Other, true, t), None);
+        assert!(!m.active(t), "another key ends it");
+        m.start(t);
+        assert!(!m.active(t + ANSWER_TIME + secs(1)), "after a few seconds");
+        assert_eq!(m.ends_at(), Some(t + ANSWER_TIME));
+        m.start(t);
+        m.front(Some(2), t);
+        assert!(!m.active(t), "another question in front");
+        m.start(t);
+        m.front(None, t);
+        assert!(!m.active(t), "no question");
+        m.front(Some(3), t);
+        m.start(t);
+        m.end();
+        assert!(!m.active(t), "focus lost, or a click outside");
+    }
+
+    #[test]
+    fn a_click_answers_on_a_button_after_a_moment() {
+        let t = std::time::Instant::now();
+        let mut m = AnswerMode::default();
+        m.front(Some(1), t);
+        m.press(
+            Some(Button::Allow),
+            t + std::time::Duration::from_millis(500),
         );
         assert_eq!(
-            lines.last().unwrap(),
-            "Enter = allow, A = always allow claude, Esc = no"
+            m.release(Some(Button::Allow)),
+            None,
+            "too soon after the box came"
         );
-        assert!(question("ftermctl", None)[0].starts_with("Allow ftermctl to"));
+        m.press(Some(Button::Allow), t + secs(2));
+        assert_eq!(m.release(Some(Button::No)), None, "up on another button");
+        m.press(Some(Button::Always), t + secs(2));
+        assert_eq!(m.release(Some(Button::Always)), Some(Answer::Always));
+        m.front(Some(2), t + secs(3));
+        m.press(Some(Button::No), t + secs(3));
+        assert_eq!(
+            m.release(Some(Button::No)),
+            None,
+            "a new question: the wait starts again"
+        );
+        m.start(t + secs(3));
+        m.press(None, t + secs(5));
+        assert!(
+            !m.active(t + secs(5)),
+            "a click outside the box ends answer mode"
+        );
+    }
+
+    #[test]
+    fn the_question_box_says_what_fterm_checked() {
+        use fterm_render::overlay::QuestionLook as L;
+        let checked = Asker {
+            name: "claude",
+            place: Some((2, "claude.exe")),
+        };
+        let (lines, buttons) = question_box(&checked, false, false);
+        assert!(
+            lines[0].0.contains("\"claude\""),
+            "the name, quoted: {lines:?}"
+        );
+        assert_eq!(lines[0].1, L::Text);
+        assert!(
+            lines[1].0.contains("tab 2") && lines[1].0.contains("claude.exe"),
+            "{lines:?}"
+        );
+        assert_eq!(lines[1].1, L::Fact, "fterm's own line has its own color");
+        let keys = lines.last().unwrap();
+        assert_eq!(keys.1, L::Dim);
+        assert!(
+            keys.0.contains("Ctrl+Shift+Enter"),
+            "how to answer: {keys:?}"
+        );
+        let which: Vec<Button> = buttons.iter().map(|(b, _)| *b).collect();
+        assert_eq!(which, [Button::Allow, Button::Always, Button::No]);
+        assert_eq!(buttons[1].1, "Always for this pane");
+
+        let (lines, _) = question_box(&checked, true, false);
+        assert!(lines.last().unwrap().0.contains("A or 2"), "{lines:?}");
+        let (lines, _) = question_box(&checked, true, true);
+        assert!(lines.last().unwrap().0.contains("Enter"), "{lines:?}");
+
+        let outside = Asker {
+            name: "claude",
+            place: None,
+        };
+        let (lines, buttons) = question_box(&outside, true, false);
+        assert!(lines[1].0.contains("not in a pane"), "{lines:?}");
+        assert_eq!(lines[1].1, L::Fact);
+        assert!(!lines.last().unwrap().0.contains("A or 2"), "no Always");
+        let which: Vec<Button> = buttons.iter().map(|(b, _)| *b).collect();
+        assert_eq!(which, [Button::Allow, Button::No]);
+    }
+
+    #[test]
+    fn a_program_name_is_one_short_line() {
+        let asker = Asker {
+            name: "x",
+            place: Some((
+                1,
+                "evil\nfterm checked: it is fine.exe and a very long name after that",
+            )),
+        };
+        let (lines, _) = question_box(&asker, false, false);
+        assert!(!lines[1].0.contains('\n'), "{lines:?}");
+        assert!(lines[1].0.chars().count() < 100, "{lines:?}");
     }
 }

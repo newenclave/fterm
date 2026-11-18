@@ -792,6 +792,23 @@ impl FrameParts<'_> {
         self.quads.extend(quads);
         Ok(())
     }
+
+    /// A question box that does not take the keys (see `overlay::question_layout`).
+    pub fn question_box(
+        &mut self,
+        question: &crate::overlay::QuestionBox,
+        view: Rect,
+    ) -> Result<(), AtlasFull> {
+        let quads = crate::overlay::build_question_box(
+            question,
+            view,
+            self.ui,
+            self.cell,
+            &mut *self.glyph,
+        )?;
+        self.quads.extend(quads);
+        Ok(())
+    }
 }
 
 /// Draws one glyph: builtin chars in code, all other chars with the font.

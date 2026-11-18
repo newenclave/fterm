@@ -582,12 +582,16 @@ pub struct App {
     api_server: Option<fterm_api::server::Server>,
     api_registration: Option<fterm_api::discovery::Registration>,
     api_clients: HashMap<fterm_api::server::ClientId, api_calls::ApiClient>,
-    /// Client names that the user allowed "always" (in this session).
+    /// Programs in panes that the user allowed "always" (in this session).
     api_always: crate::access::AlwaysList,
     /// The "No" answers of the user: for a minute, no new question of the same pane.
     api_refused: crate::access::Refusals,
     /// Access questions (one per client); the first one is on the screen.
     api_questions: std::collections::VecDeque<api_calls::ApiAsk>,
+    /// The number of the last access question.
+    next_question: u64,
+    /// The access question takes keys only in answer mode (the chord, or a click on a button).
+    answer_mode: crate::access::AnswerMode,
     /// `wait_for` calls that wait.
     waits: Vec<api_calls::Wait>,
     /// Screenshots that wait for the next frame.
@@ -737,6 +741,8 @@ impl App {
             api_always: Default::default(),
             api_refused: Default::default(),
             api_questions: std::collections::VecDeque::new(),
+            next_question: 0,
+            answer_mode: crate::access::AnswerMode::default(),
             waits: Vec::new(),
             shots: Vec::new(),
             shot_pictures: Vec::new(),
@@ -4451,6 +4457,10 @@ impl App {
         state: ElementState,
         button: MouseButton,
     ) {
+        // The access question is on top of everything.
+        if button == MouseButton::Left && self.access_question_mouse(event_loop, state) {
+            return;
+        }
         // A click on a toast: × closes it, the rest goes to its pane.
         if state == ElementState::Pressed
             && self.palette.is_none()
@@ -4841,7 +4851,7 @@ impl App {
             || self.workspace_prompt.is_some()
             || self.name_prompt.is_some()
             || self.key_prompt.is_some()
-            || !self.api_questions.is_empty()
+            || self.answer_mode.active(Instant::now())
             || self.close_question.is_some()
             || self.hooks_question.is_some()
             || self.link_question.is_some()
@@ -4993,6 +5003,8 @@ impl App {
         let link_marks = self.link_marks();
         let copy_marks = self.copy_marks();
         let chip = self.workspace_chip();
+        // The access question: its own layer, over everything, with no dark layer (it does not take the keys).
+        let access = self.access_box(Instant::now());
         let question = self
             .restore_question_lines()
             .or_else(|| self.name_prompt_lines())
@@ -5001,7 +5013,6 @@ impl App {
             .or_else(|| self.overlay_prompt_lines())
             .or_else(|| self.connecting_lines())
             .or_else(|| self.key_prompt_lines())
-            .or_else(|| self.access_question_lines())
             .or_else(|| self.close_question.as_ref().map(|q| q.lines.clone()))
             .or_else(|| self.link_question.as_ref().map(|q| q.lines.clone()))
             .or_else(|| self.mux_stop_question.clone())
@@ -5358,6 +5369,19 @@ impl App {
                 }
                 if let Some(lines) = &question {
                     parts.message_box(lines, view)?;
+                }
+                if let Some(access) = &access {
+                    let labels: Vec<String> =
+                        access.buttons.iter().map(|(_, t)| t.clone()).collect();
+                    parts.question_box(
+                        &fterm_render::overlay::QuestionBox {
+                            lines: &access.lines,
+                            buttons: &labels,
+                            answering: access.answering,
+                            warning: false,
+                        },
+                        area,
+                    )?;
                 }
                 Ok(())
             });
@@ -5785,6 +5809,18 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(at) = self.expire_api_questions(now) {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
+        // Answer mode: the question in front, and its end after a few seconds with no key.
+        self.sync_answer_mode(now);
+        if let Some(at) = self.answer_mode.ends_at() {
+            if at <= now {
+                self.answer_mode.end();
+                if let Some(running) = &self.running {
+                    running.window.request_redraw();
+                }
+            } else {
+                wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
+            }
+        }
         if let Some(at) = self.expire_pictures(now) {
             wake_at = Some(wake_at.map_or(at, |t: Instant| t.min(at)));
         }
@@ -5875,6 +5911,10 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
+                if !focused {
+                    // Answer mode is for keys that the user means for the question, here and now.
+                    self.answer_mode.end();
+                }
                 let running = self.running.as_ref().unwrap();
                 if let Some(session) = running.session() {
                     let report =
@@ -5887,6 +5927,10 @@ impl ApplicationHandler<UserEvent> for App {
                 running.window.request_redraw();
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
+                // Text of the input method answers nothing, and in answer mode it goes nowhere.
+                if self.answer_mode.active(Instant::now()) {
+                    return;
+                }
                 if !self.markup_ime(&text) && !self.form_ime(&text) && !self.review_ime(&text) {
                     self.ime_commit(&text);
                 }
@@ -5903,6 +5947,11 @@ impl ApplicationHandler<UserEvent> for App {
                 is_synthetic: false,
                 ..
             } if event.state == ElementState::Pressed => {
+                // The access question first: in answer mode it has all the keys; its chord starts that mode.
+                // Other keys go on as if it were not there.
+                if self.access_question_key(event_loop, &event) {
+                    return;
+                }
                 if self.restore_offer.is_some() {
                     self.restore_key(&event);
                     return;
@@ -5929,20 +5978,6 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if self.key_prompt.is_some() {
                     self.key_prompt_key(&event);
-                    return;
-                }
-                if !self.api_questions.is_empty() {
-                    let answer = match (&event.logical_key, physical_letter(event.physical_key)) {
-                        (Key::Named(NamedKey::Enter), _) => Some(api_calls::AccessAnswer::Allow),
-                        (_, Some('a')) => Some(api_calls::AccessAnswer::Always),
-                        (Key::Named(NamedKey::Escape), _) | (_, Some('n')) => {
-                            Some(api_calls::AccessAnswer::Deny)
-                        }
-                        _ => None,
-                    };
-                    if let Some(answer) = answer {
-                        self.answer_access(event_loop, answer);
-                    }
                     return;
                 }
                 if self.close_question.is_some() {

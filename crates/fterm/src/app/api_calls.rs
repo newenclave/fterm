@@ -110,6 +110,8 @@ pub(super) struct PendingShot {
 
 /// Requests of one client that wait for the user's answer (may it use other panes?).
 pub(super) struct ApiAsk {
+    /// A number of its own: answer mode is for one question.
+    pub id: u64,
     pub client: ClientId,
     pub requests: Vec<ApiRequest>,
 }
@@ -118,12 +120,71 @@ pub(super) struct ApiAsk {
 const REFUSED: &str =
     "the user said no to this pane a moment ago: ask the user before you try again";
 
-/// The answer to the access question.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum AccessAnswer {
-    Allow,
-    Always,
-    Deny,
+/// The key that starts answering the access question: Ctrl+Shift+Enter.
+pub(super) fn is_answer_chord(key: &Key, ctrl: bool, shift: bool, alt: bool) -> bool {
+    ctrl && shift && !alt && matches!(key, Key::Named(NamedKey::Enter))
+}
+
+/// A key while the access question is answered: digits by the place of the key (any layout), letters by the
+/// letter of the layout; a modifier alone or a repeat does nothing; with Ctrl or Alt it is another key.
+pub(super) fn answer_key(
+    key: &Key,
+    physical: PhysicalKey,
+    repeat: bool,
+    ctrl: bool,
+    alt: bool,
+) -> crate::access::AnswerKey {
+    use crate::access::AnswerKey as A;
+    let modifier_only = matches!(
+        key,
+        Key::Named(
+            NamedKey::Shift
+                | NamedKey::Control
+                | NamedKey::Alt
+                | NamedKey::AltGraph
+                | NamedKey::Super
+                | NamedKey::Meta
+                | NamedKey::Hyper
+                | NamedKey::Fn
+                | NamedKey::CapsLock
+                | NamedKey::NumLock
+        )
+    );
+    if repeat || modifier_only {
+        return A::Ignore;
+    }
+    if ctrl || alt {
+        return A::Other;
+    }
+    match physical {
+        PhysicalKey::Code(KeyCode::Digit1 | KeyCode::Numpad1) => return A::Allow,
+        PhysicalKey::Code(KeyCode::Digit2 | KeyCode::Numpad2) => return A::Always,
+        PhysicalKey::Code(KeyCode::Digit3 | KeyCode::Numpad3) => return A::No,
+        _ => {}
+    }
+    match key {
+        Key::Named(NamedKey::Enter) => A::Confirm,
+        Key::Named(NamedKey::Escape) => A::No,
+        Key::Character(c) => match c.to_lowercase().as_str() {
+            "y" => A::Allow,
+            "a" => A::Always,
+            "n" => A::No,
+            _ => A::Other,
+        },
+        _ => A::Other,
+    }
+}
+
+/// The access question as it is drawn now.
+pub(super) struct AccessBox {
+    /// Changes when the question in front changes, or what fterm says of its client: answer mode ends, and a
+    /// click waits again (a button must not move under the mouse).
+    pub key: u64,
+    pub lines: crate::access::QuestionLines,
+    pub buttons: Vec<(crate::access::Button, String)>,
+    /// "Always" is offered (the client's pane is checked).
+    pub always_ok: bool,
+    pub answering: bool,
 }
 
 /// The longest history that `get_text` gives.
@@ -302,7 +363,9 @@ impl App {
             ask.requests.push(request);
             return;
         }
+        self.next_question += 1;
         self.api_questions.push_back(ApiAsk {
+            id: self.next_question,
             client: request.client,
             requests: vec![request],
         });
@@ -314,35 +377,166 @@ impl App {
         }
     }
 
-    /// The lines of the access question that is open now.
-    pub(super) fn access_question_lines(&self) -> Option<Vec<String>> {
+    /// The access question in front, as it is drawn now.
+    pub(super) fn access_box(&self, now: Instant) -> Option<AccessBox> {
+        use std::hash::{Hash, Hasher};
         let ask = self.api_questions.front()?;
         let client = self.api_clients.get(&ask.client);
-        let name = client.map_or("A program", |c| c.name.as_str());
-        let tab = client.and_then(|c| c.pane).and_then(|pane| {
-            let running = self.running.as_ref()?;
-            running.pane_tab_number(pane).map(|(n, _)| n)
+        let name = client.map_or("client", |c| c.name.as_str());
+        // What fterm checked: the tab of the client's pane and its program.
+        let place = client.and_then(|c| {
+            let program = c.program.as_ref()?;
+            let (tab, _) = self.running.as_ref()?.pane_tab_number(c.pane?)?;
+            Some((tab, program.name.as_str()))
         });
-        Some(crate::access::question(name, tab))
+        let answering = self.answer_mode.active(now);
+        let (lines, buttons) = crate::access::question_box(
+            &crate::access::Asker { name, place },
+            answering,
+            answering && self.answer_mode.always_chosen(),
+        );
+        let mut hasher = std::hash::DefaultHasher::new();
+        (ask.id, name, place).hash(&mut hasher);
+        Some(AccessBox {
+            key: hasher.finish(),
+            lines,
+            buttons,
+            always_ok: place.is_some(),
+            answering,
+        })
+    }
+
+    /// Tells answer mode which question is in front now (another one ends it). Before each key and click, and
+    /// in `about_to_wait`.
+    pub(super) fn sync_answer_mode(&mut self, now: Instant) {
+        let key = self.access_box(now).map(|b| b.key);
+        self.answer_mode.front(key, now);
+    }
+
+    /// A key: in answer mode it answers (and is not typed anywhere); the chord starts answer mode. `false`: the
+    /// key goes on.
+    pub(super) fn access_question_key(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        event: &KeyEvent,
+    ) -> bool {
+        let now = Instant::now();
+        self.sync_answer_mode(now);
+        if self.answer_mode.active(now) {
+            let always_ok = self.access_box(now).is_some_and(|b| b.always_ok);
+            let key = answer_key(
+                &event.logical_key,
+                event.physical_key,
+                event.repeat,
+                self.mods.control_key(),
+                self.mods.alt_key(),
+            );
+            match self.answer_mode.key(key, always_ok, now) {
+                Some(answer) => self.answer_access(event_loop, answer),
+                None => self.ask_redraw(),
+            }
+            return true;
+        }
+        // The AI panel has its own Ctrl+Shift+Enter: there a click answers.
+        let dock = self.running.as_ref().is_some_and(|r| r.dock.focused);
+        if !self.api_questions.is_empty()
+            && !dock
+            && !event.repeat
+            && is_answer_chord(
+                &event.logical_key,
+                self.mods.control_key(),
+                self.mods.shift_key(),
+                self.mods.alt_key(),
+            )
+        {
+            self.answer_mode.start(now);
+            self.ask_redraw();
+            return true;
+        }
+        false
+    }
+
+    /// The left mouse button: a click on a button of the access question answers it (a moment after the box came);
+    /// a press outside the box ends answer mode and goes on. `true`: the box took it.
+    pub(super) fn access_question_mouse(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        state: ElementState,
+    ) -> bool {
+        let now = Instant::now();
+        self.sync_answer_mode(now);
+        let Some(question) = self.access_box(now) else {
+            return false;
+        };
+        let Some(running) = &self.running else {
+            return false;
+        };
+        let texts: Vec<String> = question.lines.iter().map(|(t, _)| t.clone()).collect();
+        let labels: Vec<String> = question.buttons.iter().map(|(_, t)| t.clone()).collect();
+        let layout = fterm_render::overlay::question_layout(
+            &texts,
+            &labels,
+            running.tab_area(),
+            running.renderer.cell(),
+        );
+        let (x, y) = (self.mouse.position.0 as f32, self.mouse.position.1 as f32);
+        let hit = layout
+            .buttons
+            .iter()
+            .zip(&question.buttons)
+            .find(|(rect, _)| rect.contains(x, y))
+            .map(|(_, (button, _))| *button);
+        let inside = layout.frame.contains(x, y);
+        match state {
+            ElementState::Pressed => {
+                if hit.is_some() || !inside {
+                    let was = self.answer_mode.active(now);
+                    self.answer_mode.press(hit, now);
+                    if was != self.answer_mode.active(now) {
+                        self.ask_redraw();
+                    }
+                }
+                inside
+            }
+            ElementState::Released => {
+                let ours = self.answer_mode.pressed();
+                if let Some(answer) = self.answer_mode.release(hit) {
+                    self.answer_access(event_loop, answer);
+                }
+                ours || inside
+            }
+        }
+    }
+
+    fn ask_redraw(&self) {
+        if let Some(running) = &self.running {
+            running.window.request_redraw();
+        }
     }
 
     /// The user answered the access question: run or refuse the requests that waited.
-    pub(super) fn answer_access(&mut self, event_loop: &ActiveEventLoop, answer: AccessAnswer) {
+    pub(super) fn answer_access(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        answer: crate::access::Answer,
+    ) {
+        use crate::access::Answer;
+        self.answer_mode.end();
         let Some(ask) = self.api_questions.pop_front() else {
             return;
         };
         let now = Instant::now();
         // A client with no `hello` gets a record too: its answer stays.
         let record = self.api_clients.entry(ask.client).or_default();
-        record.said = Some(answer != AccessAnswer::Deny);
+        record.said = Some(answer != Answer::No);
         let (key, bucket) = (record.always_key(), record.bucket());
         match answer {
-            AccessAnswer::Always => {
+            Answer::Always => {
                 if let Some(key) = key {
                     self.api_always.allow(key);
                 }
             }
-            AccessAnswer::Deny => {
+            Answer::No => {
                 // For a minute no new question of that pane (or of the clients with no pane), and the questions
                 // of it that wait now are refused too.
                 self.api_refused.note(bucket, now);
@@ -363,7 +557,7 @@ impl App {
                     }
                 }
             }
-            AccessAnswer::Allow => {}
+            Answer::Allow => {}
         }
         for request in ask.requests {
             // A call whose client stopped waiting while the question was open does not run now (the client may
@@ -1588,6 +1782,92 @@ mod tests {
             start: 100,
             name: "claude.exe".into(),
         }
+    }
+
+    #[test]
+    fn keys_of_the_access_question() {
+        use crate::access::AnswerKey as A;
+        let k = |logical: Key, code: KeyCode, repeat: bool, mods: &str| {
+            answer_key(
+                &logical,
+                PhysicalKey::Code(code),
+                repeat,
+                mods.contains("ctrl"),
+                mods.contains("alt"),
+            )
+        };
+        let ch = |c: &str| Key::Character(c.into());
+        assert_eq!(k(ch("y"), KeyCode::KeyY, false, ""), A::Allow);
+        assert_eq!(
+            k(ch("A"), KeyCode::KeyA, false, ""),
+            A::Always,
+            "Shift or CapsLock: the same letter"
+        );
+        assert_eq!(k(ch("n"), KeyCode::KeyN, false, ""), A::No);
+        assert_eq!(k(ch("1"), KeyCode::Digit1, false, ""), A::Allow);
+        assert_eq!(
+            k(ch("\u{e9}"), KeyCode::Digit2, false, ""),
+            A::Always,
+            "digits by place (AZERTY)"
+        );
+        assert_eq!(k(ch("3"), KeyCode::Numpad3, false, ""), A::No);
+        assert_eq!(
+            k(ch("\u{43d}"), KeyCode::KeyY, false, ""),
+            A::Other,
+            "the Russian layout: no Y there"
+        );
+        assert_eq!(
+            k(Key::Named(NamedKey::Enter), KeyCode::Enter, false, ""),
+            A::Confirm
+        );
+        assert_eq!(
+            k(Key::Named(NamedKey::Escape), KeyCode::Escape, false, ""),
+            A::No
+        );
+        assert_eq!(
+            k(Key::Named(NamedKey::Shift), KeyCode::ShiftLeft, false, ""),
+            A::Ignore
+        );
+        assert_eq!(k(ch("y"), KeyCode::KeyY, true, ""), A::Ignore, "a held key");
+        assert_eq!(
+            k(ch("a"), KeyCode::KeyA, false, "ctrl"),
+            A::Other,
+            "Ctrl+A (tmux, screen)"
+        );
+        assert_eq!(k(ch("x"), KeyCode::KeyX, false, ""), A::Other);
+        assert!(is_answer_chord(
+            &Key::Named(NamedKey::Enter),
+            true,
+            true,
+            false
+        ));
+        assert!(!is_answer_chord(
+            &Key::Named(NamedKey::Enter),
+            true,
+            false,
+            false
+        ));
+        assert!(!is_answer_chord(
+            &Key::Named(NamedKey::Enter),
+            false,
+            false,
+            false
+        ));
+        assert!(!is_answer_chord(
+            &Key::Named(NamedKey::Enter),
+            true,
+            true,
+            true
+        ));
+        assert!(!is_answer_chord(&ch("y"), true, true, false));
+    }
+
+    #[test]
+    fn the_answer_chord_is_free_in_the_default_keys() {
+        // While a question is open the chord answers it, before the keymap: no default key may need it.
+        let keys = fterm_config::keys::Keymap::with_defaults();
+        let chord = fterm_config::keys::KeyChord::parse("ctrl+shift+enter").unwrap();
+        assert_eq!(keys.get(&chord), None);
     }
 
     #[test]

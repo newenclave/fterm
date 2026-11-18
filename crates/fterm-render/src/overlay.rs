@@ -246,9 +246,170 @@ pub fn build_message_box(
     Ok(quads)
 }
 
+/// How a line of a question box looks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuestionLook {
+    Text,
+    /// A line that fterm writes itself (who the client is): another color, so it can not be faked by a name.
+    Fact,
+    /// What the keys do now.
+    Dim,
+}
+
+/// A question box that does not take the keys: the access question of the API, the config warning.
+pub struct QuestionBox<'a> {
+    pub lines: &'a [(String, QuestionLook)],
+    pub buttons: &'a [String],
+    /// It has the keys now (answer mode): its border shows it.
+    pub answering: bool,
+    /// A warning (the config one): the warning color.
+    pub warning: bool,
+}
+
+/// Where a question box and its buttons are.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuestionLayout {
+    pub frame: Rect,
+    pub buttons: Vec<Rect>,
+}
+
+/// The place of a question box: at the top of `view` (below the tab bar), in the middle, no wider than the view;
+/// the buttons in its last row. The app hits the buttons with it.
+pub fn question_layout(
+    lines: &[String],
+    buttons: &[String],
+    view: Rect,
+    cell: CellMetrics,
+) -> QuestionLayout {
+    let max_cells = ((view.width / cell.width) as usize)
+        .saturating_sub(6)
+        .max(10);
+    let cells_of = |text: &str| text.chars().map(char_cells).sum::<usize>();
+    let longest = lines
+        .iter()
+        .map(|l| cells_of(&fit_title(l, max_cells)))
+        .max()
+        .unwrap_or(0);
+    // A button is its text with a cell of room on each side; two cells between buttons.
+    let button_cells: Vec<usize> = buttons.iter().map(|b| cells_of(b) + 2).collect();
+    let row = button_cells.iter().sum::<usize>() + 2 * button_cells.len().saturating_sub(1);
+    let inner = longest.max(row).min(max_cells);
+    let width = (inner + 4) as f32 * cell.width;
+    // A row of room, the lines, an empty row, the buttons, a row of room.
+    let height = (lines.len() + 4) as f32 * cell.height;
+    let x = (view.x + (view.width - width) / 2.0).round();
+    let y = (view.y + cell.height).round();
+    let button_y = y + (lines.len() + 2) as f32 * cell.height;
+    let mut left = x + 2.0 * cell.width;
+    let buttons = button_cells
+        .iter()
+        .map(|&cells| {
+            let rect = Rect::new(left, button_y, cells as f32 * cell.width, cell.height);
+            left += (cells + 2) as f32 * cell.width;
+            rect
+        })
+        .collect();
+    QuestionLayout {
+        frame: Rect::new(x, y, width, height),
+        buttons,
+    }
+}
+
+/// A question box (see `question_layout`), with no dark layer over the window: it does not take the keys.
+pub fn build_question_box(
+    q: &QuestionBox,
+    view: Rect,
+    ui: &UiColors,
+    cell: CellMetrics,
+    glyph: &mut dyn FnMut(&GlyphKey) -> Result<Option<AtlasGlyph>, AtlasFull>,
+) -> Result<Vec<Instance>, AtlasFull> {
+    let texts: Vec<String> = q.lines.iter().map(|(t, _)| t.clone()).collect();
+    let layout = question_layout(&texts, q.buttons, view, cell);
+    let f = layout.frame;
+    let max_cells = ((f.width / cell.width) as usize).saturating_sub(4);
+    let border_color = if q.warning { ui.warning } else { ui.accent };
+    // Answer mode: a thicker border.
+    let thick = if q.answering { 3.0 } else { 1.0 };
+    let mut quads = vec![solid(f, ui.overlay)];
+    for border in [
+        Rect::new(f.x, f.y, f.width, thick),
+        Rect::new(f.x, f.y + f.height - thick, f.width, thick),
+        Rect::new(f.x, f.y, thick, f.height),
+        Rect::new(f.x + f.width - thick, f.y, thick, f.height),
+    ] {
+        quads.push(solid(border, border_color));
+    }
+    for (i, (text, look)) in q.lines.iter().enumerate() {
+        let color = match look {
+            QuestionLook::Text => ui.text,
+            QuestionLook::Fact => ui.info,
+            QuestionLook::Dim => ui.text_dim,
+        };
+        let line = fit_title(text, max_cells);
+        let line_y = f.y + (i + 1) as f32 * cell.height;
+        push_text(
+            &mut quads,
+            &line,
+            f.x + 2.0 * cell.width,
+            line_y,
+            cell,
+            color,
+            glyph,
+        )?;
+    }
+    for (rect, text) in layout.buttons.iter().zip(q.buttons) {
+        quads.push(solid(*rect, ui.surface_active));
+        push_text(
+            &mut quads,
+            text,
+            rect.x + cell.width,
+            rect.y,
+            cell,
+            ui.text,
+            glyph,
+        )?;
+    }
+    Ok(quads)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_question_box_sits_at_the_top_with_its_buttons_inside() {
+        let lines = vec!["Allow it?".to_owned(), "x".repeat(200)];
+        let buttons = vec![
+            "Allow".to_owned(),
+            "Always for this pane".to_owned(),
+            "No".to_owned(),
+        ];
+        let l = question_layout(&lines, &buttons, VIEW, CELL);
+        let f = l.frame;
+        assert!(
+            f.y >= VIEW.y && f.y < VIEW.y + 3.0 * CELL.height,
+            "at the top: {f:?}"
+        );
+        assert!(
+            f.x >= VIEW.x && f.x + f.width <= VIEW.x + VIEW.width,
+            "in the view: {f:?}"
+        );
+        assert_eq!(l.buttons.len(), 3);
+        for b in &l.buttons {
+            assert!(
+                b.x >= f.x && b.x + b.width <= f.x + f.width,
+                "{b:?} in {f:?}"
+            );
+            assert!(
+                b.y >= f.y && b.y + b.height <= f.y + f.height,
+                "{b:?} in {f:?}"
+            );
+            assert_eq!(b.y, l.buttons[0].y, "one row");
+        }
+        for w in l.buttons.windows(2) {
+            assert!(w[0].x + w[0].width < w[1].x, "no overlap: {w:?}");
+        }
+    }
 
     fn ui() -> UiColors {
         UiColors::default()
