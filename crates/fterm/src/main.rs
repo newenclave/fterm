@@ -14,6 +14,7 @@ mod close;
 mod dashboard;
 mod env;
 mod gpu;
+mod guards;
 mod hints;
 mod history_popup;
 mod identity;

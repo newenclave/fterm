@@ -215,6 +215,8 @@ pub(super) struct AccessBox {
     /// "Always" is offered (the client's pane is checked).
     pub always_ok: bool,
     pub answering: bool,
+    /// The warning about a guard of the config (not an access question).
+    pub warning: bool,
 }
 
 /// The longest history that `get_text` gives.
@@ -495,9 +497,24 @@ impl App {
         }
     }
 
-    /// The access question in front, as it is drawn now.
+    /// The access question in front, as it is drawn now. The warning about a guard comes first.
     pub(super) fn access_box(&self, now: Instant) -> Option<AccessBox> {
         use std::hash::{Hash, Hasher};
+        if let Some(config) = self.guard_warning {
+            let answering = self.answer_mode.active(now);
+            let (lines, buttons) =
+                crate::guards::warning_box(self.guard.confirmed, config, answering);
+            let mut hasher = std::hash::DefaultHasher::new();
+            ("guard", config).hash(&mut hasher);
+            return Some(AccessBox {
+                key: hasher.finish(),
+                lines,
+                buttons,
+                always_ok: false,
+                answering,
+                warning: true,
+            });
+        }
         let ask = self.api_questions.front()?;
         let client = self.api_clients.get(&ask.client);
         let name = client.map_or("client", |c| c.name.as_str());
@@ -532,7 +549,63 @@ impl App {
             buttons,
             always_ok: matches!(place, crate::access::Place::Pane { .. }),
             answering,
+            warning: false,
         })
+    }
+
+    /// The config changed (or fterm starts): a looser guard keeps the confirmed value and waits for a yes.
+    pub(super) fn apply_guards(&mut self) {
+        let config = crate::guards::Guards {
+            ask: self.config.config.api.ask,
+            ai_access: self.config.config.ai.api_access,
+        };
+        let decision = crate::guards::decide(&self.guard, config);
+        if decision.state != self.guard {
+            self.guard = decision.state;
+            self.save_guards();
+        }
+        self.config.config.api.ask = decision.effective.ask;
+        self.config.config.ai.api_access = decision.effective.ai_access;
+        if let Some(loose) = decision.warn {
+            tracing::warn!(
+                ?loose,
+                "the config turns a guard of the API off: it waits for a yes"
+            );
+        }
+        self.guard_warning = decision.warn;
+        self.ask_redraw();
+    }
+
+    /// The user answered the warning about a guard.
+    fn answer_guard(&mut self, turn_off: bool) {
+        self.answer_mode.end();
+        let Some(config) = self.guard_warning.take() else {
+            return;
+        };
+        self.guard = crate::guards::answer(&self.guard, config, turn_off);
+        self.save_guards();
+        if turn_off {
+            self.config.config.api.ask = config.ask;
+            self.config.config.ai.api_access = config.ai_access;
+        }
+        self.ask_redraw();
+    }
+
+    fn save_guards(&self) {
+        if let Some(file) = super::guard_file()
+            && let Err(err) = crate::guards::save(&file, &self.guard)
+        {
+            tracing::warn!(file = %file.display(), "cannot save the guards: {err}");
+        }
+    }
+
+    /// An answer to the box in front: the warning about a guard, or the access question.
+    fn answer_front(&mut self, event_loop: &ActiveEventLoop, answer: crate::access::Answer) {
+        if self.guard_warning.is_some() {
+            self.answer_guard(answer == crate::access::Answer::Allow);
+        } else {
+            self.answer_access(event_loop, answer);
+        }
     }
 
     /// Tells answer mode which question is in front now (another one ends it). Before each key and click, and
@@ -553,22 +626,33 @@ impl App {
         self.sync_answer_mode(now);
         if self.answer_mode.active(now) {
             let always_ok = self.access_box(now).is_some_and(|b| b.always_ok);
-            let key = answer_key(
+            let mut key = answer_key(
                 &event.logical_key,
                 event.physical_key,
                 event.repeat,
                 self.mods.control_key(),
                 self.mods.alt_key(),
             );
+            // Only a click turns a guard off.
+            if self.guard_warning.is_some()
+                && matches!(
+                    key,
+                    crate::access::AnswerKey::Allow
+                        | crate::access::AnswerKey::Always
+                        | crate::access::AnswerKey::Confirm
+                )
+            {
+                key = crate::access::AnswerKey::Ignore;
+            }
             match self.answer_mode.key(key, always_ok, now) {
-                Some(answer) => self.answer_access(event_loop, answer),
+                Some(answer) => self.answer_front(event_loop, answer),
                 None => self.ask_redraw(),
             }
             return true;
         }
         // The AI panel has its own Ctrl+Shift+Enter: there a click answers.
         let dock = self.running.as_ref().is_some_and(|r| r.dock.focused);
-        if !self.api_questions.is_empty()
+        if (!self.api_questions.is_empty() || self.guard_warning.is_some())
             && !dock
             && !event.repeat
             && is_answer_chord(
@@ -630,7 +714,7 @@ impl App {
             ElementState::Released => {
                 let ours = self.answer_mode.pressed();
                 if let Some(answer) = self.answer_mode.release(hit) {
-                    self.answer_access(event_loop, answer);
+                    self.answer_front(event_loop, answer);
                 }
                 ours || inside
             }

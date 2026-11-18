@@ -592,6 +592,10 @@ pub struct App {
     next_question: u64,
     /// The access question takes keys only in answer mode (the chord, or a click on a button).
     answer_mode: crate::access::AnswerMode,
+    /// The guards of the API that the user confirmed (`guards.json`).
+    guard: crate::guards::GuardState,
+    /// The config turns a guard off: these values wait for the user's yes (the old ones count until then).
+    guard_warning: Option<crate::guards::Guards>,
     /// `wait_for` calls that wait.
     waits: Vec<api_calls::Wait>,
     /// Screenshots that wait for the next frame.
@@ -743,6 +747,8 @@ impl App {
             api_questions: std::collections::VecDeque::new(),
             next_question: 0,
             answer_mode: crate::access::AnswerMode::default(),
+            guard: crate::guards::GuardState::default(),
+            guard_warning: None,
             waits: Vec::new(),
             shots: Vec::new(),
             shot_pictures: Vec::new(),
@@ -782,6 +788,11 @@ impl App {
         };
         app.apply_notification_config();
         app.load_language();
+        // Before any client can call: a guard that the config turns off stays on until the user says yes.
+        if let Some(file) = guard_file() {
+            app.guard = crate::guards::load(&file);
+        }
+        app.apply_guards();
         Self::open_history(&mut app.history, &app.config.config.history);
         if let Some(lines) = app.message.take() {
             // A config error at start: a toast, not a box in the way.
@@ -1586,11 +1597,13 @@ impl App {
         true
     }
 
-    /// The text in the tab bar corner: the unread events, when the Events panel is not on the screen.
+    /// The text in the tab bar corner: a mark while the API asks no questions, and the unread events when the
+    /// Events panel is not on the screen.
     fn tab_bar_corner(&self) -> Option<String> {
         let running = self.running.as_ref()?;
         let unread = self.center.unread();
-        (unread > 0 && !running.dock.showing(PanelKind::Events)).then(|| unread.to_string())
+        let unread = (unread > 0 && !running.dock.showing(PanelKind::Events)).then_some(unread);
+        crate::guards::corner_text(unread, !self.config.config.api.ask)
     }
 
     /// The width that the tabs can use (the corner text is not for tabs).
@@ -1931,6 +1944,7 @@ impl App {
                 tracing::info!("config reloaded");
                 let gpu_changed = config.config.gpu != self.config.config.gpu;
                 self.config = config;
+                self.apply_guards();
                 self.forget_hooks();
                 self.profiles = profiles_for(&self.config);
                 self.apply_notification_config();
@@ -4936,6 +4950,7 @@ impl App {
         let dock_rows: Vec<DockRow> = self.dock_rows().into_iter().map(|(row, _)| row).collect();
         let dock_tabs = self.dock_tabs();
         let corner = self.tab_bar_corner();
+        let questions_off = !self.config.config.api.ask;
         // The full text of an event, when it is open.
         let reader = self.reader_lines();
         // The AI chat: its lines, its input, and the scroll kept inside the chat.
@@ -5170,9 +5185,14 @@ impl App {
                     editing,
                     badges: &badges,
                     colors: &tab_colors,
-                    corner: corner
-                        .as_deref()
-                        .map(|text| (text, level_color(Level::Attention, &ui))),
+                    corner: corner.as_deref().map(|text| {
+                        let color = if questions_off {
+                            ui.warning
+                        } else {
+                            level_color(Level::Attention, &ui)
+                        };
+                        (text, color)
+                    }),
                     cell,
                     width,
                 })?;
@@ -5377,7 +5397,7 @@ impl App {
                             lines: &access.lines,
                             buttons: &labels,
                             answering: access.answering,
-                            warning: false,
+                            warning: access.warning,
                         },
                         area,
                     )?;
@@ -6116,6 +6136,23 @@ impl ApplicationHandler<UserEvent> for App {
             _ => {}
         }
     }
+}
+
+/// Where fterm keeps the guards that the user confirmed: in `data_dir`, else in the folder of fterm's state.
+fn guard_file() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    let usual = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+    #[cfg(not(windows))]
+    let usual = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| fterm_config::profiles::home_dir().map(|h| h.join(".local").join("state")));
+    crate::paths::folder(
+        None,
+        crate::paths::data_dir().as_deref(),
+        "",
+        usual.map(|dir| dir.join("fterm")),
+    )
+    .map(|dir| dir.join("guards.json"))
 }
 
 /// Writes the shell integration scripts and returns the PowerShell one.
