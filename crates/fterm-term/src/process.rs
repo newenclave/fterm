@@ -27,6 +27,151 @@ pub fn running_children(pid: u32) -> Vec<String> {
     names
 }
 
+/// What a walk up the process tree needs to know about one process.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProcInfo {
+    pub parent: Option<u32>,
+    /// When it started, in seconds since 1970 (0 = not known).
+    pub start: u64,
+    /// The file name of its program (`claude.exe`, `bash`).
+    pub name: String,
+}
+
+/// One process of a chain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Link {
+    pub pid: u32,
+    pub start: u64,
+    pub name: String,
+}
+
+/// The chain of the process `pid` and its parents, nearest first, read with `info(pid, fresh)`.
+///
+/// `peer_start` is the start time of `pid` when it connected: a fresh look must give the same (else the pid is
+/// another process now, and the chain is empty). The walk stops (fail closed):
+/// - at a process that is not known, or whose start time is not known;
+/// - at a parent that started after its child (a reused pid; a fresh look is tried first);
+/// - before a process named `fterm` (another window or a mux server: its panes are not ours), and before an
+///   `ftermctl` above the direct parent of `pid` (`ftermctl mux serve` runs panes; `ftermctl mcp` may start the peer);
+/// - after `max` processes.
+pub fn chain_in(
+    pid: u32,
+    peer_start: u64,
+    max: usize,
+    mut info: impl FnMut(u32, bool) -> Option<ProcInfo>,
+) -> Vec<Link> {
+    let mut chain: Vec<Link> = Vec::new();
+    // The peer: a fresh look, and the same start time as when it connected.
+    let Some(peer) = info(pid, true).filter(|p| p.start != 0 && p.start == peer_start) else {
+        return chain;
+    };
+    let mut next = peer.parent;
+    let mut child_start = peer.start;
+    chain.push(Link {
+        pid,
+        start: peer.start,
+        name: peer.name,
+    });
+    while chain.len() < max {
+        let Some(parent) = next else {
+            break;
+        };
+        if chain.iter().any(|l| l.pid == parent) {
+            break;
+        }
+        let fits = |p: &ProcInfo| p.start != 0 && p.start <= child_start;
+        let found = match info(parent, false) {
+            Some(p) if fits(&p) => Some(p),
+            // Not in the snapshot yet, or the snapshot is old: a fresh look.
+            _ => info(parent, true).filter(fits),
+        };
+        let Some(p) = found else {
+            break;
+        };
+        if is_program(&p.name, "fterm") || (is_program(&p.name, "ftermctl") && chain.len() >= 2) {
+            break;
+        }
+        next = p.parent;
+        child_start = p.start;
+        chain.push(Link {
+            pid: parent,
+            start: p.start,
+            name: p.name,
+        });
+    }
+    chain
+}
+
+/// The processes as the OS shows them, for `chain_in`: one snapshot, taken again when it is older than a second,
+/// and a fresh look at one process when the walk asks for it.
+pub struct Processes {
+    system: sysinfo::System,
+    taken: Option<std::time::Instant>,
+}
+
+impl Default for Processes {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Processes {
+    pub fn new() -> Self {
+        Self {
+            system: sysinfo::System::new(),
+            taken: None,
+        }
+    }
+
+    /// One process as it is now.
+    pub fn fresh(&mut self, pid: u32) -> Option<ProcInfo> {
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate};
+        let id = Pid::from_u32(pid);
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[id]),
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        self.cached(pid)
+    }
+
+    /// One process as the snapshot shows it.
+    fn cached(&self, pid: u32) -> Option<ProcInfo> {
+        let process = self.system.process(sysinfo::Pid::from_u32(pid))?;
+        Some(ProcInfo {
+            parent: process.parent().map(|p| p.as_u32()),
+            start: process.start_time(),
+            name: process.name().to_string_lossy().into_owned(),
+        })
+    }
+
+    /// The chain of `pid` and its parents (see `chain_in`).
+    pub fn chain(&mut self, pid: u32, peer_start: u64, max: usize) -> Vec<Link> {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
+        let now = std::time::Instant::now();
+        if self
+            .taken
+            .is_none_or(|t| now.duration_since(t) > std::time::Duration::from_secs(1))
+        {
+            self.system.refresh_processes_specifics(
+                ProcessesToUpdate::All,
+                true,
+                ProcessRefreshKind::nothing(),
+            );
+            self.taken = Some(now);
+        }
+        chain_in(pid, peer_start, max, |p, fresh| {
+            if fresh { self.fresh(p) } else { self.cached(p) }
+        })
+    }
+}
+
+/// The file name `name` is the program `program` (with or without `.exe`, in any case).
+fn is_program(name: &str, program: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name == program || name.strip_suffix(".exe") == Some(program)
+}
+
 /// A program name for people: `PING.EXE` -> `PING`, `claude.exe` -> `claude`.
 pub fn display_name(name: &str) -> &str {
     let n = name.len();
@@ -145,6 +290,198 @@ mod tests {
         assert_eq!(display_name("claude.exe"), "claude");
         assert_eq!(display_name("node"), "node");
         assert_eq!(display_name(".exe"), ".exe");
+    }
+
+    /// A fake process table: pid -> (parent, start, name), and the fresh values that a second look gives.
+    struct Table {
+        cached: Vec<(u32, Option<u32>, u64, &'static str)>,
+        fresh: Vec<(u32, Option<u32>, u64, &'static str)>,
+    }
+
+    impl Table {
+        fn new(cached: &[(u32, Option<u32>, u64, &'static str)]) -> Self {
+            Self {
+                cached: cached.to_vec(),
+                fresh: cached.to_vec(),
+            }
+        }
+
+        fn chain(&self, pid: u32, peer_start: u64, max: usize) -> Vec<u32> {
+            chain_in(pid, peer_start, max, |p, fresh| {
+                let list = if fresh { &self.fresh } else { &self.cached };
+                list.iter()
+                    .find(|(id, ..)| *id == p)
+                    .map(|&(_, parent, start, name)| ProcInfo {
+                        parent,
+                        start,
+                        name: name.to_owned(),
+                    })
+            })
+            .into_iter()
+            .map(|l| l.pid)
+            .collect()
+        }
+    }
+
+    #[test]
+    fn the_chain_goes_up_to_the_top() {
+        let t = Table::new(&[
+            (10, Some(7), 500, "ftermctl"),
+            (7, Some(3), 400, "claude"),
+            (3, Some(1), 300, "pwsh"),
+            (1, None, 100, "init"),
+        ]);
+        assert_eq!(t.chain(10, 500, 32), [10, 7, 3, 1]);
+    }
+
+    #[test]
+    fn the_peer_must_still_be_the_process_that_connected() {
+        let t = Table::new(&[(10, Some(7), 500, "ftermctl"), (7, None, 400, "claude")]);
+        assert_eq!(
+            t.chain(10, 499, 32),
+            Vec::<u32>::new(),
+            "another process has the pid now"
+        );
+    }
+
+    #[test]
+    fn a_parent_younger_than_its_child_stops_the_chain() {
+        // On Windows the parent pid of a process stays when its parent ends: the pid may belong to a new process.
+        let t = Table::new(&[
+            (10, Some(7), 500, "ftermctl"),
+            (7, Some(3), 600, "pwsh"),
+            (3, None, 100, "x"),
+        ]);
+        assert_eq!(t.chain(10, 500, 32), [10]);
+    }
+
+    #[test]
+    fn a_parent_of_the_same_second_is_fine() {
+        // `sh -c ftermctl` starts both in the same second (times are in seconds).
+        let t = Table::new(&[(10, Some(7), 500, "ftermctl"), (7, None, 500, "sh")]);
+        assert_eq!(t.chain(10, 500, 32), [10, 7]);
+    }
+
+    #[test]
+    fn an_unknown_start_time_stops_the_chain() {
+        let t = Table::new(&[
+            (10, Some(7), 500, "ftermctl"),
+            (7, Some(3), 0, "pwsh"),
+            (3, None, 100, "x"),
+        ]);
+        assert_eq!(t.chain(10, 500, 32), [10]);
+    }
+
+    #[test]
+    fn a_missing_parent_gets_a_fresh_look() {
+        // A shell that started less than a second ago is not in the old snapshot yet.
+        let mut t = Table::new(&[(10, Some(7), 500, "ftermctl"), (3, None, 100, "pwsh")]);
+        t.fresh.push((7, Some(3), 499, "sh"));
+        assert_eq!(t.chain(10, 500, 32), [10, 7, 3]);
+        let t = Table::new(&[(10, Some(7), 500, "ftermctl")]);
+        assert_eq!(
+            t.chain(10, 500, 32),
+            [10],
+            "still missing: the chain stops there"
+        );
+    }
+
+    #[test]
+    fn a_stale_parent_gets_a_fresh_look() {
+        let mut t = Table::new(&[
+            (10, Some(7), 500, "ftermctl"),
+            (7, Some(3), 900, "old"),
+            (3, None, 1, "x"),
+        ]);
+        t.fresh = vec![
+            (10, Some(7), 500, "ftermctl"),
+            (7, Some(3), 400, "sh"),
+            (3, None, 1, "x"),
+        ];
+        assert_eq!(t.chain(10, 500, 32), [10, 7, 3]);
+    }
+
+    #[test]
+    fn the_chain_stops_before_another_fterm() {
+        // An fterm started from a pane, or a mux server: its panes are not the panes of this window.
+        let t = Table::new(&[
+            (10, Some(7), 500, "ftermctl"),
+            (7, Some(5), 400, "pwsh"),
+            (5, Some(3), 300, "fterm.exe"),
+            (3, None, 200, "pwsh"),
+        ]);
+        assert_eq!(t.chain(10, 500, 32), [10, 7]);
+        let t = Table::new(&[
+            (10, Some(5), 500, "bash"),
+            (5, Some(3), 300, "fterm"),
+            (3, None, 200, "bash"),
+        ]);
+        assert_eq!(t.chain(10, 500, 32), [10]);
+    }
+
+    #[test]
+    fn an_ftermctl_above_the_parent_stops_the_chain() {
+        // `ftermctl mux serve` runs panes too.
+        let t = Table::new(&[
+            (10, Some(7), 500, "python"),
+            (7, Some(5), 400, "bash"),
+            (5, Some(3), 300, "ftermctl"),
+            (3, None, 200, "bash"),
+        ]);
+        assert_eq!(t.chain(10, 500, 32), [10, 7]);
+        // `ftermctl mcp` starts an ftermctl for a long call: that one is fine.
+        let t = Table::new(&[
+            (10, Some(7), 500, "ftermctl.exe"),
+            (7, Some(5), 400, "ftermctl.exe"),
+            (5, Some(3), 300, "claude.exe"),
+            (3, None, 200, "pwsh.exe"),
+        ]);
+        assert_eq!(t.chain(10, 500, 32), [10, 7, 5, 3]);
+    }
+
+    #[test]
+    fn a_loop_ends_and_the_chain_has_a_limit() {
+        let t = Table::new(&[(10, Some(7), 500, "a"), (7, Some(10), 400, "b")]);
+        assert_eq!(t.chain(10, 500, 32), [10, 7], "a loop");
+        let t = Table::new(&[
+            (4, Some(3), 9, "a"),
+            (3, Some(2), 8, "b"),
+            (2, Some(1), 7, "c"),
+            (1, None, 6, "d"),
+        ]);
+        assert_eq!(t.chain(4, 9, 2), [4, 3]);
+    }
+
+    #[test]
+    fn the_chain_of_a_child_has_us_in_it() {
+        let (mut shell, _) = shell_with_child();
+        std::thread::sleep(Duration::from_millis(300));
+        let mut processes = Processes::new();
+        let start = processes
+            .fresh(shell.id())
+            .expect("the child is there")
+            .start;
+        let chain = processes.chain(shell.id(), start, 32);
+        let _ = shell.kill();
+        assert_eq!(chain.first().map(|l| l.pid), Some(shell.id()), "{chain:?}");
+        assert!(
+            chain.iter().any(|l| l.pid == std::process::id()),
+            "this test process is a parent: {chain:?}"
+        );
+        assert!(
+            Processes::new().chain(shell.id(), start + 1, 32).is_empty(),
+            "another start time"
+        );
+    }
+
+    #[test]
+    fn a_start_time_is_the_same_on_every_look() {
+        let me = std::process::id();
+        let first = Processes::new().fresh(me).expect("this process").start;
+        std::thread::sleep(Duration::from_millis(1100));
+        let second = Processes::new().fresh(me).expect("this process").start;
+        assert_ne!(first, 0);
+        assert_eq!(first, second);
     }
 
     #[test]
