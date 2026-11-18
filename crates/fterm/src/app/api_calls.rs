@@ -1289,7 +1289,12 @@ impl App {
         params: &Value,
     ) -> Result<(PaneId, u32, u32), RpcError> {
         let direction = crate::api::scene_place(params)?;
-        let next_to = pane_param(params, "pane")?.map(PaneId);
+        // `pane` (it asked first when it is not the client's own), else the client's own pane: never the pane
+        // that the user is in by chance.
+        let next_to = match pane_param(params, "pane")?.map(PaneId) {
+            Some(pane) => Some(pane),
+            None => self.api_clients.get(&client).and_then(|c| c.pane),
+        };
         if let Some(next_to) = next_to
             && !self
                 .running
@@ -1303,7 +1308,7 @@ impl App {
             .map_err(RpcError::invalid_params)?;
         let (width, height) = (picture.width, picture.height);
         let pane = self
-            .open_picture(picture, direction, next_to)
+            .open_client_picture(picture, direction, next_to)
             .map_err(|err| RpcError::new(RpcError::INTERNAL, format!("{err:#}")))?;
         let question = crate::api::str_param(params, "question")?;
         if let Some(p) = self.running.as_mut().and_then(|r| r.panes.get_mut(&pane)) {

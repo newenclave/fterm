@@ -2312,6 +2312,42 @@ impl App {
             .ok_or_else(|| anyhow::anyhow!("no pane"))
     }
 
+    /// A picture of an API client: next to `near` in the tab of `near` (the marked-up picture is pasted there), or
+    /// with no `near` in a new tab in the back. It takes the keys only when the user looks at `near`, as a dialog
+    /// does: an agent in another pane must not take the keys of the user.
+    pub(crate) fn open_client_picture(
+        &mut self,
+        picture: fterm_term::picture::Picture,
+        direction: Direction,
+        near: Option<PaneId>,
+    ) -> anyhow::Result<PaneId> {
+        let looking = self.focused
+            && near.is_some()
+            && self
+                .running
+                .as_ref()
+                .is_some_and(|r| r.mux.active_pane() == near || r.mux.input_pane() == near);
+        let id = match near {
+            Some(near) => self.split_beside_with(near, direction, |app, size| {
+                Ok(app.spawn_picture(size, picture, Some(near)))
+            })?,
+            None => {
+                let running = self.running.as_ref().expect("the window is open");
+                let size = running.grid_for(running.tab_area());
+                let id = self.spawn_picture(size, picture, None);
+                let running = self.running.as_mut().expect("the window is open");
+                running.mux.add_tab(fterm_mux::Layout::Pane(id), id, None);
+                running.resize_all_panes();
+                self.tab_changed();
+                id
+            }
+        };
+        if looking {
+            self.go_to_pane(id);
+        }
+        Ok(id)
+    }
+
     /// Starts a profile (or the default profile) for a new pane with this grid size.
     fn spawn_pane(&mut self, size: GridSize, profile: Option<&str>) -> anyhow::Result<PaneId> {
         // A new pane starts in the folder of the active pane (or the saved one), unless the profile

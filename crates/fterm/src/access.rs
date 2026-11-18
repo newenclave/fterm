@@ -116,14 +116,14 @@ impl Refusals {
 }
 
 /// The calls that need a yes for a pane that is not the client's own: they read it, type into it, or act on it. A
-/// dialog (`review`, `form`) only when it asks to open at a pane (`pane`): over another program it can take the keys
-/// and look like that program asks for something (a password).
+/// dialog (`review`, `form`) or a picture (`show_image`) only when it asks to open at a pane (`pane`): next to
+/// another program it can take the keys and look like that program asks for something (a password).
 pub fn gated(method: &str, params: &serde_json::Value) -> bool {
     match method {
         "send_text" | "get_text" | "close" | "wait_for" | "read_messages" | "spawn"
         | "screenshot" | "ai_read" | "ai_ask" | "ai_clear" | "agent_session" | "agent_event"
         | "agent_usage" => true,
-        "review" | "form" => params.get("pane").is_some_and(|p| !p.is_null()),
+        "review" | "form" | "show_image" => params.get("pane").is_some_and(|p| !p.is_null()),
         _ => false,
     }
 }
@@ -132,7 +132,7 @@ pub fn gated(method: &str, params: &serde_json::Value) -> bool {
 /// dialog: a scene or a picture needs no yes and can sit in the tab of another program, and a dialog over it would
 /// sit there too.
 pub fn owns(method: &str, its_pane: bool, opened_it: bool) -> bool {
-    its_pane || (opened_it && !matches!(method, "review" | "form"))
+    its_pane || (opened_it && !matches!(method, "review" | "form" | "show_image"))
 }
 
 /// The lines of the question box.
@@ -165,6 +165,12 @@ mod tests {
         assert!(!gated("form", &json!({})));
         assert!(!gated("form", &json!({ "pane": null })));
         assert!(!gated("review", &json!({ "items": ["a"] })));
+        // A picture at another pane takes the keys there and shows the text of the client.
+        assert!(gated("show_image", &json!({ "pane": 3, "path": "a.png" })));
+        assert!(
+            !gated("show_image", &json!({ "path": "a.png" })),
+            "at its own pane"
+        );
     }
 
     #[test]
@@ -174,6 +180,10 @@ mod tests {
         assert!(!owns("form", false, true));
         assert!(!owns("review", false, true));
         assert!(owns("form", true, false));
+        assert!(
+            !owns("show_image", false, true),
+            "a picture next to a scene that it opened"
+        );
         assert!(!owns("get_text", false, false));
     }
 
