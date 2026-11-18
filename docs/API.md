@@ -19,7 +19,8 @@ Agents (Claude Code, OpenCode), scripts, and `ftermctl` use it. MCP is in [MCP.m
 the client and at its parent processes. The nearest one that is the shell of a pane of this window gives the pane.
 `hello` answers this pane (`pane`) and `"proof": "process"`. When fterm finds no pane, the answer has
 `"pane": null`: then fterm can not tell who you are, and the `pane` that you said is only the default pane of
-your calls.
+your calls. **A program in WSL has no pane:** a program in WSL can choose which `wsl.exe` starts a Windows program
+(`WSL_INTEROP`), also the `wsl.exe` of another pane, so fterm does not trust that way.
 
 - `hello`, `list`, `focus`, `zoom`, `set_title`, `set_tab_color`, `themes`, `set_theme`, `notify`, `panel`, `send_message`, `ai_input`, `ai_stop`,
   and the events: everybody.
@@ -49,24 +50,30 @@ fterm asks in a box at the top of the panes:
 > **[Allow]** **[Always for this pane]** **[No]**
 
 - The first line has the name from `hello`. A program can give any name. The second line, in another color, is
-  what fterm found itself: the tab and the program, or "it is not in a pane of this window".
+  what fterm found itself: the tab (and its workspace) and the program, or "it is not in a pane of this window".
+  The program is the first program below the shell of the pane that is not a shell itself.
 - **The box does not take your typing.** Your keys go to your pane as before. To answer, press
-  **Ctrl+Shift+Enter**, then a key: **Y** or **1** = allow, **A** or **2** and then **Enter** = always,
-  **N**, **3**, or **Esc** = no. Another key, or 5 seconds with no key, ends this. (In the AI panel,
-  Ctrl+Shift+Enter is a key of the panel: click a button there.) Or click a button: a click counts one second
-  after the box comes or changes.
+  **Ctrl+Shift+Enter**, wait a moment, then press a key: **Y** or **1** = allow, **A** or **2** and then
+  **Enter** = always, **N**, **3**, or **Esc** = no. A key in the first 0.3 seconds, another key, or 5 seconds
+  with no key ends this with no answer (so typing on after Ctrl+Shift+Enter, a new line in some programs, answers
+  nothing). Shift with a digit is no answer. (In the AI panel, Ctrl+Shift+Enter is a key of the panel: click a
+  button there.)
+- Or click a button. A click counts only one second after the box comes, changes, or moves (the dock opens, the
+  window or the font changes size), and after the window comes back to the front.
 - **Allow** is for this connection.
 - **Always for this pane** is for this program in this pane, until the program or the pane ends, or fterm closes.
   Only a client with a pane gets it.
-- **No**: for one minute, the next questions of the same pane get an error at once (all clients with no pane
-  are one group). An agent should ask the user before it tries again.
+- **No**: for one minute, the next questions of the same pane get an error at once, and so do the questions of
+  all clients with no pane (a program could start a helper that fterm can not find in a pane). An agent should
+  ask the user before it tries again.
 - Your call waits while the question is open (up to two minutes).
 
 ### Event hooks of the config
 `on_agent` and `on_agent_event` in `fterm.lua` run when a program does something, not when you press a key. When
 they type into a pane, open a pane, run a program, or run an action, fterm asks first ("The on_agent hook in your
 config wants to type into a pane or start a program"). Before your yes, these calls do not run. The yes counts
-for the next events, until the config changes. Toasts, tab colors, and the clipboard need no yes.
+for the next events, until the config changes; a No counts for one minute. Toasts, tab colors, and the clipboard
+need no yes.
 
 ### Turn the questions off
 `api = { ask = false }` in the config: no questions (only "remote control off" still stops clients). A program
@@ -75,15 +82,17 @@ that can write `fterm.lua` could do this too. So when the config turns a guard o
 - Only a click on **Turn the guard off** turns it off.
 - **Keep the guard** (or N, 3, or Esc after Ctrl+Shift+Enter) keeps it. The same value does not ask again; change
   the value to ask again.
-- fterm keeps your answers in `guards.json` (in `data_dir`, else in `%LOCALAPPDATA%\fterm` or
-  `~/.local/state/fterm`). With no file, the guards are on.
+- fterm keeps your answers in `guards.json`, in `%LOCALAPPDATA%\fterm` on Windows and in `~/.local/state/fterm`
+  (or `$XDG_STATE_HOME/fterm`) on Linux and macOS. It is never in `data_dir`: the config sets that folder. With no
+  file, the guards are on.
 - While the API asks no questions, the tab bar shows **no API questions**.
 
 ### What the guard does not do
 It is a guard against mistakes, and against agents and scripts that use ftermctl, MCP, or the API as they are.
 It does not stop a program that works hard to get around it: a program that reads other processes, makes a fake
-parent process, sends keys, writes `guards.json`, or uses the mux socket. `fterm.lua` is code that you trust,
-like your `.bashrc`.
+parent process or a fake process id, ends a process and waits until a new one of its own gets the same id, sends
+keys, writes `guards.json`, or uses the mux socket. `fterm.lua` is code that you trust, like your `.bashrc`: the
+functions of your keys and commands never ask, and language files next to it change the texts of the boxes.
 
 Known gaps:
 - `subscribe` gives the events of all panes. `list` shows the commands of all panes. `focus` and `zoom` need no yes.
@@ -92,7 +101,7 @@ Known gaps:
   in that pane starts (a watcher, a build script).
 - On Linux and macOS with no `XDG_RUNTIME_DIR`, the instance files are in the temp folder.
 - A program in tmux or screen, or one started with `nohup` or `setsid`, often has no pane: it asks, and its agent
-  hooks do nothing.
+  hooks do nothing. The same is true for every program in WSL (see "Your pane").
 
 ## ftermctl
 `ftermctl` is a small console program next to `fterm.exe` (fterm.exe is a window program, so a shell does not

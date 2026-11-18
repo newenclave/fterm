@@ -110,6 +110,8 @@ fterm updates only its own file; a file of yours with the same name stays, and t
 - Hooks only work in an interactive Claude Code session (not with `claude -p`).
 - In other terminals the sequence does nothing, so the same `settings.json` is safe everywhere.
 - Every pane has the env var `FTERM_PANE_ID`. Hooks get it too, so your own hook scripts know their pane.
+- In WSL, the `ftermctl` hooks (the Agents panel, the cost) do nothing: fterm can not tell the pane of a Windows
+  program that WSL starts (see [API.md](API.md#who-may-do-what)). The agent states (the dots) still work.
 - You can react to state changes in your config with `on_agent` (see [CONFIG.md](CONFIG.md)).
 - Other tools (OpenCode, Aider, your scripts) can use the same sequence:
   ```sh

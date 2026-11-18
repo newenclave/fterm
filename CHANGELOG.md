@@ -64,21 +64,24 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 - **fterm checks which pane a program runs in.** Before, the API took `FTERM_PANE_ID` on trust, and any program
   could say any pane. Now fterm looks at the parent processes of the client: the shell of a pane of this window
   gives its pane (also in mux panes). `hello` answers that pane and `"proof": "process"`, or `"pane": null`. A
-  program with no pane (tmux, `nohup`, an older mux server) asks for every pane, and fterm drops its agent hooks.
+  program with no pane (tmux, `nohup`, an older mux server, and every program in WSL: there a program can choose
+  the `wsl.exe` of another pane) asks for every pane, and fterm drops its agent hooks.
 - **The access question no longer takes your keys.** Before, Enter in a shell could say yes to a question that
   came a moment before. Now the question is a box at the top of the panes, and your typing goes on to your pane.
-  Ctrl+Shift+Enter and then Y, A, or N answers it, or a click on a button (a click counts one second after the box
-  comes). The box shows what fterm checked: the tab and the program, or "not in a pane of this window".
+  Ctrl+Shift+Enter, a short wait, and then Y, A, or N answers it. Or click a button: a click counts one second
+  after the box comes or moves, and after the window comes back. The box shows what fterm checked: the tab and the
+  program, or "not in a pane of this window".
 - **"Always" is for one program in one pane**, until it ends (before: for a client name until fterm closes; any
-  program can give any name). A **No** stops the next questions of that pane for one minute.
+  program can give any name). A **No** stops the next questions of that pane, and of programs with no pane, for
+  one minute.
 - **A picture of an agent opens next to its own pane** and takes your keys only when you look at that pane. A
   picture at another pane needs your yes.
 - **Event functions of the config ask.** When `on_agent` or `on_agent_event` types into a pane, opens a pane, or
   runs a program, fterm asks you first. Before, any program could start them with an escape sequence.
 - **A config that turns a guard off waits for you.** When `fterm.lua` sets `api = { ask = false }` or
   `ai = { api_access = true }`, fterm keeps the old value and shows a warning; only a click turns the guard off.
-  Your answer is kept in `guards.json`. If your config has one of them now, you see the warning once. While the
-  API asks no questions, the tab bar shows "no API questions".
+  Your answer is kept in `guards.json` (in fterm's state folder, not in `data_dir`). If your config has one of them
+  now, you see the warning once. While the API asks no questions, the tab bar shows "no API questions".
 - What this guard does not do, and the known gaps, are in [API.md](docs/API.md#what-the-guard-does-not-do).
 
 ## [0.3.0] - 2026-11-05
