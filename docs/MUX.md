@@ -40,6 +40,12 @@ Both end all panes of the server, also the ones that no window shows, and then t
 Only the current user can connect to the server (the same rule as for the API). `FTERM_MUX_SOCKET=<name>`
 starts and uses a second server with its own name (for tests).
 
+The server tells the window the process of each pane shell (its id and start time) when it starts or shows a pane.
+So the API finds the pane of a program in a mux pane by its parent processes, as in a normal pane (see
+[API.md](API.md#who-may-do-what)). An older server does not tell it: then programs in its panes have no pane for
+the API, and they ask. Panes on other machines (below) have no such process here: their programs ask too.
+The mux socket itself has no questions: a program that connects to it can type into any mux pane.
+
 ## Panes on other machines (SSH)
 The same works with a mux server on another machine: its programs run there, and fterm shows them.
 

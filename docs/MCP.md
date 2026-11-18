@@ -11,8 +11,8 @@ For fterm this program is `ftermctl mcp`. It talks to the fterm window over the 
 Claude Code ──stdio (MCP)──> ftermctl mcp ──named pipe (JSON-RPC)──> the fterm window
 ```
 
-`ftermctl mcp` runs inside the pane of the agent, so it knows its window (`FTERM_SOCKET`) and its own pane
-(`FTERM_PANE_ID`). Tools without a `pane` use the agent's own pane.
+`ftermctl mcp` runs inside the pane of the agent, so it knows its window (`FTERM_SOCKET`). fterm finds the pane
+of the agent by its processes (`FTERM_PANE_ID` is only a hint). Tools without a `pane` use the agent's own pane.
 
 ## Set it up
 Claude Code (once, for all projects):
@@ -94,8 +94,16 @@ Ask Claude for example: "open a scene and plot the time of each test run", or "d
 project in a scene". With `screenshot_pane` the agent can look at what it drew and fix it.
 
 ## Safety
-The first time an agent wants to read or type into a pane that is **not its own** (or opens a new pane),
-fterm asks you: Allow, Always (for this agent name until fterm closes), or No.
+fterm checks which pane the agent runs in: it looks at the parent processes of `ftermctl mcp`, not at
+`FTERM_PANE_ID`. The first time an agent wants to read or type into a pane that is **not its own** (or opens a new
+pane), fterm asks you in a box at the top of the panes. The box says the name that the agent gave, and what fterm
+checked itself: the tab and the program (for example `claude.exe`), or that it is not in a pane of this window.
+- The box does not take your typing. Press **Ctrl+Shift+Enter** and then **Y** (allow), **A** and **Enter**
+  (always), or **N** (no), or click a button.
+- **Allow** is for this connection. **Always for this pane** is for this program in this pane, until it ends.
+  **No** stops the next questions of that pane for one minute.
+- An agent that fterm can not find in a pane (for example in tmux) asks for every pane, its pictures open in a
+  new tab in the back, and its hooks do nothing.
 A pane with remote control off (`toggle_remote_control` in the command palette) is never used by agents.
 Reading the AI chat (`ai_read`, `ai_ask`) needs the same yes: the chat can have text of your panes.
 A Review or a form of an agent closes when the agent stops waiting for it: its MCP client cancels the call,

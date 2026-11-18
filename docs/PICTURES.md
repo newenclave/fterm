@@ -47,7 +47,9 @@ that writes only `OSC 1337` has no such mark: with the ConPTY of Windows its pic
 - The API: `show_image` with `data` (the file in base64) or `file` (a path on the fterm machine), `place`
   (`"right"` or `"down"`), and `pane` (see [API.md](API.md)).
 - An agent: the MCP tool `show_image` with `path` or `data` (see [MCP.md](MCP.md)). The output of an agent such
-  as Claude Code is a TUI that draws over its cells, so an agent shows a picture in a pane next to it.
+  as Claude Code is a TUI that draws over its cells, so an agent shows a picture in a pane next to it. The picture
+  opens next to the agent's own pane, and it takes your keys only when you look at that pane. Next to another pane
+  it asks you first. An agent that fterm can not find in a pane gets a new tab in the back.
 
 A picture pane is not saved in a session: it does not come back after a restart.
 

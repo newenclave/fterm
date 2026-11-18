@@ -243,6 +243,13 @@ shows in grey after the cursor. **Right arrow** or **End** takes it. Any other k
 An agent can show you a plan in a Review (see [REVIEW.md](REVIEW.md)): Up / Down choose an item, Space marks it Ok,
 C comments, E changes the text, A adds an item, D removes, Shift + O marks the rest Ok, and S sends the review.
 
+## A question of the API
+When a program wants to use a pane that is not its own, a box at the top of the panes asks you (see
+[API.md](API.md#the-question)). The box does not take your keys: you can go on typing. To answer, press
+**Ctrl+Shift+Enter**, then **Y** or **1** (allow), **A** or **2** and **Enter** (always for this pane), or **N**,
+**3**, or **Esc** (no). Or click a button. A warning about a guard of the config works the same way, but only a
+click turns the guard off.
+
 ## The dock and its panels
 The dock is an area at the right side of the window (or left, or bottom; see `panels` in [CONFIG.md](CONFIG.md)).
 It has service panels: **Events** (all notifications) and **Agents** (every pane with Claude Code or another agent).

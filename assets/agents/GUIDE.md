@@ -5,7 +5,8 @@ run commands in other panes, read their output, wait for events, talk to agents 
 send notifications to the user, and draw charts in a "scene" pane.
 
 ## Are you in fterm?
-- `FTERM_PANE_ID` is set: it is the id of your own pane.
+- `FTERM_PANE_ID` is set: it is the id of your own pane. (fterm does not trust it: it finds your pane by your
+  parent processes.)
 - `FTERM_SOCKET` is set: `ftermctl` (and `ftermctl mcp`) finds this window with it.
 - `TERM_PROGRAM` is `fterm`.
 
@@ -166,6 +167,7 @@ and a broken file keeps the old config (the user sees the error).
   argument. Never make it a text for a shell.
 - Lua in the config cannot run programs or open files itself; it asks fterm: `fterm.spawn`, `fterm.send_text`,
   `fterm.run`, `fterm.open`, `fterm.notify`, `fterm.copy`, `fterm.action`, `fterm.copy_mode`.
+- In the event functions (`on_agent`, `on_agent_event`), calls that act on panes make fterm ask the user first.
 - All fields: `docs/CONFIG.md` in the fterm repository.
 
 ## Rules
@@ -173,6 +175,11 @@ and a broken file keeps the old config (the user sees the error).
   that you did not open.
 - Typing into a pane that you did not open, or reading it, can make fterm ask the user first. Use panes
   that you opened (`open_pane`, `open_scene`) when you can.
+- While fterm asks, your call waits: do not call again. When the answer is an error that the user said no, ask
+  the user in your chat before you try again.
+- Never try to get past a question: do not change `FTERM_PANE_ID` or your client name, and do not change
+  `api.ask`, `ai.api_access`, `on_agent`, or `on_agent_event` in `fterm.lua` for it. It does not work: fterm
+  finds your pane itself, keeps the old value of a guard, and shows the user a warning.
 - Use `wait_for`, not a loop of `read_pane` calls.
 - Keep the output small: `lines` in `read_pane`, and `last_output` instead of the whole history.
 - Do not type secrets into panes, and do not send them in messages.

@@ -45,7 +45,19 @@ return {
 ```
 
 The script runs in a **sandbox**: it cannot open files or start programs. It runs only when the file
-is loaded and when you use a key or a command that calls a Lua function, never for every frame.
+is loaded, when you use a key or a command that calls a Lua function, and for the events below (`on_agent`, …),
+never for every frame.
+
+**`fterm.lua` is code that you trust**, like your `.bashrc`: with `fterm.spawn`, `fterm.run`, and
+`fterm.send_text` it can start programs and type into panes. Keep it in a place where only you can write. An
+agent that can write files can change it too, so fterm has two guards:
+- **Event functions ask.** `on_agent` and `on_agent_event` run when a program does something, not when you press
+  a key. When they type into a pane, open a pane, run a program, run an action, or open a link, fterm asks you
+  first (the same box as for the API, see [API.md](API.md#event-hooks-of-the-config)). Before your yes, those
+  calls do not run. The yes counts until the config changes. Functions of your keys and commands never ask.
+- **A guard that goes off waits for you.** When the config sets `api = { ask = false }` or
+  `ai = { api_access = true }`, fterm keeps the old value and shows a warning. Only a click on
+  **Turn the guard off** turns it off (see [API.md](API.md#turn-the-questions-off)).
 
 If the file has an error, fterm shows it in a box and keeps the last good config.
 
@@ -452,6 +464,7 @@ fterm.notify({ title = "Deploy", body = "done", level = "success" })
 This function runs when an agent in a pane changes its state (see [CLAUDE.md](CLAUDE.md)).
 Fields: `pane`, `state` (`working`, `waiting`, `done`, `error`, `idle`), `previous`, `message`, and `name` (the tab title).
 It can call `fterm.notify`, `fterm.spawn`, and the other functions. Return `false` to stop the normal notification.
+Calls that act on panes ask you first (see the guards at the top).
 
 ```lua
 on_agent = function(a, fterm)
@@ -489,6 +502,7 @@ end,
 ### on_agent_event
 This function runs for every step of an agent: `kind` is `prompt`, `tool`, `question`, `done`, or `usage`, with
 `pane`, `tool`, `file`, `command`, `text`, `cost`, and `context`. It can call `fterm.notify` and the other functions.
+Calls that act on panes ask you first (see the guards at the top).
 
 ```lua
 on_agent_event = function(e, fterm)
