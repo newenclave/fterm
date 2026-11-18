@@ -904,7 +904,7 @@ mod tests {
         );
         let which: Vec<Button> = buttons.iter().map(|(b, _)| *b).collect();
         assert_eq!(which, [Button::Allow, Button::Always, Button::No]);
-        assert_eq!(buttons[1].1, "Always for this pane");
+        assert_eq!(buttons[1].1, "Always for this program");
 
         let (lines, _) = question_box(&checked, true, None);
         assert!(lines.last().unwrap().0.contains("A or 2"), "{lines:?}");

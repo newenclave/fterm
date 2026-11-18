@@ -72,7 +72,7 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
   second after the box comes). Or click a button: a click counts one second after the box comes or moves, and after
   the window comes back. The box shows what fterm checked: the tab and the
   program, or "not in a pane of this window".
-- **"Always" is for one program in one pane**, until it ends (before: for a client name until fterm closes; any
+- **"Always for this program" is for one program in one pane**, until it ends (before: for a client name until fterm closes; any
   program can give any name). A **No** stops the next questions of that pane, and of programs with no pane, for
   one minute.
 - **A picture of an agent opens next to its own pane** and takes your keys only when you look at that pane. A

@@ -104,7 +104,7 @@ pane), fterm asks you in a box at the top of the panes. The box says the name th
 checked itself: the tab and the program (for example `claude.exe`), or that it is not in a pane of this window.
 - The box does not take your typing. Press **Ctrl+Shift+Enter**, wait a moment, and then press **Y** and
   **Enter** (allow), **A** and **Enter** (always), or **N** (no). Or click a button.
-- **Allow** is for this connection. **Always for this pane** is for this program in this pane, until it ends.
+- **Allow** is for this connection. **Always for this program** is for this program in this pane, until it ends.
   **No** stops the next questions of that pane (and of all agents with no pane) for one minute.
 - An agent that fterm can not find in a pane (for example in tmux) asks for every pane, its pictures open in a
   new tab in the back, and its hooks do nothing.

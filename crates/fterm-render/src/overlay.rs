@@ -396,7 +396,7 @@ mod tests {
         let lines = vec!["Allow it?".to_owned(), "x".repeat(200)];
         let buttons = vec![
             "Allow".to_owned(),
-            "Always for this pane".to_owned(),
+            "Always for this program".to_owned(),
             "No".to_owned(),
         ];
         let l = question_layout(&lines, &buttons, VIEW, CELL, 0);

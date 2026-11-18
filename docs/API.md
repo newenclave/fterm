@@ -47,7 +47,7 @@ fterm asks in a box at the top of the panes:
 > A program that calls itself "claude" wants to read and type into other panes.
 > fterm checked: it runs in tab 2, under claude.exe.
 > It can see their text and run commands there.
-> **[Allow]** **[Always for this pane]** **[No]**
+> **[Allow]** **[Always for this program]** **[No]**
 
 - The first line has the name from `hello`. A program can give any name. The second line, in another color, is
   what fterm found itself: the tab (and its workspace) and the program, or "it is not in a pane of this window".
@@ -64,7 +64,8 @@ fterm asks in a box at the top of the panes:
 - Or click a button. A click counts only one second after the box comes, changes, or moves (the dock opens, the
   window or the font changes size), and after the window comes back to the front.
 - **Allow** is for this connection.
-- **Always for this pane** is for this program in this pane, until the program or the pane ends, or fterm closes.
+- **Always for this program** is for this program in this pane, until the program or the pane ends, or fterm
+  closes. Then this program may read and type into all other panes with no question.
   Only a client with a pane gets it.
 - **No**: for one minute, the next questions of the same pane get an error at once, and so do the questions of
   all clients with no pane (a program could start a helper that fterm can not find in a pane). An agent should
