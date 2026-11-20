@@ -67,12 +67,31 @@ struct Inner {
     idle_since: Mutex<Option<Instant>>,
     /// `Stop` came: the server ends now.
     stopped: std::sync::atomic::AtomicBool,
+    /// Panes whose program ended before `spawn` put them into `panes` (a program that ends at once): `spawn` drops
+    /// them. Always taken while `panes` is held.
+    ended_early: Mutex<std::collections::HashSet<u64>>,
 }
 
 /// A running server (the listener runs on its own thread).
 #[derive(Clone)]
 pub struct Server {
     inner: Arc<Inner>,
+}
+
+impl Inner {
+    /// The program of pane `id` ended: the pane goes.
+    fn pane_ended(&self, id: u64) {
+        let mut panes = self.panes.lock().unwrap();
+        if panes.remove(&id).is_none() {
+            // Not in the list yet: spawn drops it when it comes.
+            self.ended_early.lock().unwrap().insert(id);
+        }
+        let empty = panes.is_empty();
+        drop(panes);
+        if empty {
+            *self.idle_since.lock().unwrap() = Some(Instant::now());
+        }
+    }
 }
 
 impl Server {
@@ -346,10 +365,7 @@ impl Server {
                     .name("mux pane end".into())
                     .spawn(move || {
                         if let Some(inner) = weak.upgrade() {
-                            inner.panes.lock().unwrap().remove(&id);
-                            if inner.panes.lock().unwrap().is_empty() {
-                                *inner.idle_since.lock().unwrap() = Some(Instant::now());
-                            }
+                            inner.pane_ended(id);
                         }
                     });
             }
@@ -357,16 +373,21 @@ impl Server {
         })?;
         let program = session.program().to_owned();
         tracing::info!(pane = id, %program, "mux: new pane");
-        self.inner.panes.lock().unwrap().insert(
-            id,
-            Arc::new(Pane {
-                shell: std::sync::OnceLock::new(),
-                session,
-                program: program.clone(),
-                meta,
-                client,
-            }),
-        );
+        let pane = Arc::new(Pane {
+            shell: std::sync::OnceLock::new(),
+            session,
+            program: program.clone(),
+            meta,
+            client,
+        });
+        let mut panes = self.inner.panes.lock().unwrap();
+        if self.inner.ended_early.lock().unwrap().remove(&id) {
+            // Its program ended already (its end went to the window): no pane that never ends.
+            drop(panes);
+            drop(pane);
+        } else {
+            panes.insert(id, pane);
+        }
         Ok((id, program))
     }
 }
@@ -391,4 +412,62 @@ fn home_dir() -> Option<std::path::PathBuf> {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .map(std::path::PathBuf::from)
         .filter(|p| p.is_dir())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fterm_term::size::GridSize;
+
+    /// A server with no socket.
+    fn server() -> Server {
+        Server {
+            inner: Arc::new(Inner::default()),
+        }
+    }
+
+    /// A window that reads nothing.
+    fn window(id: u64) -> Client {
+        Client {
+            id,
+            writer: Arc::new(Mutex::new(Box::new(std::io::sink()))),
+        }
+    }
+
+    fn shell() -> Spawn {
+        Spawn {
+            program: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.to_owned()),
+            args: if cfg!(windows) {
+                vec!["/q".into()]
+            } else {
+                Vec::new()
+            },
+            scrollback: 10,
+            ..Spawn::default()
+        }
+    }
+
+    #[test]
+    fn a_new_pane_has_its_window_before_its_program_runs() {
+        // Its output and its end go to the window from the first byte, also before the answer of spawn.
+        let server = server();
+        let (id, _) = server
+            .spawn(shell(), GridSize::new(40, 5), &window(7))
+            .expect("spawn");
+        let pane = server.pane(id).expect("the pane");
+        assert_eq!(pane.client.lock().unwrap().as_ref().map(|c| c.id), Some(7));
+    }
+
+    #[test]
+    fn a_program_that_ends_before_its_pane_is_listed_leaves_no_pane() {
+        // The end thread of a quick program can run before spawn puts the pane into the list.
+        let server = server();
+        let next = server.inner.next_pane.load(Ordering::SeqCst) + 1;
+        server.inner.pane_ended(next);
+        let (id, _) = server
+            .spawn(shell(), GridSize::new(40, 5), &window(7))
+            .expect("spawn");
+        assert_eq!(id, next);
+        assert_eq!(server.pane_count(), 0, "a dead pane would stay for good");
+    }
 }
