@@ -182,18 +182,23 @@ impl MuxClient {
                     client.dispatch(kind, &body);
                 }
                 if let Some(client) = reader.upgrade() {
-                    // Requests that wait get no answer now: they fail at once (not at their timeout).
-                    client.dead.store(true, Ordering::SeqCst);
-                    client.waiting.lock().unwrap().clear();
-                    // All panes of the server end for this window.
-                    let panes = std::mem::take(&mut client.panes.lock().unwrap().handlers);
-                    for h in panes.values() {
-                        (h.exit)();
-                    }
+                    client.connection_ended();
                 }
                 gone();
             })?;
         Ok(client)
+    }
+
+    /// The connection to the server ended: requests that wait fail, and all panes of the server end for this
+    /// window.
+    fn connection_ended(&self) {
+        // Requests that wait get no answer now: they fail at once (not at their timeout).
+        self.dead.store(true, Ordering::SeqCst);
+        self.waiting.lock().unwrap().clear();
+        let panes = std::mem::take(&mut self.panes.lock().unwrap().handlers);
+        for h in panes.values() {
+            (h.exit)();
+        }
     }
 
     fn dispatch(&self, kind: u8, body: &[u8]) {
@@ -328,7 +333,8 @@ impl MuxClient {
         if let Some(early) = panes.early.remove(&pane) {
             (handlers.output)(&early);
         }
-        if panes.ended.remove(&pane) {
+        // Its program ended before, or the connection did (the reader takes the handlers once, after `dead`).
+        if panes.ended.remove(&pane) || self.dead.load(Ordering::SeqCst) {
             drop(panes);
             (handlers.exit)();
             return;
@@ -426,5 +432,43 @@ impl RemoteLink for PaneLink {
 
     fn resize(&self, size: GridSize) {
         self.client.resize(self.pane, size);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn a_pane_whose_handlers_come_after_the_connection_ended_ends_at_once() {
+        // The connection can end (the server is killed, ssh drops) between the answer of spawn and the handlers.
+        let name = fterm_api::transport::named_socket(&format!(
+            "mux-test-{}-dead-unit",
+            std::process::id()
+        ));
+        let _server = crate::server::Server::start(&name).expect("server");
+        let client = MuxClient::connect(&name, || {}).expect("client");
+        let spawn = Spawn {
+            program: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.to_owned()),
+            scrollback: 10,
+            ..Spawn::default()
+        };
+        let (pane, _) = client.spawn(spawn, GridSize::new(40, 5)).expect("spawn");
+        client.connection_ended();
+        let ended = Arc::new(AtomicBool::new(false));
+        let e = ended.clone();
+        client.set_handlers(
+            pane,
+            Handlers {
+                output: Box::new(|_| {}),
+                exit: Box::new(move || e.store(true, Ordering::SeqCst)),
+            },
+        );
+        assert!(
+            ended.load(Ordering::SeqCst),
+            "no reader is left to end it later"
+        );
+        client.close(pane);
     }
 }

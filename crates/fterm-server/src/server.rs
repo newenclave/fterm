@@ -182,15 +182,9 @@ impl Server {
     fn handle(&self, client: &Client, request: Request) {
         let id = request.id();
         let reply = match request {
-            Request::Spawn { spawn, size, .. } => match self.spawn(spawn, size) {
+            Request::Spawn { spawn, size, .. } => match self.spawn(spawn, size, client) {
                 Ok((pane, program)) => {
-                    // The window that made it shows it.
-                    let shown = self.pane(pane);
-                    if let Some(p) = &shown {
-                        *p.client.lock().unwrap() = Some(client.clone());
-                    }
-                    // After the window is set: the program may print at once.
-                    let shell = shown.and_then(|p| p.shell());
+                    let shell = self.pane(pane).and_then(|p| p.shell());
                     Reply {
                         pane: Some(pane),
                         program: Some(program),
@@ -308,10 +302,17 @@ impl Server {
         }
     }
 
-    fn spawn(&self, spawn: Spawn, size: fterm_term::size::GridSize) -> io::Result<(u64, String)> {
+    /// A new pane that `window` shows: its output and its end go to that window from the first byte (a program
+    /// may print and end before the answer of spawn; the client of the window keeps that for the pane).
+    fn spawn(
+        &self,
+        spawn: Spawn,
+        size: fterm_term::size::GridSize,
+        window: &Client,
+    ) -> io::Result<(u64, String)> {
         let id = self.inner.next_pane.fetch_add(1, Ordering::SeqCst) + 1;
         let meta = Arc::new(Mutex::new(Meta::default()));
-        let client: Arc<Mutex<Option<Client>>> = Arc::new(Mutex::new(None));
+        let client: Arc<Mutex<Option<Client>>> = Arc::new(Mutex::new(Some(window.clone())));
         let tap_client = client.clone();
         let tap = Tap(Arc::new(move |bytes: &[u8]| {
             if let Some(c) = &*tap_client.lock().unwrap() {
