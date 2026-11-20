@@ -97,8 +97,9 @@ points in a chart), `wait_for` with `event: "scene_resized"` and draw again.
 **Ask the user to change settings (a form)**
 - `show_form` with `title`, `text`, and `fields` (`ftermctl form spec.json`) shows a form over your pane and waits.
   Use it to change settings of any file with the user, or to ask several questions at once.
-- Field types: `group` (a heading), `checkbox`, `text`, `password`, `number` (`min`, `max`, `integer`), `multiline`,
-  `radio` (up to 8 `options`), `select` (many `options`). Each field: `id` (your own name), `label`, `value`, `help`;
+- Field types: `group` (a heading: only `type` and `label`, no `id`), `checkbox`, `text`, `password`, `number`
+  (`min`, `max`, `integer`), `multiline`, `radio` (up to 8 `options`), `select` (many `options`). Each other field:
+  `id` (your own name), `label`, `value`, `help`;
   `required`, `clearable` (may be "not set"); texts: `pattern`, `placeholder`, `max`.
 - The answer: `status` `saved` with `values` and `changed` (the ids that the user changed), or `cancelled` with
   no values: then write nothing. You get the text of every field, also of a `password` field: do not ask for
