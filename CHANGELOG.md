@@ -8,7 +8,8 @@ The form is from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and t
 
 ### Fixed
 - **A program that ends at once in a mux pane now ends there too.** When it ended before the window was ready for
-  it (for example `sh -c "echo hi"`), its output came, but the pane never heard of the end and stayed open.
+  it (for example `sh -c "echo hi"`), its output or its end could be lost, and the pane stayed open. The same for a
+  pane whose connection to the mux server ended at that moment.
 - **The cursor in a box with many lines is where it should be.** In the input of the AI panel and in the comment
   of a Review, the cursor was not seen at the end of a line that fills the whole width, and it was one cell off
   after a wide char (Chinese, Japanese) that went to the next row.

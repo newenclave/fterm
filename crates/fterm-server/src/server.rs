@@ -42,7 +42,7 @@ struct Pane {
     /// The window that shows the pane now.
     client: Arc<Mutex<Option<Client>>>,
     /// Its shell: process id and start time (a window checks API clients by it). Read the first time that it is
-    /// needed: not between the start of the program and the window of the pane, where output has no place to go.
+    /// needed (the answer of spawn or attach), not while the pane is made: a look at the processes takes a moment.
     shell: std::sync::OnceLock<Option<(u32, u64)>>,
 }
 
